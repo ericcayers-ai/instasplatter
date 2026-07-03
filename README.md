@@ -15,7 +15,7 @@
 
 ---
 
-> **Project status: pre-alpha.** InstaSplatter is in active development and is not yet buildable or installable. This README describes the product being built; the engineering plan lives in **[ROADMAP.md](ROADMAP.md)**. Sections marked _(planned)_ are not implemented yet.
+> **Project status: v0.1 — working end-to-end.** Drop a video or image folder → live Gaussian-Splat reconstruction in the viewport → export `.ply`. Verified on Windows 11 + RTX 4060. The engineering plan and phase status live in **[ROADMAP.md](ROADMAP.md)**; sections below marked _(planned)_ are not implemented yet, everything else works today. See **Building from source** below — signed installers come later.
 
 ---
 
@@ -38,14 +38,14 @@ Drop an `.mp4` or a folder of images onto the window and the scene starts materi
 
 | | |
 |---|---|
-| **Input** | Video (`.mp4`, `.mov`, …) or an image folder (`.jpg`, `.png`, …) |
-| **Smart frame selection** _(planned)_ | Auto blur rejection, duplicate culling, parallax-aware sampling |
-| **Camera solving** _(planned)_ | Instant pose-free init + robust global Structure-from-Motion refinement |
-| **Live reconstruction** _(planned)_ | Progressive Gaussian training streamed to an interactive viewport |
-| **Clean-up built in** _(planned)_ | Floater removal, moving-object masking, appearance/exposure harmonization |
-| **Auto-tuning** _(planned)_ | Hardware profiling → optimal engine + preset, with honest ETA |
-| **Export** _(planned)_ | `.ply`, `.spz`, `.splat`, and compact PNG-packed formats |
-| **Preferences** _(planned)_ | Full settings tree, all defaulting to Auto, with presets & custom profiles |
+| **Input** ✅ | Video (`.mp4`, `.mov`, …) or an image folder (`.jpg`, `.png`, …) |
+| **Smart frame selection** ✅ | Adaptive video frame extraction, blur rejection (variance-of-Laplacian), even temporal subsampling |
+| **Camera solving** ✅ | COLMAP 4.1 SfM (GPU SIFT, auto sequential/exhaustive matching); pose-free instant init _(planned)_ |
+| **Live reconstruction** ✅ | Brush (wgpu) Gaussian training streamed live into a WebGL2 splat viewport with orbit controls |
+| **Clean-up built in** 🟡 | Opacity/scale regularization + Clean↔Detailed strictness slider today; transient masking & appearance harmonization _(planned)_ |
+| **Auto-tuning** ✅ | Hardware profiling (GPU/VRAM/CUDA/RAM) → auto preset, live ETA |
+| **Export** 🟡 | `.ply` today; `.spz`, `.splat`, PNG-packed _(planned)_ |
+| **Preferences** ✅ | Full settings panel, every value defaulting to Auto, quality presets |
 
 ## How it works
 
@@ -95,17 +95,25 @@ _A capable GPU is strongly recommended. On low-end hardware, InstaSplatter falls
 
 ## Installation
 
-> ⚠️ Not yet available — InstaSplatter is pre-alpha. Signed installers will be published here once the MVP is ready. Track progress in **[ROADMAP.md](ROADMAP.md)**.
+> Installers are not published yet — build from source (below). The reconstruction engines (COLMAP + Brush) are downloaded automatically on first run.
 
-_Planned:_ download the signed Windows installer, run it, and launch. Heavy model weights are fetched once on first run (with a progress bar and checksum verification); after that the app works fully offline.
+### Building from source
 
-## Usage _(planned)_
+Prereqs: **Rust** (stable, MSVC), **Node.js 20+**, **FFmpeg** on PATH (for video input), Windows 10/11.
 
-1. **Launch** InstaSplatter — it detects your hardware and picks a preset on first run.
-2. **Drag** a video file or an image folder onto the window.
-3. **Watch** the scene form live. Orbit, pan, and zoom while it trains.
-4. _(Optional)_ Pick a preset (Draft / Balanced / High / Max) or open **Preferences** to fine-tune anything.
-5. **Export** to your format of choice.
+```bash
+npm install
+npm run tauri dev      # development
+npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
+```
+
+## Usage
+
+1. **Launch** InstaSplatter — it detects your hardware and picks a preset (shown in the chip at the bottom).
+2. **Drag** a video file or an image folder onto the window (or use the Choose buttons).
+3. **Watch** the scene form live. Orbit (drag), pan (right-drag), zoom (wheel) while it trains.
+4. _(Optional)_ Open **Preferences** for presets (Draft / Eco / Balanced / High / Max) or any individual setting — everything defaults to Auto.
+5. **Export .ply** when it completes — opens in SuperSplat, Blender (w/ addon), and any 3DGS viewer.
 
 That's it. No settings required.
 

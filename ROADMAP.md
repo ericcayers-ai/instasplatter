@@ -1,5 +1,7 @@
 # InstaSplatter — Implementation Roadmap
 
+> **Status (2026-07-03): v0.1 shipped.** Phase 0 and Phase 1 are complete and verified end-to-end on Windows 11 + RTX 4060 (video → frames → COLMAP 4.1 SfM → Brush training → live WebGL2 viewport → `.ply` export). Delivered beyond Phase 1: full Auto-defaulting Preferences panel, hardware profiler + auto presets, blur gating, strictness slider, first-run engine download, `.ply` live hot-swap viewport. Implementation choices vs. plan: portable Brush (wgpu) engine is the primary trainer for all vendors in v0.1 (the CUDA/gsplat path from §2 is deferred); SfM uses COLMAP binary (GLOMAP/VGGT instant-init deferred). Next up: Phase 2 cleanliness stack, then Phase 3 instant init.
+
 > **Audience:** Claude Fable 5 (implementing agent).
 > **Goal:** Ship a sleek, official-looking Windows desktop app where a user drags in an **image folder** or a **video** and watches a **Gaussian‑Splat reconstruction build live**, fully auto‑tuned to their hardware, with a deep preferences panel for power users.
 > **Design ethos:** Zero-config by default, infinitely configurable underneath. "It just works" for 95% of users; "it exposes everything" for the other 5%.
