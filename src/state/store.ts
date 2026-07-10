@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  CameraRegistered,
   EngineStatus,
   HardwareProfile,
   JobEvent,
@@ -36,8 +37,18 @@ interface AppStore {
 
   jobId: string | null;
   inputPath: string | null;
+  /** Directory holding the project manifest, poses and frames. */
+  workspace: string | null;
   stages: StageInfo[];
   logs: string[];
+  /** Plain statements the pipeline made that are not failures. */
+  notices: string[];
+  /** Cameras the live-init engine has solved, in registration order. */
+  cameras: CameraRegistered[];
+  registeredCameras: number;
+  totalCameras: number;
+  /** Confidence of the most recently registered camera, 0 to 1. */
+  trackingConfidence: number;
   latestSplatPath: string | null;
   latestIter: number;
   totalSteps: number;
@@ -79,8 +90,14 @@ export const useStore = create<AppStore>((set, get) => ({
 
   jobId: null,
   inputPath: null,
+  workspace: null,
   stages: freshStages(),
   logs: [],
+  notices: [],
+  cameras: [],
+  registeredCameras: 0,
+  totalCameras: 0,
+  trackingConfidence: 0,
   latestSplatPath: null,
   latestIter: 0,
   totalSteps: 0,
@@ -120,8 +137,14 @@ export const useStore = create<AppStore>((set, get) => ({
     set({
       screen: "processing",
       inputPath: path,
+      workspace: null,
       stages: freshStages(),
       logs: [],
+      notices: [],
+      cameras: [],
+      registeredCameras: 0,
+      totalCameras: 0,
+      trackingConfidence: 0,
       latestSplatPath: null,
       latestIter: 0,
       totalSteps: 0,
@@ -157,6 +180,9 @@ export const useStore = create<AppStore>((set, get) => ({
       jobError: null,
       latestSplatPath: null,
       resultPath: null,
+      workspace: null,
+      cameras: [],
+      notices: [],
     }),
 
   handleJobEvent: (e) => {
@@ -183,12 +209,26 @@ export const useStore = create<AppStore>((set, get) => ({
       case "log":
         set((s) => ({ logs: [...s.logs.slice(-400), e.line] }));
         break;
+      case "notice":
+        set((s) => ({ notices: [...s.notices, e.message] }));
+        break;
+      case "cameraRegistered":
+        set((s) => ({
+          cameras: [...s.cameras, e],
+          registeredCameras: e.registered,
+          totalCameras: e.total,
+          trackingConfidence: e.confidence,
+        }));
+        break;
       case "splatReady":
         set({ latestSplatPath: e.path, latestIter: e.iter, totalSteps: e.totalSteps });
         break;
       case "done":
         set((s) => ({
           resultPath: e.path,
+          // The result always sits at the top of its workspace, and both mesh
+          // export and orientation saving need that directory.
+          workspace: e.path.replace(/[\/][^\/]+$/, ""),
           elapsedSecs: e.elapsedSecs,
           stages: s.stages.map((st) => ({ ...st, state: "done", progress: 1 })),
         }));

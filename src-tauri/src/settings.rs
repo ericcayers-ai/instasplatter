@@ -41,11 +41,22 @@ pub struct Settings {
     pub ssim_weight: Option<f32>,
     pub export_every: Option<u32>,
 
+    /// Coarse-to-fine resolution schedule (DashGaussian). Off by default: it
+    /// restarts Brush once per stage, which is not yet validated end to end.
+    pub progressive_resolution: Option<bool>,
+    /// Mip-Splatting 3D smoothing filter, applied at stage boundaries and
+    /// baked into the final result.
+    pub mip_filter: Option<bool>,
+    /// Use the native incremental solver instead of a blocking COLMAP pass.
+    pub live_init: Option<bool>,
+
     // ---- Cleanliness / robustness ----
     /// 0 (Detailed) .. 1 (Clean). Scales floater-suppression losses & noise.
     pub strictness: Option<f32>,
 
     // ---- Output ----
+    /// "ply" | "splat" | "spz". PLY is the default.
+    pub export_format: Option<String>,
     pub keep_intermediates: Option<bool>,
 }
 
@@ -81,7 +92,11 @@ pub struct ResolvedSettings {
     pub refine_every: u32,
     pub ssim_weight: f32,
     pub export_every: u32,
+    pub progressive_resolution: bool,
+    pub mip_filter: bool,
+    pub live_init: bool,
     pub strictness: f32,
+    pub export_format: String,
     pub keep_intermediates: bool,
     // Derived floater-suppression knobs (Brush):
     pub opac_loss_weight: f64,
@@ -115,10 +130,94 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         refine_every: settings.refine_every.unwrap_or(p.refine_every),
         ssim_weight: settings.ssim_weight.unwrap_or(0.2),
         export_every: settings.export_every.unwrap_or(p.export_every),
+        progressive_resolution: settings.progressive_resolution.unwrap_or(false),
+        mip_filter: settings.mip_filter.unwrap_or(false),
+        live_init: settings.live_init.unwrap_or(false),
         strictness,
+        export_format: settings
+            .export_format
+            .clone()
+            .filter(|f| crate::splat::export::Format::parse(f).is_some())
+            .unwrap_or_else(|| "ply".into()),
         keep_intermediates: settings.keep_intermediates.unwrap_or(false),
         opac_loss_weight: scale(1e-9),
         scale_loss_weight: scale(1e-8),
         mean_noise_weight: 40.0 * (0.5 + strictness as f64),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profiler::GpuVendor;
+
+    fn profile() -> HardwareProfile {
+        HardwareProfile {
+            gpu_name: "Test GPU".into(),
+            gpu_vendor: GpuVendor::Nvidia,
+            vram_mb: 8192,
+            has_cuda: true,
+            cpu_name: "Test CPU".into(),
+            cpu_threads: 8,
+            ram_mb: 32000,
+            auto_preset: Preset::High,
+        }
+    }
+
+    #[test]
+    fn unset_settings_resolve_to_the_hardware_preset() {
+        let r = resolve(&Settings::default(), &profile());
+        assert_eq!(r.preset, Preset::High);
+        assert_eq!(r.total_steps, Preset::High.params().total_steps);
+        assert_eq!(r.export_format, "ply");
+        // The new orchestration features stay off until validated end to end.
+        assert!(!r.progressive_resolution);
+        assert!(!r.mip_filter);
+        assert!(!r.live_init);
+    }
+
+    #[test]
+    fn an_explicit_preset_overrides_the_profile() {
+        let s = Settings {
+            preset: Some("draft".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&s, &profile()).preset, Preset::Draft);
+    }
+
+    #[test]
+    fn an_unknown_export_format_falls_back_to_ply() {
+        let s = Settings {
+            export_format: Some("obj".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&s, &profile()).export_format, "ply");
+        let s = Settings {
+            export_format: Some("spz".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve(&s, &profile()).export_format, "spz");
+    }
+
+    #[test]
+    fn strictness_is_clamped_and_scales_the_floater_losses() {
+        let low = resolve(
+            &Settings {
+                strictness: Some(-5.0),
+                ..Default::default()
+            },
+            &profile(),
+        );
+        let high = resolve(
+            &Settings {
+                strictness: Some(5.0),
+                ..Default::default()
+            },
+            &profile(),
+        );
+        assert_eq!(low.strictness, 0.0);
+        assert_eq!(high.strictness, 1.0);
+        assert!(high.opac_loss_weight > low.opac_loss_weight);
+        assert!(high.mean_noise_weight > low.mean_noise_weight);
     }
 }

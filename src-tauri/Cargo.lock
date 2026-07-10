@@ -1946,6 +1946,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "env_logger",
+ "flate2",
  "futures-util",
  "image",
  "log",

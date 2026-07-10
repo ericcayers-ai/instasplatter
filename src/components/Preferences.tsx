@@ -129,6 +129,8 @@ export default function Preferences() {
                 totalSteps: null, maxSplats: null, shDegree: null,
                 refineEvery: null, ssimWeight: null, exportEvery: null,
                 strictness: null, keepIntermediates: null,
+                progressiveResolution: null, mipFilter: null, liveInit: null,
+                exportFormat: null,
               })}
               className="text-xs text-ink-dim transition hover:text-ink"
             >
@@ -192,6 +194,19 @@ export default function Preferences() {
               onChange={(v) => set({ matcher: v })}
             />
           </Row>
+          <Row
+            label="Live camera tracking"
+            hint="Register cameras one at a time instead of solving them all first. Falls back to the batch solver if it loses confidence."
+          >
+            <AutoSelect
+              value={settings.liveInit == null ? null : settings.liveInit ? "on" : "off"}
+              options={[
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ]}
+              onChange={(v) => set({ liveInit: v == null ? null : v === "on" })}
+            />
+          </Row>
           <Row label="GPU feature extraction" hint="Requires NVIDIA CUDA">
             <AutoSelect
               value={settings.siftGpu == null ? null : settings.siftGpu ? "on" : "off"}
@@ -219,6 +234,32 @@ export default function Preferences() {
           </Row>
           <Row label="SSIM weight" hint="Structural vs. photometric loss balance">
             <AutoNumber value={settings.ssimWeight} autoValue={resolved?.ssimWeight} min={0} max={1} step={0.05} onChange={(v) => set({ ssimWeight: v })} />
+          </Row>
+          <Row
+            label="Progressive resolution"
+            hint="Train at reduced resolution first and raise it on a schedule. Faster, at the cost of restarting the optimiser at each step."
+          >
+            <AutoSelect
+              value={settings.progressiveResolution == null ? null : settings.progressiveResolution ? "on" : "off"}
+              options={[
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ]}
+              onChange={(v) => set({ progressiveResolution: v == null ? null : v === "on" })}
+            />
+          </Row>
+          <Row
+            label="Mip-Splatting filter"
+            hint="Bound each Gaussian to the sampling rate of the cameras that saw it. Reduces aliasing and oversized blobs."
+          >
+            <AutoSelect
+              value={settings.mipFilter == null ? null : settings.mipFilter ? "on" : "off"}
+              options={[
+                { id: "on", label: "On" },
+                { id: "off", label: "Off" },
+              ]}
+              onChange={(v) => set({ mipFilter: v == null ? null : v === "on" })}
+            />
           </Row>
           <Row label="Live update every" hint="Steps between viewport refreshes">
             <AutoNumber value={settings.exportEvery} autoValue={resolved?.exportEvery} min={100} max={5000} step={100} onChange={(v) => set({ exportEvery: v })} />
@@ -254,6 +295,17 @@ export default function Preferences() {
         </Section>
 
         <Section title="Output">
+          <Row label="Export format" hint="Offered first in the export dialog">
+            <AutoSelect
+              value={settings.exportFormat ?? null}
+              options={[
+                { id: "ply", label: "PLY" },
+                { id: "splat", label: "Splat" },
+                { id: "spz", label: "SPZ" },
+              ]}
+              onChange={(v) => set({ exportFormat: v })}
+            />
+          </Row>
           <Row label="Keep intermediates" hint="Keep frames + COLMAP database on disk">
             <AutoSelect
               value={settings.keepIntermediates == null ? null : settings.keepIntermediates ? "on" : "off"}

@@ -15,6 +15,12 @@ export interface HardwareProfile {
 
 export type PresetName = "draft" | "eco" | "balanced" | "high" | "max";
 
+/** A splat file format the exporter can write. */
+export type SplatFormat = "ply" | "splat" | "spz";
+
+/** A mesh file format the exporter can write. */
+export type MeshFormat = "glb" | "obj" | "ply";
+
 export interface Settings {
   preset?: string | null;
   maxFrames?: number | null;
@@ -30,6 +36,13 @@ export interface Settings {
   exportEvery?: number | null;
   strictness?: number | null;
   keepIntermediates?: boolean | null;
+  /** Train at reduced resolution first, then raise it. */
+  progressiveResolution?: boolean | null;
+  /** Bound Gaussian size to the sampling rate (Mip-Splatting). */
+  mipFilter?: boolean | null;
+  /** Register cameras incrementally instead of a blocking COLMAP pass. */
+  liveInit?: boolean | null;
+  exportFormat?: string | null;
 }
 
 export interface ResolvedSettings {
@@ -47,6 +60,10 @@ export interface ResolvedSettings {
   exportEvery: number;
   strictness: number;
   keepIntermediates: boolean;
+  progressiveResolution: boolean;
+  mipFilter: boolean;
+  liveInit: boolean;
+  exportFormat: string;
 }
 
 export interface EngineStatus {
@@ -55,10 +72,31 @@ export interface EngineStatus {
   ffmpeg: boolean;
 }
 
+/** A camera solved by the live-init engine, ready to draw as a frustum. */
+export interface CameraRegistered {
+  kind: "cameraRegistered";
+  jobId: string;
+  name: string;
+  registered: number;
+  total: number;
+  /** Share of matched features that survived pose estimation, 0 to 1. */
+  confidence: number;
+  apex: [number, number, number];
+  corners: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+  ];
+}
+
 export type JobEvent =
   | { kind: "stageStarted"; jobId: string; stage: string; label: string }
   | { kind: "stageProgress"; jobId: string; stage: string; progress: number; detail: string }
   | { kind: "log"; jobId: string; line: string }
+  | CameraRegistered
+  /** Something the user should know that is not a failure. */
+  | { kind: "notice"; jobId: string; message: string }
   | { kind: "splatReady"; jobId: string; path: string; iter: number; totalSteps: number }
   | { kind: "done"; jobId: string; path: string; elapsedSecs: number }
   | { kind: "error"; jobId: string; message: string }
@@ -68,8 +106,42 @@ export interface EngineDownloadEvent {
   engine: string;
   downloaded: number;
   total: number;
-  phase: "downloading" | "extracting" | "done";
+  phase: "downloading" | "verifying" | "extracting" | "done";
 }
+
+export interface MeshProgressEvent {
+  progress: number;
+  detail: string;
+}
+
+/** A saved reconstruction, as shown in the reopen list. */
+export interface ProjectSummary {
+  jobId: string;
+  workspace: string;
+  inputName: string;
+  updatedUnix: number;
+  completed: boolean;
+  resumable: boolean;
+  latestIter: number;
+  totalSteps: number;
+  resultPath: string | null;
+}
+
+export interface GroundPlane {
+  normal: [number, number, number];
+  /** The signed axis the normal is closest to, such as "+y" or "-z". */
+  nearestAxis: string;
+  /** Row-major 3x3 taking the ground normal onto the requested up axis. */
+  rotation: number[];
+}
+
+export interface FormatChoice {
+  extension: string;
+  label: string;
+}
+
+/** Row-major 3x3. */
+export type Mat3 = number[];
 
 export const api = {
   getHardwareProfile: () => invoke<HardwareProfile>("get_hardware_profile"),
@@ -78,14 +150,46 @@ export const api = {
   getResolvedSettings: () => invoke<ResolvedSettings>("get_resolved_settings"),
   getEngineStatus: () => invoke<EngineStatus>("get_engine_status"),
   installEngines: () => invoke<EngineStatus>("install_engines"),
-  startJob: (inputPath: string) => invoke<string>("start_job", { inputPath }),
   getAutostart: () => invoke<string | null>("get_autostart"),
+
+  startJob: (inputPath: string) => invoke<string>("start_job", { inputPath }),
   cancelJob: (jobId: string) => invoke<void>("cancel_job", { jobId }),
-  exportSplat: (resultPath: string, destPath: string) =>
-    invoke<void>("export_splat", { resultPath, destPath }),
+
+  listProjects: () => invoke<ProjectSummary[]>("list_projects"),
+  resumeProject: (workspace: string) => invoke<string>("resume_project", { workspace }),
+  deleteProject: (workspace: string) => invoke<void>("delete_project", { workspace }),
+  saveProjectOrientation: (workspace: string, rotation: Mat3) =>
+    invoke<void>("save_project_orientation", { workspace, rotation }),
+
+  /** The ground plane of a splat, and the rotation that stands it upright. */
+  estimateUpAxis: (splatPath: string, target?: string) =>
+    invoke<GroundPlane | null>("estimate_up_axis", { splatPath, target: target ?? null }),
+
+  listExportFormats: () => invoke<[FormatChoice[], FormatChoice[]]>("list_export_formats"),
+
+  /** The destination extension picks the format. `rotation` is baked in. */
+  exportSplat: (resultPath: string, destPath: string, rotation?: Mat3 | null) =>
+    invoke<void>("export_splat", { resultPath, destPath, rotation: rotation ?? null }),
+
+  /** Returns the triangle count. Long running; listen to `onMeshProgress`. */
+  exportMesh: (
+    workspace: string,
+    splatPath: string,
+    destPath: string,
+    opts?: { resolution?: number; textured?: boolean },
+  ) =>
+    invoke<number>("export_mesh", {
+      workspace,
+      splatPath,
+      destPath,
+      resolution: opts?.resolution ?? null,
+      textured: opts?.textured ?? null,
+    }),
 
   onJobEvent: (cb: (e: JobEvent) => void): Promise<UnlistenFn> =>
     listen<JobEvent>("job://event", (e) => cb(e.payload)),
   onEngineDownload: (cb: (e: EngineDownloadEvent) => void): Promise<UnlistenFn> =>
     listen<EngineDownloadEvent>("engine://download", (e) => cb(e.payload)),
+  onMeshProgress: (cb: (e: MeshProgressEvent) => void): Promise<UnlistenFn> =>
+    listen<MeshProgressEvent>("mesh://progress", (e) => cb(e.payload)),
 };
