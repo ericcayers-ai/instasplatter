@@ -1,5 +1,5 @@
-//! Settings system (ROADMAP §7): every setting is optional — `None` means
-//! **Auto**, resolved from the hardware profile + preset at job start.
+//! Settings system (ROADMAP §7): every setting is optional. `None` means
+//! **Auto**, resolved from the hardware profile and preset at job start.
 
 use crate::profiler::{HardwareProfile, Preset};
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ pub struct Settings {
     // ---- Input ----
     pub max_frames: Option<u32>,
     pub max_resolution: Option<u32>,
-    /// 0..1 — fraction of blurriest frames to reject.
+    /// 0..1, the fraction of blurriest frames to reject.
     pub blur_reject_fraction: Option<f32>,
 
     // ---- SfM ----

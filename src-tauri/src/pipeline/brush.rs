@@ -1,4 +1,4 @@
-//! Stage 4 — live Gaussian Splat training via Brush.
+//! Stage 4 - live Gaussian Splat training via Brush.
 //!
 //! Brush is a separate executable, so everything here is orchestration around
 //! its CLI rather than changes inside its training loop. Two features of
@@ -361,10 +361,25 @@ async fn run_stage(
             // Pick up whatever landed just before the process exited.
             tokio::task::block_in_place(|| watcher.poll(ctx, total_steps));
             if !status.success() {
-                break Err(format!(
-                    "Brush training failed (exit {:?}). See the log for details.",
-                    status.code()
-                ));
+                let code = status.code();
+                // A crash before the first checkpoint usually means Brush
+                // could not even start (a bad argument or a graphics driver
+                // that would not initialize); a crash after some progress
+                // usually means it ran out of VRAM partway through.
+                let msg = if watcher.latest.is_some() {
+                    format!(
+                        "Training made progress before failing (exit {code:?}), which usually \
+                         means it ran out of VRAM as the splat grew. Try a lower max splat \
+                         count or a lower training resolution in Preferences."
+                    )
+                } else {
+                    format!(
+                        "Training failed before its first checkpoint (exit {code:?}). This \
+                         usually means the graphics driver could not be initialized. Check that \
+                         your GPU driver is current, and see the log below for what Brush printed."
+                    )
+                };
+                break Err(msg);
             }
             break Ok(());
         }

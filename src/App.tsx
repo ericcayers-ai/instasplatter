@@ -1,7 +1,11 @@
 import { useEffect } from "react";
 import DropZone from "./components/DropZone";
 import Processing from "./components/Processing";
-import Preferences from "./components/Preferences";
+import TitleBar from "./components/shell/TitleBar";
+import SceneTree from "./components/shell/SceneTree";
+import PropertiesPanel from "./components/shell/PropertiesPanel";
+import LogConsole from "./components/shell/LogConsole";
+import StatusBar from "./components/shell/StatusBar";
 import { useStore } from "./state/store";
 
 export default function App() {
@@ -13,9 +17,15 @@ export default function App() {
   }, [init]);
 
   return (
-    <div className="relative h-full w-full">
-      {screen === "home" ? <DropZone /> : <Processing />}
-      <Preferences />
+    <div className="flex h-full w-full flex-col">
+      <TitleBar />
+      <div className="flex min-h-0 flex-1">
+        <SceneTree />
+        <main className="min-w-0 flex-1">{screen === "home" ? <DropZone /> : <Processing />}</main>
+        <PropertiesPanel />
+      </div>
+      <LogConsole />
+      <StatusBar />
     </div>
   );
 }

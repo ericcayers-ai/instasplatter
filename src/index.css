@@ -1,15 +1,46 @@
 @import "tailwindcss";
 
+/* Dark is the default paint before the theme script runs, and the fallback
+   design tokens Tailwind reads to generate utilities. Light/dark overrides
+   below live outside @theme's layer, so the cascade always prefers them. */
 @theme {
   --color-bg: #0b0d12;
   --color-panel: #12151d;
   --color-panel2: #171b26;
   --color-edge: #232939;
-  --color-accent: #38e0c7;
-  --color-accent2: #8b5cf6;
+  --color-accent: #38b7a6;
+  --color-accent2: #8b7cf6;
   --color-ink: #e8ecf4;
   --color-ink-dim: #8b93a7;
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --color-danger: #e5654f;
+  --font-sans: "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", monospace;
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #0b0d12;
+  --color-panel: #12151d;
+  --color-panel2: #171b26;
+  --color-edge: #232939;
+  --color-accent: #38b7a6;
+  --color-accent2: #8b7cf6;
+  --color-ink: #e8ecf4;
+  --color-ink-dim: #8b93a7;
+  --color-danger: #e5654f;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --color-bg: #f3f3f3;
+  --color-panel: #ffffff;
+  --color-panel2: #f7f7f8;
+  --color-edge: #d8dbe0;
+  --color-accent: #0f7d70;
+  --color-accent2: #6d28d9;
+  --color-ink: #14161b;
+  --color-ink-dim: #63676f;
+  --color-danger: #b3341f;
+  color-scheme: light;
 }
 
 html,
@@ -20,6 +51,7 @@ body,
   background: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 13px;
   overflow: hidden;
   user-select: none;
 }
@@ -29,7 +61,7 @@ body,
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a3145;
+  background: var(--color-edge);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-track {
@@ -39,7 +71,7 @@ body,
 @keyframes float-in {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -47,54 +79,78 @@ body,
   }
 }
 .float-in {
-  animation: float-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: float-in 0.2s ease-out both;
 }
 
-@keyframes pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 rgba(56, 224, 199, 0.25);
-  }
-  70% {
-    box-shadow: 0 0 0 18px rgba(56, 224, 199, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(56, 224, 199, 0);
-  }
+/* Flat, small-radius, 1px-bordered controls (ROADMAP-V2 3.6). No pills,
+   no gradients, no glow. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  border: 1px solid var(--color-edge);
+  background: var(--color-panel2);
+  color: var(--color-ink);
+  border-radius: 4px;
+  padding: 0.4em 0.75em;
+  font-size: 12px;
+  line-height: 1.2;
+  transition: border-color 0.12s, color 0.12s, background-color 0.12s;
+  white-space: nowrap;
 }
-.drop-active {
-  animation: pulse-ring 1.2s ease-out infinite;
-  border-color: var(--color-accent) !important;
-  background: rgba(56, 224, 199, 0.06) !important;
+.btn:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-edge));
+}
+.btn:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #05100e;
+  font-weight: 600;
+}
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+.btn-danger:hover {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+.btn-active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-panel2));
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -400px 0;
-  }
-  100% {
-    background-position: 400px 0;
-  }
-}
-
-.hero-gradient {
-  background:
-    radial-gradient(1200px 500px at 70% -10%, rgba(139, 92, 246, 0.14), transparent 60%),
-    radial-gradient(900px 420px at 15% 110%, rgba(56, 224, 199, 0.1), transparent 60%);
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-edge);
 }
 
 input[type="range"] {
   -webkit-appearance: none;
-  height: 4px;
+  height: 3px;
   border-radius: 2px;
-  background: #2a3145;
+  background: var(--color-edge);
   outline: none;
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--color-accent);
   cursor: pointer;
-  border: 2px solid #0b0d12;
+  border: 2px solid var(--color-bg);
+}
+
+input[type="number"],
+input[type="text"],
+select {
+  background: var(--color-panel2);
+  border: 1px solid var(--color-edge);
+  border-radius: 4px;
+  color: var(--color-ink);
 }

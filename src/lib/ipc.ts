@@ -167,9 +167,12 @@ export const api = {
 
   listExportFormats: () => invoke<[FormatChoice[], FormatChoice[]]>("list_export_formats"),
 
-  /** The destination extension picks the format. `rotation` is baked in. */
-  exportSplat: (resultPath: string, destPath: string, rotation?: Mat3 | null) =>
-    invoke<void>("export_splat", { resultPath, destPath, rotation: rotation ?? null }),
+  /**
+   * The destination extension picks the format. When `rotation` is omitted,
+   * the orientation last saved for `workspace` (if any) is used instead.
+   */
+  exportSplat: (resultPath: string, destPath: string, workspace?: string | null, rotation?: Mat3 | null) =>
+    invoke<void>("export_splat", { resultPath, destPath, workspace: workspace ?? null, rotation: rotation ?? null }),
 
   /** Returns the triangle count. Long running; listen to `onMeshProgress`. */
   exportMesh: (
@@ -185,6 +188,10 @@ export const api = {
       resolution: opts?.resolution ?? null,
       textured: opts?.textured ?? null,
     }),
+
+  /** Writes hardware, settings, engine and project state plus recent logs. */
+  exportDiagnostics: (workspace: string | null, recentLogs: string[], destPath: string) =>
+    invoke<void>("export_diagnostics", { workspace, recentLogs, destPath }),
 
   onJobEvent: (cb: (e: JobEvent) => void): Promise<UnlistenFn> =>
     listen<JobEvent>("job://event", (e) => cb(e.payload)),

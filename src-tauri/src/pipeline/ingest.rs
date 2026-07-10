@@ -1,6 +1,7 @@
-//! Stage 0/1 — ingestion + frame selection (ROADMAP §3 stages 0-1).
-//! Video → adaptive ffmpeg frame extraction; folder → validated image list.
-//! Both paths then go through blur gating + even subsampling to max_frames.
+//! Stage 0/1 - ingestion and frame selection (ROADMAP §3 stages 0-1).
+//! Video goes through adaptive ffmpeg frame extraction; a folder is read as
+//! a validated image list. Both paths then go through blur gating and even
+//! subsampling to max_frames.
 
 use super::{gating, JobCtx};
 use crate::engines::{ffmpeg_exe, ffprobe_exe};
@@ -64,7 +65,7 @@ async fn extract_video_frames(ctx: &JobCtx, video: &Path, out_dir: &Path) -> Res
         4.0
     };
     ctx.log(format!(
-        "Video: {:.1}s — extracting candidates at {:.2} fps",
+        "Video: {:.1}s, extracting candidates at {:.2} fps",
         duration, fps
     ));
 
@@ -92,7 +93,11 @@ async fn extract_video_frames(ctx: &JobCtx, video: &Path, out_dir: &Path) -> Res
         .map_err(|e| e.to_string())?
         .status;
     if !status.success() {
-        return Err("ffmpeg frame extraction failed".into());
+        return Err(format!(
+            "FFmpeg could not read this video (exit {:?}). It may be corrupt, or in a codec \
+             FFmpeg does not support. Try re-exporting it, or drop an image folder instead.",
+            status.code()
+        ));
     }
     Ok(())
 }
@@ -114,9 +119,15 @@ pub async fn ingest(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
         frames
     } else if input.is_dir() {
         let imgs = list_images(input);
+        if imgs.is_empty() {
+            return Err(format!(
+                "No images found in this folder. Supported types are {}.",
+                IMAGE_EXTS.join(", ")
+            ));
+        }
         if imgs.len() < 3 {
             return Err(format!(
-                "Found only {} usable image(s) — need at least 3 (ideally 20+).",
+                "Found only {} usable image(s), need at least 3 (ideally 20 or more).",
                 imgs.len()
             ));
         }
@@ -131,8 +142,8 @@ pub async fn ingest(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
         &format!("Scoring {} candidate frames…", candidates.len()),
     );
 
-    // Stage 1 — blur gating + even subsampling to max_frames.
-    let selected = tokio::task::block_in_place(|| {
+    // Stage 1 - blur gating + even subsampling to max_frames.
+    let (selected, report) = tokio::task::block_in_place(|| {
         gating::select_frames(
             &candidates,
             ctx.settings.max_frames as usize,
@@ -140,11 +151,28 @@ pub async fn ingest(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
         )
     });
     ctx.check_cancel()?;
+
+    if report.unreadable > 0 {
+        ctx.notice(format!(
+            "{} of {} frames could not be read and were skipped. The rest of the input looks fine.",
+            report.unreadable, report.total
+        ));
+    }
     ctx.log(format!(
-        "Frame gating: kept {} of {} candidates",
-        selected.len(),
-        candidates.len()
+        "Frame gating: {} unreadable, {} rejected as too blurry, {} kept of {} candidates",
+        report.unreadable, report.blur_rejected, report.kept, report.total
     ));
+
+    if selected.len() < 3 {
+        return Err(format!(
+            "Only {} usable frame(s) remain after gating ({} unreadable, {} too blurry). \
+             Need at least 3. Try a slower capture, better lighting, or lowering blur rejection \
+             in Preferences.",
+            selected.len(),
+            report.unreadable,
+            report.blur_rejected
+        ));
+    }
 
     ctx.stage_progress("ingest", 0.8, "Preparing dataset…");
     for (i, src) in selected.iter().enumerate() {

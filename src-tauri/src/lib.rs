@@ -39,6 +39,27 @@ fn dev_mode() -> bool {
         .unwrap_or(false)
 }
 
+/// Below this much free space on the workspace volume, a job is refused
+/// rather than left to fail deep inside COLMAP or Brush with a confusing
+/// "disk full" error from a tool the user has never heard of. Frame
+/// extraction, the COLMAP database and a run of training checkpoints
+/// together commonly reach a few gigabytes.
+const MIN_FREE_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Free space on the volume holding `path`, or `None` if it cannot be
+/// determined (an unmounted or exotic filesystem). A run is never blocked on
+/// a diagnostic that could not be made.
+fn free_disk_bytes(path: &Path) -> Option<u64> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    disks
+        .list()
+        .iter()
+        .filter(|d| target.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| d.available_space())
+}
+
 #[tauri::command]
 fn get_hardware_profile() -> HardwareProfile {
     cached_profile().clone()
@@ -155,6 +176,18 @@ async fn start_job(
     );
     let workspace = pipeline::jobs_dir().join(&job_id);
     std::fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
+
+    if let Some(free) = free_disk_bytes(&workspace) {
+        if free < MIN_FREE_DISK_BYTES {
+            let _ = std::fs::remove_dir_all(&workspace);
+            return Err(format!(
+                "Only {:.1} GB free on this drive. InstaSplatter needs a few gigabytes for \
+                 extracted frames, the camera database and training checkpoints. Free up space \
+                 and try again.",
+                free as f64 / (1024.0 * 1024.0 * 1024.0)
+            ));
+        }
+    }
 
     let resolved = settings::resolve(&Settings::load(), cached_profile());
     let proj = Project::new(&job_id, &input, &workspace, &resolved);
@@ -361,17 +394,29 @@ fn list_export_formats() -> (Vec<FormatChoice>, Vec<FormatChoice>) {
 /// Write the finished splat where the user asked, in the format their chosen
 /// extension implies, with the viewport's orientation baked in.
 ///
-/// The common case (PLY, no rotation) is a byte copy, so exporting what was
-/// just trained cannot introduce a rounding difference.
+/// The orientation comes from the project file when `workspace` is given and
+/// `rotation` is not: the viewport saves it there every time the user turns
+/// the model, so export picks up whatever the user last saw without the
+/// caller having to track a live renderer state. The common case (PLY, no
+/// rotation) is a byte copy, so exporting what was just trained cannot
+/// introduce a rounding difference.
 #[tauri::command]
 fn export_splat(
     result_path: String,
     dest_path: String,
+    workspace: Option<String>,
     rotation: Option<[f32; 9]>,
 ) -> Result<(), String> {
     let src = PathBuf::from(&result_path);
     let dest = PathBuf::from(&dest_path);
     let format = export::Format::from_path(&dest);
+
+    let rotation = rotation.or_else(|| {
+        workspace
+            .as_deref()
+            .and_then(|ws| Project::load(Path::new(ws)).ok())
+            .and_then(|p| p.model_rotation)
+    });
 
     let identity = |r: &[f32; 9]| {
         const I: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
@@ -457,6 +502,81 @@ async fn export_mesh(
     .map_err(|e| format!("Mesh extraction did not finish: {e}"))?
 }
 
+/// Everything needed to debug a stuck or failed run without asking the user
+/// to describe their machine over chat (ROADMAP-V2 5.7). `recent_logs` comes
+/// from the frontend, which is the only place a full run's log survives;
+/// Rust only ever emits events, it does not buffer them.
+#[tauri::command]
+fn export_diagnostics(
+    workspace: Option<String>,
+    recent_logs: Vec<String>,
+    dest_path: String,
+) -> Result<(), String> {
+    let mut out = String::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    out.push_str(&format!(
+        "InstaSplatter diagnostics\nversion {}\nunix time {now}\n\n",
+        env!("CARGO_PKG_VERSION")
+    ));
+
+    out.push_str("## Hardware\n");
+    let profile = cached_profile();
+    out.push_str(&format!(
+        "GPU: {} ({:?}), {} MB VRAM, CUDA: {}\nCPU: {} ({} threads)\nRAM: {} MB\nAuto preset: {:?}\n\n",
+        profile.gpu_name,
+        profile.gpu_vendor,
+        profile.vram_mb,
+        profile.has_cuda,
+        profile.cpu_name,
+        profile.cpu_threads,
+        profile.ram_mb,
+        profile.auto_preset,
+    ));
+
+    out.push_str("## Engines\n");
+    let st = engines::status();
+    out.push_str(&format!(
+        "colmap: {}, brush: {}, ffmpeg: {}\n\n",
+        st.colmap, st.brush, st.ffmpeg
+    ));
+
+    out.push_str("## Settings\n");
+    let raw = Settings::load();
+    let resolved = settings::resolve(&raw, profile);
+    out.push_str(&format!("{raw:#?}\n\nResolved:\n{resolved:#?}\n\n"));
+
+    if let Some(ws) = &workspace {
+        out.push_str("## Project\n");
+        match Project::load(Path::new(ws)) {
+            Ok(p) => {
+                out.push_str(&format!(
+                    "job_id: {}\ninput: {}\ncompleted: {}\nresumable: {}\nlatest_iter: {} / {}\n\n",
+                    p.job_id,
+                    p.input_path,
+                    p.completed,
+                    p.is_resumable(),
+                    p.latest_iter,
+                    p.total_steps,
+                ));
+            }
+            Err(e) => out.push_str(&format!("Could not read project.json: {e}\n\n")),
+        }
+    }
+
+    if !recent_logs.is_empty() {
+        out.push_str("## Recent log\n");
+        for line in &recent_logs {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+
+    std::fs::write(&dest_path, out).map_err(|e| format!("Cannot write {dest_path}: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
@@ -482,6 +602,7 @@ pub fn run() {
             list_export_formats,
             export_splat,
             export_mesh,
+            export_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

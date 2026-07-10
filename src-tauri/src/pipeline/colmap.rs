@@ -1,6 +1,6 @@
-//! Stage 2 — Structure-from-Motion via COLMAP (ROADMAP §3 stage 2).
-//! feature_extractor → matcher (sequential for video / exhaustive otherwise)
-//! → mapper, producing `sparse/0` in the Brush-compatible COLMAP layout.
+//! Stage 2 - Structure-from-Motion via COLMAP (ROADMAP §3 stage 2).
+//! feature_extractor -> matcher (sequential for video, exhaustive otherwise)
+//! -> mapper, producing `sparse/0` in the Brush-compatible COLMAP layout.
 
 use super::JobCtx;
 use crate::engines::colmap_exe;
@@ -112,7 +112,7 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     )
     .await?;
 
-    // 2) Matching — sequential suits video/orbit captures; exhaustive is
+    // 2) Matching. Sequential suits video and orbit captures; exhaustive is
     //    more robust for small unordered folders.
     let sequential = match ctx.settings.matcher.as_str() {
         "sequential" => true,
@@ -172,8 +172,10 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
 
     if !sparse.join("0").join("cameras.bin").exists() {
         return Err(
-            "Camera solving failed — COLMAP couldn't reconstruct the scene. \
-             Try more overlap between frames, better lighting, or a slower capture."
+            "COLMAP could not reconstruct the scene from these frames. This usually means too \
+             little overlap between frames, motion blur, or a scene with too few distinct \
+             features (a blank wall, open sky, water). Try a slower capture with more overlap, \
+             better lighting, or more frames."
                 .into(),
         );
     }

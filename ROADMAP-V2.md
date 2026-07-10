@@ -19,13 +19,15 @@ Writing conventions for this document and for all UI copy it produces: plain, fu
 | --- | --- | --- |
 | 1. Core | Fable 5 / Opus 4.8 | Done, except the end-to-end confirmation in 1.1 and SOG in 1.6 |
 | 2. Instant live init | Opus 4.8 | Engine done, verified on synthetic scenes. Gaussians do not spawn per frame, and there is no VGGT sidecar |
-| 3. UI makeover | Sonnet 5, medium effort | Not started, skipped by model assignment |
+| 3. UI makeover | Sonnet 5, medium effort | Done at explicit user direction overriding the model gate. Panels collapse but do not float |
 | 4. Splat to mesh | Fable 5 / Opus | Done, except the UV atlas and the Poisson fallback |
-| 5. Debug passthrough | Opus 4.8, ultracode | Not started, ultracode was not enabled |
+| 5. Debug passthrough | Opus 4.8, ultracode | 5.7 (reliability) done at explicit user direction. 5.1-5.6 mostly blocked: Brush is a downloaded binary this repo cannot patch |
 
-165 unit tests pass, the Rust tree builds with no warnings, and the frontend typechecks and builds. **No end-to-end run against COLMAP and Brush has been performed since these changes landed.** Everything below is verified against synthetic data and unit tests only. The three settings this work added, live camera tracking, progressive resolution and the Mip-Splatting filter, all default to off pending that measurement.
+168 unit tests pass, the Rust tree builds with no warnings, and the frontend typechecks and builds. **No end-to-end run against COLMAP and Brush has been performed since these changes landed.** Everything below is verified against synthetic data and unit tests only. The three settings this work added, live camera tracking, progressive resolution and the Mip-Splatting filter, all default to off pending that measurement.
 
-Two defects in shared code were found and fixed along the way, both from judging a singular value against an absolute threshold rather than one relative to the matrix. In `svd3`, a third singular value of `4e-9` on a matrix whose largest was `4.5` passed a fixed `1e-12` floor, so the last column of `U` was computed as the quotient of two roundoff quantities. Callers read that column as the camera translation, which made `ransac_essential` fail outright on real essential matrices. Separately, `find_model_dir` never accepted a directory containing `0/`, so `is_resumable` reported false for every project that could in fact be resumed.
+Two defects in shared code were found and fixed in the Phase 1/2/4 pass, both from judging a singular value against an absolute threshold rather than one relative to the matrix. In `svd3`, a third singular value of `4e-9` on a matrix whose largest was `4.5` passed a fixed `1e-12` floor, so the last column of `U` was computed as the quotient of two roundoff quantities. Callers read that column as the camera translation, which made `ransac_essential` fail outright on real essential matrices. Separately, `find_model_dir` never accepted a directory containing `0/`, so `is_resumable` reported false for every project that could in fact be resumed.
+
+Phases 3 and 5 were added in a follow-up pass at the user's explicit instruction to proceed "regardless of what model type" the roadmap assigns, overriding the model and ultracode gates above. Phase 5's checklist assumes patch access to Brush's training loop and rasterizer, which this project does not have (Brush is a downloaded release binary, driven only over its CLI); most of that phase is marked blocked for that reason rather than silently skipped or faked. See the phase's own notes for the item that is a genuine exception (VRAM/disk guardrails) and the one that is out of scope for any coding session (a real multi-vendor hardware test matrix).
 
 ---
 
@@ -155,45 +157,45 @@ For wide-baseline sets, loops, or captures where incremental tracking is fragile
 
 > Assigned to Claude Sonnet 5 at medium effort only. No other model, and no other effort level, may implement this phase.
 
-**Not started. Skipped by model assignment**, as this document reserves the phase for Claude Sonnet 5 at medium effort. The Phase 1 and 2 work added controls to the existing interface without restyling it: model orientation controls and camera frustums in the viewport, a registered-camera count with tracking confidence, a notices strip, an export-format picker, and a mesh export action. All of that copy is plain and free of em dashes, and it is expected to be rehoused by the shell this phase builds.
+**Done**, at the user's explicit direction to proceed regardless of the model-assignment gate above. The shell is a hand-rolled flex layout, not a drag-and-float docking framework: panels collapse and their state persists, but they do not detach into floating windows. That is the one simplification against the brief below, and it is called out again in 3.1.
 
-Phase 3 replaces the current interface, which reads as a generic dark web app, with a layout and visual language closer to professional reconstruction software. It also lands the interface-level fixes: settings available at any time, light and dark themes, and plain non-marketing copy.
+Phase 3 replaces the previous interface, which read as a generic dark web app, with a layout and visual language closer to professional reconstruction software. It also lands the interface-level fixes: settings available at any time, light and dark themes, and plain non-marketing copy.
 
 ### 3.1 Layout: a three-region dockable shell
 Model the layout on COLMAP and Lichtfeld Studio rather than a single centered card.
-- [ ] Left: a dockable scene and dataset tree (input frames, solved cameras, the current model).
-- [ ] Center: the viewport.
-- [ ] Right: a properties and parameters panel with grouped, collapsible sections.
-- [ ] Bottom: a log console showing real timestamped pipeline output, plus a status bar with live stats.
-- [ ] Panels can dock, float, and collapse. Replace the centered-card home screen with this working layout.
+- [x] Left: a scene and dataset tree. On the home screen it lists recent projects with resume and delete; during a run it shows the input, live camera-registration progress with per-camera confidence, and model stats.
+- [x] Center: the viewport.
+- [x] Right: a properties and parameters panel with grouped, collapsible sections, replacing the old modal.
+- [x] Bottom: a log console with real timestamps, plus a status bar with live stats.
+- [ ] Panels can dock, float, and collapse. **Collapse only.** They toggle open and closed and remember that state, but nothing detaches into a floating window. A real docking system is a substantial component in its own right; this was the deliberate scope cut to land the rest of the phase.
 
 ### 3.2 Light and dark themes
-- [ ] Define semantic theme tokens (background, panel, border, text, muted text, one accent).
-- [ ] Provide both a light map and a dark map. Dark panels near #1e1e1e and #252526, light panels near #f3f3f3 and #ffffff.
-- [ ] Default to the operating system preference, offer a manual toggle, and persist the choice.
-- [ ] Use one low-saturation accent for selection and the single primary action. No gradients, no glow, no decorative blobs.
+- [x] Define semantic theme tokens (background, panel, border, text, muted text, one accent).
+- [x] Provide both a light map and a dark map. Dark panels at #12151d and #171b26, light panels at #ffffff and #f7f7f8, both close to the roadmap's targets.
+- [x] Default to the operating system preference, offer a manual toggle, and persist the choice. The toggle also tracks OS changes live via a `matchMedia` listener while set to Auto.
+- [x] Use one low-saturation accent for selection and the single primary action. No gradients, no glow, no decorative blobs. The old radial-gradient hero background and the pulsing drop-zone glow were both removed.
 
 ### 3.3 Settings available at any time
-- [ ] Make preferences openable during a running job, not only from the home screen.
-- [ ] Show which settings apply to the current run and which take effect on the next run.
+- [x] Make preferences openable during a running job, not only from the home screen. It is a docked panel now, not a modal, so nothing blocks the viewport while it is open.
+- [x] Show which settings apply to the current run and which take effect on the next run. A banner appears in the panel once a job has started and its live settings diverge from what it was launched with.
 
 ### 3.4 Plain, functional copy
-- [ ] Rewrite all interface text to be plain and descriptive. Remove promotional or colloquial phrasing.
-- [ ] Do not use em dashes anywhere in the interface.
-- [ ] Labels are verbs and nouns that describe the action or value, not slogans.
+- [x] Rewrite all interface text to be plain and descriptive. Remove promotional or colloquial phrasing. The "watch the 3D scene build itself" framing is gone.
+- [x] Do not use em dashes anywhere in the interface. Also swept the Rust log and error strings that reach the UI, since two of the fixes below were user-facing text emitted from the backend.
+- [x] Labels are verbs and nouns that describe the action or value, not slogans.
 
 ### 3.5 Viewport telemetry and gizmos
-- [ ] Overlay camera frustums, splat count, frames per second, and view axes.
-- [ ] Add transform gizmos for adjusting the model orientation from Phase 1.
+- [x] Overlay camera frustums, splat count, frames per second, and view axes. The axis gizmo is a small always-on-top indicator in the bottom-left corner, updated from a `requestAnimationFrame` loop against the live camera basis rather than React state, so it costs no re-renders.
+- [x] Add transform gizmos for adjusting the model orientation from Phase 1. This reuses the button-based rotate/snap/align controls from Phase 1.3, now docked to the viewport rather than always-visible; a proper 3D drag gizmo was out of scope for this pass.
 
 ### 3.6 Typography and density
-- [ ] Use a 12 to 13 pixel system font with tabular numerals for counts, timings, and quality readouts.
-- [ ] Favor information density over whitespace. Use flat buttons with small radii and 1 pixel borders, grouped by function. No pill buttons.
+- [x] Use a 12 to 13 pixel system font with tabular numerals for counts, timings, and quality readouts. Base size dropped to 13px; the status bar and scene tree read in the 10 to 12px range.
+- [x] Favor information density over whitespace. Use flat buttons with small radii and 1 pixel borders, grouped by function. No pill buttons. Every button in the app now shares one `.btn` class: 4px radius, 1px border, no gradient.
 
 ### 3.7 Persist the workspace
-- [ ] Remember panel layout and theme between sessions.
+- [x] Remember panel layout and theme between sessions. Theme preference and both panels' open state are written to `localStorage` and restored on launch.
 
-Patterns worth borrowing, confirmed by research: COLMAP task-grouped toolbars and its thread-safe log console flushed on a short timer so long jobs never freeze the interface; Lichtfeld Studio live training preview, scene tree with selection and undo, and its export choices; SuperSplat interaction patterns for cropping and transforming.
+Patterns worth borrowing, confirmed by research: COLMAP task-grouped toolbars and its thread-safe log console flushed on a short timer so long jobs never freeze the interface; Lichtfeld Studio live training preview, scene tree with selection and undo, and its export choices; SuperSplat interaction patterns for cropping and transforming. The log console keeps only the most recent 800 lines and auto-scrolls only while the reader is already at the bottom, which is this pass's version of "never freeze the interface."
 
 ---
 
@@ -229,40 +231,40 @@ Follow the 2DGS recipe, which is what 2DGS, PGSR, and RaDe-GS all do under the h
 
 > Assigned to Claude Opus 4.8. No other model, and no other configuration, may implement this phase.
 
-**Not started.** This phase is reserved for ultracode, which was not enabled for this session, so none of it was attempted. Nothing below has been touched.
+**Partially done, at the user's explicit direction to proceed regardless of the model/ultracode gate above.** Reading this phase against the actual architecture surfaced a mismatch worth stating plainly before the checklist: 5.1, 5.3, 5.4, 5.5 and half of 5.6 all say to change something "in Brush" or "in the wgpu rasterizer". Brush is not vendored in this repository. It is downloaded as a compiled release binary and driven only over its CLI (see `engines.rs`); there is no source tree here to patch a densification rule, a mask loss, an appearance embedding, or a tile-culling pass into. Implementing those items for real would mean forking Brush and shipping a custom build of it, which is a different project than the one this codebase is. Rather than write Rust that calls itself a MCMC densifier while doing nothing to Brush's actual training loop, those items are left undone and marked with the reason below. 5.7, the debug-passthrough and reliability pass, is entirely inside code this repository owns, and is done.
 
-Phase 5 makes the whole pipeline bulletproof and efficient on messy, real-world input, and it fixes holes. This is the robustness and hardening pass: exhaustive error handling at every stage, the in-the-wild quality stack, performance guardrails, and a debug passthrough that surfaces exactly what went wrong when something fails. It is reserved for ultracode because the value is in exhaustive, adversarially verified coverage of edge cases.
+Phase 5 makes the whole pipeline bulletproof and efficient on messy, real-world input, and it fixes holes. This is the robustness and hardening pass: exhaustive error handling at every stage, the in-the-wild quality stack, performance guardrails, and a debug passthrough that surfaces exactly what went wrong when something fails.
 
 ### 5.1 Floater suppression with MCMC densification
-- [ ] Reimplement 3DGS-MCMC densification in Brush. Treat Gaussians as MCMC samples, relocate low-opacity Gaussians instead of the clone, split, and opacity-reset heuristics, and enforce a fixed Gaussian budget. This is the single strongest structural fix for floating blobs and it also caps VRAM and model size. It ports cleanly with no external network.
+- [ ] Reimplement 3DGS-MCMC densification in Brush. **Blocked.** This changes Brush's own densification heuristic, which lives in a binary this project downloads and cannot modify. Reimplementing it for real needs a fork of Brush.
 
 ### 5.2 Fix holes and under-reconstruction
 No lightweight regularizer truly fills holes, because missing regions need new content, so this is staged.
-- [ ] Near term, add SparseGS and USGS-style depth and unseen-viewpoint regularization to prevent background collapse and reduce holes in under-observed regions. This is portable to the Rust trainer and needs no diffusion model.
-- [ ] Add Depth Anything V2 monocular depth priors to regularize geometry where multi-view evidence is thin.
-- [ ] Deferred, as an opt-in sidecar once its code releases: the GSFix3D render, 2D inpaint, and re-distill loop, which is the only approach that genuinely synthesizes missing geometry. It is a PyTorch diffusion stage, so it stays out of the base install.
+- [ ] Near term, add SparseGS and USGS-style depth and unseen-viewpoint regularization. **Blocked**, same reason: this is a loss term added inside Brush's training step.
+- [ ] Add Depth Anything V2 monocular depth priors. **Not done.** Unlike 5.1/5.3/5.4/5.5, this one is not blocked by the Brush boundary, since depth priors could be computed by a sidecar and fed in as data. It needs a neural runtime (ONNX or similar) and downloaded weights, which is exactly the shape of opt-in sidecar the VGGT seam in Phase 2.3 was built for, and building one was out of scope for this pass.
+- [ ] Deferred, as an opt-in sidecar once its code releases: the GSFix3D render, 2D inpaint, and re-distill loop. Unchanged from before.
 
 ### 5.3 Transient and moving-object rejection
-- [ ] Port the SpotLessSplats robust mask into training so moving people and objects are down-weighted. The mask loss is portable to Rust. The feature extractor for it runs as an optional preprocess.
-- [ ] Offer optional SAM2 masking for explicit removal of chosen classes.
+- [ ] Port the SpotLessSplats robust mask into training. **Blocked**, same reason as 5.1: the mask loss has to be evaluated inside Brush's training step.
+- [ ] Offer optional SAM2 masking for explicit removal of chosen classes. **Not done.** Also a neural-runtime sidecar, not attempted this pass.
 
 ### 5.4 Appearance and exposure drift
-- [ ] Port WildGaussians per-image appearance embeddings so exposure and lighting changes across frames are absorbed rather than baked in as blotches.
-- [ ] Add a bilateral grid for per-image color correction.
+- [ ] Port WildGaussians per-image appearance embeddings. **Blocked**, same reason as 5.1: the embedding is a per-image parameter learned inside Brush's training step.
+- [ ] Add a bilateral grid for per-image color correction. **Blocked**, same reason.
 
 ### 5.5 Motion blur
-- [ ] Keep Deblur-GS as a reference and defer it. Per-frame blur kernels add camera and kernel machinery that is not worth the complexity yet.
+- [ ] Keep Deblur-GS as a reference and defer it. Unchanged from before; this was already deferred, not blocked.
 
 ### 5.6 Efficiency
-- [ ] Add budgeted densification, based on Taming-3DGS and FastGS, so a per-step Gaussian budget bounds VRAM and model size. This pairs naturally with the MCMC cap.
-- [ ] Port tighter tile culling and soft pruning, based on Speedy-Splat and Mini-Splatting, into the wgpu rasterizer to cut overdraw and trim the final count.
-- [ ] Add VRAM and thermal guardrails with dynamic downscale so the app degrades instead of crashing.
+- [ ] Add budgeted densification, based on Taming-3DGS and FastGS. **Blocked**, same reason as 5.1.
+- [ ] Port tighter tile culling and soft pruning into the wgpu rasterizer. **Blocked.** The rasterizer is inside Brush.
+- [x] Add VRAM and thermal guardrails with dynamic downscale so the app degrades instead of crashing. **Partial.** A preflight free-disk-space check now refuses a job outright rather than letting it fail deep inside COLMAP or Brush with a confusing error, and a Brush training failure is classified by whether any checkpoint was reached (a crash before the first checkpoint reads as a driver problem; a crash after progress reads as VRAM exhaustion, with a suggestion to lower max splats or resolution). There is no live VRAM meter or thermal signal, since neither is available from outside the training process without the GPU query machinery this pass did not build; the downscale suggestion is a message, not an automatic retry.
 
 ### 5.7 Debug passthrough and reliability
-- [ ] Add exhaustive, specific error handling at every stage: SfM failure, out of memory, too few frames, degenerate motion, and empty or corrupt input, each with a plain message and a suggested fix.
-- [ ] Add structured logging and a one-click diagnostics export for support.
-- [ ] Confirm crash-resilient checkpoint and resume across the whole pipeline.
-- [ ] Build an end-to-end test matrix over object, room, and outdoor captures, and over each GPU vendor, and run it under adversarial verification.
+- [x] Add exhaustive, specific error handling at every stage: SfM failure, out of memory, too few frames, degenerate motion, and empty or corrupt input, each with a plain message and a suggested fix. Frame gating now separates "could not be read" from "rejected as too blurry" and reports both counts; a folder of unreadable images gets a specific message rather than a generic COLMAP failure two stages later. Video extraction failures name the likely cause (corrupt file or unsupported codec) and suggest dropping an image folder instead. The COLMAP no-reconstruction case lists concrete causes (little overlap, motion blur, too few distinct features) instead of a bare failure. Degenerate motion in the live-init engine already returned specific reasons before this pass (Phase 2.6); those are unchanged.
+- [x] Add structured logging and a one-click diagnostics export for support. A new `export_diagnostics` command writes hardware profile, engine status, raw and resolved settings, the active project's state, and the most recent log lines to a single text file, reachable from the status bar at any time and from the error card when a job fails.
+- [x] Confirm crash-resilient checkpoint and resume across the whole pipeline. This was implemented in Phase 1.4 but had no UI path to reach it; a job that crashed left a resumable project with nothing in the interface to resume it from. The home screen's scene panel now lists recent projects with a Resume action wherever `is_resumable()` is true, and a Delete action otherwise, closing that gap.
+- [ ] Build an end-to-end test matrix over object, room, and outdoor captures, and over each GPU vendor, and run it under adversarial verification. **Not done.** This needs real hardware across vendors and real captures, neither of which is available in this environment. It is the one item in this phase that genuinely cannot be done from inside a coding session.
 
 ---
 
