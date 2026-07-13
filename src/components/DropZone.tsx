@@ -40,10 +40,26 @@ export default function DropZone() {
   const vram = profile ? Math.round(profile.vram_mb / 1024) : 0;
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 p-10">
-      <div className="float-in text-sm text-ink-dim">Drop a video or a folder of photos to reconstruct a scene.</div>
+    <div className="splatter-field flex h-full flex-col items-center justify-center gap-8 p-10">
+      <header className="float-in max-w-lg text-center">
+        <h1 className="font-display text-[2rem] font-bold leading-tight tracking-tight text-ink">
+          Capture becomes form
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-ink-dim">
+          Drop a video or a folder of photos. InstaSplatter builds a navigable Gaussian splat while you watch.
+        </p>
+      </header>
 
       <div
+        role="button"
+        tabIndex={0}
+        aria-label="Drop a video or image folder to start reconstruction"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            void browse(false);
+          }
+        }}
         className={`float-in flex w-full max-w-xl flex-col items-center gap-4 rounded border-2 border-dashed px-10 py-14 transition-colors ${
           hover ? "border-accent bg-accent/5" : "border-edge bg-panel"
         }`}
@@ -61,8 +77,9 @@ export default function DropZone() {
       </div>
 
       {profile && (
-        <div className="float-in flex items-center gap-2 rounded border border-edge bg-panel px-3 py-1.5 text-xs text-ink-dim">
-          {profile.gpu_name}, {vram} GB, auto preset: <b className="text-ink">{resolved?.preset ?? profile.auto_preset}</b>
+        <div className="float-in flex items-center gap-2 rounded border border-edge bg-panel px-3 py-1.5 font-mono text-xs text-ink-dim">
+          {profile.gpu_name}, {vram} GB, auto preset:{" "}
+          <b className="text-ink">{resolved?.preset ?? profile.auto_preset}</b>
         </div>
       )}
     </div>

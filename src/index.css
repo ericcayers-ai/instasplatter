@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
-/* Dark is the default paint before the theme script runs, and the fallback
-   design tokens Tailwind reads to generate utilities. Light/dark overrides
-   below live outside @theme's layer, so the cascade always prefers them. */
+/* InstaSplatter palette (named for the splatter / capture workflow):
+   Ink #0b0d12, Slate #12151d, Panel #171b26, Edge #232939,
+   Splatter #38b7a6 (primary pigment), Trace #8b7cf6 (live progress),
+   Paper #e8ecf4, Graphite #8b93a7, Ember #e5654f */
 @theme {
   --color-bg: #0b0d12;
   --color-panel: #12151d;
@@ -13,8 +14,9 @@
   --color-ink: #e8ecf4;
   --color-ink-dim: #8b93a7;
   --color-danger: #e5654f;
-  --font-sans: "Segoe UI", system-ui, sans-serif;
-  --font-mono: "Cascadia Mono", "Consolas", monospace;
+  --font-display: "Syne", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", "Consolas", monospace;
 }
 
 :root[data-theme="dark"] {
@@ -56,6 +58,32 @@ body,
   user-select: none;
 }
 
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Signature splatter motif: restrained ink drops behind the drop zone only. */
+.splatter-field {
+  position: relative;
+  isolation: isolate;
+}
+.splatter-field::before {
+  content: "";
+  position: absolute;
+  inset: -12%;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.55;
+  background:
+    radial-gradient(ellipse 28% 22% at 18% 72%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 70%),
+    radial-gradient(ellipse 20% 16% at 78% 28%, color-mix(in srgb, var(--color-accent2) 18%, transparent), transparent 72%),
+    radial-gradient(ellipse 14% 12% at 62% 78%, color-mix(in srgb, var(--color-accent) 14%, transparent), transparent 68%),
+    radial-gradient(ellipse 10% 8% at 34% 38%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 65%);
+}
+:root[data-theme="light"] .splatter-field::before {
+  opacity: 0.35;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -82,8 +110,19 @@ body,
   animation: float-in 0.2s ease-out both;
 }
 
-/* Flat, small-radius, 1px-bordered controls (ROADMAP-V2 3.6). No pills,
-   no gradients, no glow. */
+@media (prefers-reduced-motion: reduce) {
+  .float-in {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -100,6 +139,10 @@ body,
 }
 .btn:hover {
   border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-edge));
+}
+.btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 .btn:disabled {
   opacity: 0.45;
@@ -136,6 +179,10 @@ input[type="range"] {
   background: var(--color-edge);
   outline: none;
 }
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+}
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 12px;
@@ -153,4 +200,9 @@ select {
   border: 1px solid var(--color-edge);
   border-radius: 4px;
   color: var(--color-ink);
+}
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }

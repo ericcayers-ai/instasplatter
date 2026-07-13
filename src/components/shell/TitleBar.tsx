@@ -64,7 +64,7 @@ export default function TitleBar() {
         >
           {leftPanelOpen ? "◀" : "▶"}
         </button>
-        <div className="text-[13px] font-semibold tracking-tight">InstaSplatter</div>
+        <div className="font-display text-[14px] font-bold tracking-tight">InstaSplatter</div>
         {screen === "processing" && (
           <>
             <span className="text-ink-dim">/</span>

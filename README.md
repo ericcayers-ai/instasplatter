@@ -2,104 +2,71 @@
 
 # InstaSplatter
 
-### Drag in a video or a folder of photos. Watch a 3D Gaussian Splat build itself, live.
+### Drag in a video or a folder of photos. Watch a 3D Gaussian splat build itself, live.
 
-**Zero-config by default. Infinitely configurable underneath.**
+**Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-pre--alpha%20(in%20development)-orange)
+![Status](https://img.shields.io/badge/status-v0.2.0-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
-![GPU](https://img.shields.io/badge/GPU-NVIDIA%20%7C%20AMD%20%7C%20Intel-76B900)
+![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-TBD-lightgrey)
 
 </div>
 
 ---
 
-> **Project status: v0.1 — working end-to-end.** Drop a video or image folder → live Gaussian-Splat reconstruction in the viewport → export `.ply`. Verified on Windows 11 + RTX 4060. The engineering plan and phase status live in **[ROADMAP.md](ROADMAP.md)**; sections below marked _(planned)_ are not implemented yet, everything else works today. See **Building from source** below — signed installers come later.
+> **v0.2.0** ships the V2 roadmap phases the codebase can own: professional reconstruction UI, live camera tracking (opt-in), splat and mesh export, checkpoint resume, and exhaustive error handling. Phase status and deferred items are in **[ROADMAP-V2.md](ROADMAP-V2.md)**. The original long-range plan is in **[ROADMAP.md](ROADMAP.md)**.
 
 ---
 
 ## What it is
 
-InstaSplatter turns ordinary captures into photorealistic **3D Gaussian Splats** — no command line, no config files, no PhD in photogrammetry.
+InstaSplatter turns ordinary captures into photorealistic **3D Gaussian splats** with no command line and no config files.
 
-Drop an `.mp4` or a folder of images onto the window and the scene starts materializing in the viewport within seconds, sharpening in real time as it trains. Everything — resolution, frame count, iteration budget, quality/speed trade-offs — is **automatically tuned to your PC**. Power users can open Preferences and override every knob; everyone else never has to.
+Drop an `.mp4` or a folder of images onto the window and the scene materializes in the viewport while it trains. Resolution, frame count, iteration budget, and quality trade-offs are **automatically tuned to your PC**. Power users can open Settings and override every knob; everyone else never has to.
 
-## Why it's different
+## Why it is different
 
-- ⚡ **Live, not batch.** You watch the splat form and refine in real time — never a frozen progress bar.
-- 🎛️ **Auto-optimized for your hardware.** InstaSplatter profiles your GPU/CPU/RAM and picks the optimal engine and settings. NVIDIA gets the CUDA fast path; AMD and Intel get a fully-working portable path.
-- 🧹 **Clean output.** Floating blobs, moving people/cars, and per-photo exposure & white-balance drift are actively suppressed by the pipeline — not left for you to scrub out by hand.
-- 🖱️ **Truly drag-and-drop.** Zero required configuration to get a result.
-- 🔧 **Every setting, exposed.** A deep Preferences panel where every option defaults to **Auto**, with one-click quality and scene-type presets.
-- 🔒 **Local & private.** All processing runs on your machine. No cloud dependency, no upload.
+- **Live, not batch.** You watch the splat form and refine in real time.
+- **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python runtime required.
+- **Clean output controls.** A Clean vs. detailed slider maps to floater-suppression losses in the trainer.
+- **Truly drag-and-drop.** Zero required configuration to get a result.
+- **Local and private.** All processing runs on your machine.
 
 ## Features
 
 | | |
 |---|---|
-| **Input** ✅ | Video (`.mp4`, `.mov`, …) or an image folder (`.jpg`, `.png`, …) |
-| **Smart frame selection** ✅ | Adaptive video frame extraction, blur rejection (variance-of-Laplacian), even temporal subsampling |
-| **Camera solving** ✅ | COLMAP 4.1 SfM (GPU SIFT, auto sequential/exhaustive matching); pose-free instant init _(planned)_ |
-| **Live reconstruction** ✅ | Brush (wgpu) Gaussian training streamed live into a WebGL2 splat viewport with orbit controls |
-| **Clean-up built in** 🟡 | Opacity/scale regularization + Clean↔Detailed strictness slider today; transient masking & appearance harmonization _(planned)_ |
-| **Auto-tuning** ✅ | Hardware profiling (GPU/VRAM/CUDA/RAM) → auto preset, live ETA |
-| **Export** 🟡 | `.ply` today; `.spz`, `.splat`, PNG-packed _(planned)_ |
-| **Preferences** ✅ | Full settings panel, every value defaulting to Auto, quality presets |
-
-## How it works
-
-```
-Video / Image folder
-        │
-        ▼
-  Frame selection  ──►  blur + duplicate + parallax gating
-        │
-        ▼
-  Camera solving   ──►  instant pose-free init, then global SfM refine
-        │
-        ▼
-  Live training    ──►  Gaussian Splatting streamed to the viewport
-        │                (anti-aliased, bounded densification, few floaters)
-        ▼
-  Clean-up         ──►  floater pruning · moving-object masking · exposure harmonize
-        │
-        ▼
-  Export           ──►  .ply / .spz / .splat / packed
-```
-
-Under the hood InstaSplatter uses a **two-engine** design: a CUDA path for maximum quality/speed on NVIDIA GPUs, and a cross-vendor portable path (Vulkan/WebGPU) so AMD and Intel machines work too. The right one is chosen for you automatically. See **[ROADMAP.md](ROADMAP.md)** for the full technical breakdown and the state-of-the-art methods behind each stage.
-
-## Handling messy, real-world captures
-
-Real captures are never perfect. InstaSplatter is built to tolerate them _(all planned)_:
-
-- **Floating blobs** → bounded (MCMC) densification, visibility-based pruning, depth regularization.
-- **Aliasing / zoom shimmer** → mip-based anti-aliasing.
-- **People, cars, pets walking through** → automatic transient masking + a robust loss that discounts inconsistent pixels.
-- **Auto-exposure / white-balance / lighting changes** → per-image appearance modeling + color harmonization.
-- **Mixed cameras, focal lengths, resolutions** → per-image intrinsics.
-
-A single **Clean ↔ Detailed** slider lets you bias toward a spotless result or maximum fine detail.
+| **Input** | Video (`.mp4`, `.mov`, …) or an image folder (`.jpg`, `.png`, …) |
+| **Smart frame selection** | Adaptive video extraction, blur rejection, even temporal subsampling |
+| **Camera solving** | COLMAP 4.1 SfM (default) or opt-in live incremental tracking with COLMAP fallback |
+| **Live reconstruction** | Brush (wgpu) training streamed into a WebGL2 splat viewport |
+| **Clean-up** | Opacity/scale regularization and a Clean vs. detailed strictness slider |
+| **Auto-tuning** | Hardware profiling → auto preset, live ETA |
+| **Export** | `.ply`, `.splat`, `.spz` splats; optional textured mesh as glb, OBJ, or PLY |
+| **Settings** | Full panel, every value defaulting to Auto, quality presets |
+| **Resume** | Project bundles with checkpoint resume after interruption |
 
 ## Requirements
 
-| | Minimum _(portable path)_ | Recommended _(CUDA path)_ |
+| | Minimum | Recommended |
 |---|---|---|
 | **OS** | Windows 10/11 (64-bit) | Windows 11 (64-bit) |
-| **GPU** | Any Vulkan/DX12-capable AMD/Intel/NVIDIA GPU | NVIDIA RTX (≥ 6 GB VRAM) |
+| **GPU** | Any Vulkan/DX12-capable GPU | Dedicated GPU with 6+ GB VRAM |
 | **RAM** | 16 GB | 32 GB |
-| **Disk** | A few GB free for cache & model weights | SSD recommended |
-
-_A capable GPU is strongly recommended. On low-end hardware, InstaSplatter falls back to a lower-quality preview mode and tells you honestly what to expect._
+| **Disk** | A few GB free for cache | SSD recommended |
 
 ## Installation
 
-> Installers are not published yet — build from source (below). The reconstruction engines (COLMAP + Brush) are downloaded automatically on first run.
+Installers are published on [GitHub Releases](https://github.com/ericcayers-ai/instasplatter/releases). COLMAP and Brush download automatically on first run (~200 MB). Video input needs FFmpeg on `PATH`:
+
+```
+winget install ffmpeg
+```
 
 ### Building from source
 
-Prereqs: **Rust** (stable, MSVC), **Node.js 20+**, **FFmpeg** on PATH (for video input), Windows 10/11.
+Prereqs: **Rust** (stable, MSVC), **Node.js 20+**, **FFmpeg** on PATH, Windows 10/11.
 
 ```bash
 npm install
@@ -109,41 +76,23 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 
 ## Usage
 
-1. **Launch** InstaSplatter — it detects your hardware and picks a preset (shown in the chip at the bottom).
-2. **Drag** a video file or an image folder onto the window (or use the Choose buttons).
+1. **Launch** InstaSplatter. It detects your hardware and picks a preset.
+2. **Drag** a video file or an image folder onto the window.
 3. **Watch** the scene form live. Orbit (drag), pan (right-drag), zoom (wheel) while it trains.
-4. _(Optional)_ Open **Preferences** for presets (Draft / Eco / Balanced / High / Max) or any individual setting — everything defaults to Auto.
-5. **Export .ply** when it completes — opens in SuperSplat, Blender (w/ addon), and any 3DGS viewer.
-
-That's it. No settings required.
+4. _(Optional)_ Open **Settings** for presets or any individual setting.
+5. **Export** a splat (PLY, Splat, or SPZ) or an optional mesh when complete.
 
 ## Roadmap
 
-The full phased plan — architecture, pipeline stages, state-of-the-art methods, milestones, and open decisions — is in **[ROADMAP.md](ROADMAP.md)**.
-
-**Milestones at a glance:**
-- **Phase 0** — App skeleton, hardware profiler, drag-and-drop
-- **Phase 1** — MVP: video → live splat → `.ply` export (NVIDIA)
-- **Phase 2** — Clean results: floater/anti-alias/transient handling
-- **Phase 3** — Instant preview + portable (AMD/Intel) engine
-- **Phase 4** — In-the-wild robustness (appearance/exposure)
-- **Phase 5** — Polish, full Preferences, installer & release
-- **Phase 6** _(stretch)_ — Live webcam capture, editing, mesh export
-
-## Built with
-
-Standing on the shoulders of the open Gaussian-Splatting ecosystem — including projects and research such as **gsplat**, **Brush**, **COLMAP/GLOMAP**, feed-forward geometry models, mip-based anti-aliasing, MCMC densification, and modern transient/appearance handling. Full credits and references are in **[ROADMAP.md](ROADMAP.md)**. Component licenses are being audited to ensure a redistributable build.
-
-## Contributing
-
-The project is in early development. Issues, ideas, and capture samples that break the pipeline are welcome — hard real-world cases make the clean-up better.
+- **[ROADMAP-V2.md](ROADMAP-V2.md)** — V2 phases 1–5 (current)
+- **[ROADMAP.md](ROADMAP.md)** — Long-range product plan
 
 ## License
 
-To be determined. InstaSplatter deliberately favors permissively licensed (Apache/MIT) components so the final app can be freely distributed; see the licensing notes in **[ROADMAP.md](ROADMAP.md)**.
+To be determined. InstaSplatter favors permissively licensed (Apache/MIT) components. See licensing notes in the roadmaps.
 
 ---
 
 <div align="center">
-<sub>InstaSplatter — from capture to splat, instantly.</sub>
+<sub>InstaSplatter — from capture to splat.</sub>
 </div>

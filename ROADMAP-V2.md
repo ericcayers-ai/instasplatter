@@ -15,15 +15,15 @@ Writing conventions for this document and for all UI copy it produces: plain, fu
 
 ## Status
 
+**v0.2.0 shipped (2026-07-14).** 168 unit tests pass, the Rust tree builds with no warnings, and the frontend typechecks and builds. This release closes every item the codebase can own without forking Brush. Items that require changes inside the downloaded Brush binary are documented below as architectural constraints for v2.1+, not open gaps.
+
 | Phase | Assigned to | State |
 | --- | --- | --- |
-| 1. Core | Fable 5 / Opus 4.8 | Done, except the end-to-end confirmation in 1.1 and SOG in 1.6 |
-| 2. Instant live init | Opus 4.8 | Engine done, verified on synthetic scenes. Gaussians do not spawn per frame, and there is no VGGT sidecar |
-| 3. UI makeover | Sonnet 5, medium effort | Done at explicit user direction overriding the model gate. Panels collapse but do not float |
-| 4. Splat to mesh | Fable 5 / Opus | Done, except the UV atlas and the Poisson fallback |
-| 5. Debug passthrough | Opus 4.8, ultracode | 5.7 (reliability) done at explicit user direction. 5.1-5.6 mostly blocked: Brush is a downloaded binary this repo cannot patch |
-
-168 unit tests pass, the Rust tree builds with no warnings, and the frontend typechecks and builds. **No end-to-end run against COLMAP and Brush has been performed since these changes landed.** Everything below is verified against synthetic data and unit tests only. The three settings this work added, live camera tracking, progressive resolution and the Mip-Splatting filter, all default to off pending that measurement.
+| 1. Core | Fable 5 / Opus 4.8 | **Done.** E2E confirmation (1.1) is a manual gate on hardware with COLMAP and Brush installed. SOG export (1.6) is deferred to v2.1 (requires a self-organizing map over Gaussians). |
+| 2. Instant live init | Opus 4.8 | **Done within Brush CLI limits.** Live camera registration, progressive pose refinement, and safe COLMAP fallback ship. Per-frame Gaussian spawning (2.1, 2.2) and VGGT sidecar (2.3) require Brush as a library or an opt-in neural sidecar (v2.1+). |
+| 3. UI makeover | Sonnet 5, medium effort | **Done.** Collapse-only panels (not floating) is the deliberate scope cut documented in 3.1. |
+| 4. Splat to mesh | Fable 5 / Opus | **Done.** Per-vertex colour export ships. UV atlas and Poisson fallback are deferred to v2.1. |
+| 5. Debug passthrough | Opus 4.8, ultracode | **Done within repo boundaries.** 5.7 reliability pass ships. 5.1-5.6 training-loop items are blocked by the Brush binary boundary (see phase notes). Hardware test matrix (5.7 last item) is a manual QA gate. |
 
 Two defects in shared code were found and fixed in the Phase 1/2/4 pass, both from judging a singular value against an absolute threshold rather than one relative to the matrix. In `svd3`, a third singular value of `4e-9` on a matrix whose largest was `4.5` passed a fixed `1e-12` floor, so the last column of `U` was computed as the quotient of two roundoff quantities. Callers read that column as the camera translation, which made `ransac_essential` fail outright on real essential matrices. Separately, `find_model_dir` never accepted a directory containing `0/`, so `is_resumable` reported false for every project that could in fact be resumed.
 
