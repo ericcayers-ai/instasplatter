@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [ROADMAP-V2.md](https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP-V2.md) and [ROADMAP.md](https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP.md) before requesting large features.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What user problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like InstaSplatter to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, existing settings, or external tools you already tried.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - UI / UX
+        - Reconstruction quality (SfM / dense init / training)
+        - Performance / hardware presets
+        - Export / formats
+        - Engines / sidecars
+        - Docs / packaging
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: license
+    attributes:
+      label: License / dependency notes
+      options:
+        - label: Any new dependency or paper recipe I have in mind is Apache/MIT/BSD-friendly (or I am asking as research-only)
+          required: false
+        - label: I searched existing issues and the roadmap for overlap
+          required: true

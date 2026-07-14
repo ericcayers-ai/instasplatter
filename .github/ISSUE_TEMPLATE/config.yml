@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/ericcayers-ai/instasplatter/blob/main/CONTRIBUTING.md
+    about: Build setup, PR process, and testing expectations
+  - name: Roadmap (V2)
+    url: https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP-V2.md
+    about: Current phased plan — check before requesting large features
+  - name: Research / license stack
+    url: https://github.com/ericcayers-ai/instasplatter/blob/main/docs/RESEARCH-STACK.md
+    about: What we can integrate by default vs research-only / rejected licenses

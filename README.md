@@ -9,7 +9,9 @@
 ![Status](https://img.shields.io/badge/status-v0.3.0-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
-![License](https://img.shields.io/badge/license-TBD-lightgrey)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue)
+[![Contributing](https://img.shields.io/badge/contributing-guide-informational)](CONTRIBUTING.md)
+[![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-blueviolet)](CODE_OF_CONDUCT.md)
 
 </div>
 
@@ -92,9 +94,13 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 - **[ROADMAP-V2.md](ROADMAP-V2.md)** — V2 phases 1–5 (current)
 - **[ROADMAP.md](ROADMAP.md)** — Long-range product plan
 
+## Contributing
+
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for build setup, testing, and PR expectations. By participating, you agree to follow the **[Code of Conduct](CODE_OF_CONDUCT.md)**.
+
 ## License
 
-To be determined. InstaSplatter favors permissively licensed (Apache/MIT) components. See licensing notes in the roadmaps.
+InstaSplatter is licensed under the **[Apache License 2.0](LICENSE)** (Copyright 2026 Eric Ayers). The project prefers Apache/MIT redistributable components for default product paths; see licensing notes in the roadmaps and [docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md).
 
 ---
 
