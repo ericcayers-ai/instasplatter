@@ -1,10 +1,15 @@
-//! Phase 4: splat to mesh.
+//! Phase 4: splat to mesh (v0.3 quality overhaul).
 //!
 //! The trained splat already carries per-pixel depth, so the reliable route to
 //! a mesh is the standard one and needs no new runtime: render depth and
 //! normals from the solved camera poses, fuse them into a truncated signed
 //! distance volume, and extract the zero level set with marching cubes. That
-//! is the 2DGS recipe, and every step of it runs natively in Rust.
+//! is the 2DGS / DN-Splatter recipe, and every step of it runs natively in Rust.
+//!
+//! v0.3 raises default resolution, adds Laplacian smoothing, drops tiny
+//! connected components, and falls back to an oriented-point TSDF rebuild when
+//! the primary fusion is too sparse (AGS-Mesh / DN-Splatter inspired; no NC
+//! code is vendored).
 //!
 //! Mesh extraction is an action a user takes after a reconstruction finishes.
 //! It is never part of the pipeline.
@@ -15,6 +20,7 @@ pub mod tsdf;
 
 use crate::colmap::Model;
 use crate::splat::SplatCloud;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 /// How finely to mesh, and how much of the scene to keep.
@@ -29,15 +35,51 @@ pub struct MeshOptions {
     pub bounds_quantile: f32,
     /// Colour the mesh from the source images.
     pub textured: bool,
+    /// Laplacian smoothing passes after extraction (0 = off).
+    pub smooth_passes: u32,
+    /// Drop connected components smaller than this fraction of the largest.
+    pub min_component_fraction: f32,
+    /// Rebuild via oriented depth samples if the first TSDF is too thin.
+    pub poisson_fallback: bool,
 }
 
 impl Default for MeshOptions {
     fn default() -> MeshOptions {
+        // v0.3 High quality defaults, inspired by 2DGS / AGS-Mesh settings.
         MeshOptions {
-            resolution: 384,
-            render_dim: 640,
-            bounds_quantile: 0.97,
+            resolution: 640,
+            render_dim: 960,
+            bounds_quantile: 0.98,
             textured: true,
+            smooth_passes: 2,
+            min_component_fraction: 0.02,
+            poisson_fallback: true,
+        }
+    }
+}
+
+impl MeshOptions {
+    pub fn draft() -> MeshOptions {
+        MeshOptions {
+            resolution: 256,
+            render_dim: 512,
+            bounds_quantile: 0.95,
+            textured: true,
+            smooth_passes: 0,
+            min_component_fraction: 0.05,
+            poisson_fallback: false,
+        }
+    }
+
+    pub fn max() -> MeshOptions {
+        MeshOptions {
+            resolution: 896,
+            render_dim: 1280,
+            bounds_quantile: 0.985,
+            textured: true,
+            smooth_passes: 3,
+            min_component_fraction: 0.01,
+            poisson_fallback: true,
         }
     }
 }
@@ -70,9 +112,10 @@ pub fn extract(
     let mut volume = tsdf::Tsdf::new(min, max, voxel)?;
 
     let total = model.images.len();
+    let mut depth_cache: Vec<(usize, raster::DepthMap)> = Vec::new();
     for (i, image) in model.images.iter().enumerate() {
         progress(
-            i as f32 / total as f32 * 0.9,
+            i as f32 / total as f32 * 0.75,
             &format!("Rendering depth from view {} of {total}", i + 1),
         )?;
 
@@ -102,6 +145,9 @@ pub fn extract(
             _ => None,
         };
         volume.integrate(&depth, image, colour.as_ref());
+        if opts.poisson_fallback {
+            depth_cache.push((i, depth));
+        }
     }
 
     if volume.observed() == 0 {
@@ -112,17 +158,68 @@ pub fn extract(
         );
     }
 
-    progress(0.93, "Extracting the surface")?;
+    progress(0.8, "Extracting the surface")?;
     let field = volume.into_field();
     let mut mesh = tsdf::marching_cubes(&field, 0.0);
+
+    if opts.poisson_fallback && (mesh.is_empty() || mesh.triangle_count() < 500) {
+        progress(0.85, "TSDF sparse; oriented-point rebuild")?;
+        if let Ok(alt) = poisson_style_fallback(model, &depth_cache, min, max, voxel, opts) {
+            if alt.triangle_count() > mesh.triangle_count() {
+                mesh = alt;
+            }
+        }
+    }
+
     if mesh.is_empty() {
         return Err(
             "The fused depth contained no surface. The splat may be too transparent or too sparse."
                 .into(),
         );
     }
-    progress(0.98, "Cleaning up the mesh")?;
+    progress(0.93, "Cleaning up the mesh")?;
     mesh.drop_unused_vertices();
+    if opts.min_component_fraction > 0.0 {
+        mesh.keep_large_components(opts.min_component_fraction);
+    }
+    for _ in 0..opts.smooth_passes {
+        mesh.laplacian_smooth(0.5);
+    }
+    mesh.recompute_normals();
+    Ok(mesh)
+}
+
+/// DN-Splatter / AGS-Mesh inspired: re-fuse subsampled confident depth into a
+/// slightly denser volume when the primary mesh is too thin.
+fn poisson_style_fallback(
+    model: &Model,
+    depths: &[(usize, raster::DepthMap)],
+    min: [f32; 3],
+    max: [f32; 3],
+    voxel: f32,
+    opts: MeshOptions,
+) -> Result<Mesh, String> {
+    let mut volume = tsdf::Tsdf::new(min, max, (voxel * 0.85).max(1e-4))?;
+    for &(idx, ref depth) in depths {
+        let image = &model.images[idx];
+        let stride = ((depth.width * depth.height) / 500_000).max(1);
+        let mut sparse = depth.clone();
+        for (i, d) in sparse.depth.iter_mut().enumerate() {
+            if i % stride != 0 {
+                *d = 0.0;
+            }
+        }
+        volume.integrate(&sparse, image, None);
+    }
+    if volume.observed() == 0 {
+        return Err("fallback empty".into());
+    }
+    let field = volume.into_field();
+    let mut mesh = tsdf::marching_cubes(&field, 0.0);
+    mesh.drop_unused_vertices();
+    if opts.min_component_fraction > 0.0 {
+        mesh.keep_large_components(opts.min_component_fraction);
+    }
     Ok(mesh)
 }
 
@@ -218,6 +315,97 @@ impl Mesh {
             *i = remap[*i as usize];
         }
         self.recompute_normals();
+    }
+
+    /// Keep only components at least `min_frac` of the largest triangle count.
+    pub fn keep_large_components(&mut self, min_frac: f32) {
+        let n_tri = self.triangle_count();
+        if n_tri == 0 {
+            return;
+        }
+        let mut adj: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (ti, t) in self.indices.chunks_exact(3).enumerate() {
+            for &v in t {
+                adj.entry(v).or_default().push(ti);
+            }
+        }
+        let mut tri_comp = vec![-1i32; n_tri];
+        let mut sizes: Vec<usize> = Vec::new();
+        let mut cid = 0i32;
+        for start in 0..n_tri {
+            if tri_comp[start] >= 0 {
+                continue;
+            }
+            let mut q = VecDeque::new();
+            q.push_back(start);
+            tri_comp[start] = cid;
+            let mut size = 0usize;
+            while let Some(ti) = q.pop_front() {
+                size += 1;
+                let base = ti * 3;
+                for k in 0..3 {
+                    let v = self.indices[base + k];
+                    if let Some(neis) = adj.get(&v) {
+                        for &nj in neis {
+                            if tri_comp[nj] < 0 {
+                                tri_comp[nj] = cid;
+                                q.push_back(nj);
+                            }
+                        }
+                    }
+                }
+            }
+            sizes.push(size);
+            cid += 1;
+        }
+        let max_size = sizes.iter().copied().max().unwrap_or(0);
+        let floor = ((max_size as f32) * min_frac.clamp(0.0, 1.0)).ceil() as usize;
+        let keep: HashSet<i32> = sizes
+            .iter()
+            .enumerate()
+            .filter(|(_, &s)| s >= floor.max(1))
+            .map(|(i, _)| i as i32)
+            .collect();
+        let mut new_idx = Vec::new();
+        for (ti, t) in self.indices.chunks_exact(3).enumerate() {
+            if keep.contains(&tri_comp[ti]) {
+                new_idx.extend_from_slice(t);
+            }
+        }
+        self.indices = new_idx;
+        self.drop_unused_vertices();
+    }
+
+    /// One pass of uniform Laplacian smoothing.
+    pub fn laplacian_smooth(&mut self, lambda: f32) {
+        if self.positions.is_empty() {
+            return;
+        }
+        let mut neigh: Vec<HashSet<u32>> = vec![HashSet::new(); self.positions.len()];
+        for t in self.indices.chunks_exact(3) {
+            for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                neigh[a as usize].insert(b);
+                neigh[b as usize].insert(a);
+            }
+        }
+        let old = self.positions.clone();
+        for i in 0..self.positions.len() {
+            let n = &neigh[i];
+            if n.is_empty() {
+                continue;
+            }
+            let mut avg = [0.0f32; 3];
+            for &j in n {
+                for k in 0..3 {
+                    avg[k] += old[j as usize][k];
+                }
+            }
+            let inv = 1.0 / n.len() as f32;
+            for k in 0..3 {
+                avg[k] *= inv;
+                self.positions[i][k] += lambda * (avg[k] - old[i][k]);
+            }
+        }
     }
 }
 
@@ -366,6 +554,9 @@ mod tests {
             render_dim: 192,
             bounds_quantile: 1.0,
             textured: false,
+            smooth_passes: 0,
+            min_component_fraction: 0.0,
+            poisson_fallback: false,
         };
 
         let mut seen = Vec::new();
@@ -457,7 +648,15 @@ mod tests {
     fn the_extracted_surface_carries_the_splat_colour() {
         let cloud = sphere_shell(2000);
         let model = ring_of_cameras(8, 128);
-        let opts = MeshOptions { resolution: 48, render_dim: 128, bounds_quantile: 1.0, textured: false };
+        let opts = MeshOptions {
+            resolution: 48,
+            render_dim: 128,
+            bounds_quantile: 1.0,
+            textured: false,
+            smooth_passes: 0,
+            min_component_fraction: 0.0,
+            poisson_fallback: false,
+        };
         let mesh = extract(&cloud, &model, None, opts, |_, _| Ok(())).unwrap();
         // Geometry-only fusion leaves colours at the field default, but the
         // buffer must still line up with the vertices or exporters will read

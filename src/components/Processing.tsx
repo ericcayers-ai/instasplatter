@@ -1,5 +1,6 @@
 import { useStore } from "../state/store";
 import Viewport from "./Viewport";
+import BatchQueue from "./BatchQueue";
 
 export default function Processing() {
   const stages = useStore((s) => s.stages);
@@ -8,6 +9,7 @@ export default function Processing() {
   const backHome = useStore((s) => s.backHome);
   const notices = useStore((s) => s.notices);
   const exportDiagnosticsAction = useStore((s) => s.exportDiagnosticsAction);
+  const queueItems = useStore((s) => s.queueItems);
 
   return (
     <div className="relative h-full w-full bg-bg">
@@ -46,6 +48,12 @@ export default function Processing() {
               {n}
             </div>
           ))}
+        </div>
+      )}
+
+      {queueItems.length > 0 && (
+        <div className="absolute bottom-4 right-4 w-80">
+          <BatchQueue />
         </div>
       )}
     </div>

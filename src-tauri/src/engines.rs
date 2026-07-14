@@ -47,7 +47,12 @@ pub fn engines_dir() -> PathBuf {
     app_data_dir().join("engines")
 }
 
+/// Prefer a locally built custom Brush when present (tools/brush-fork output).
 pub fn brush_exe() -> PathBuf {
+    let custom = engines_dir().join("brush-custom").join("brush_app.exe");
+    if custom.exists() {
+        return custom;
+    }
     engines_dir().join("brush").join("brush_app.exe")
 }
 
@@ -87,13 +92,20 @@ pub struct EngineStatus {
     pub colmap: bool,
     pub brush: bool,
     pub ffmpeg: bool,
+    pub depth_anything_v2: bool,
+    pub vggt_commercial: bool,
+    pub vggt_omega: bool,
 }
 
 pub fn status() -> EngineStatus {
+    let sc = crate::pipeline::sidecars::status();
     EngineStatus {
         colmap: colmap_exe().exists(),
         brush: brush_exe().exists(),
         ffmpeg: ffmpeg_available(),
+        depth_anything_v2: sc.depth_anything_v2,
+        vggt_commercial: sc.vggt_commercial,
+        vggt_omega: sc.vggt_omega,
     }
 }
 

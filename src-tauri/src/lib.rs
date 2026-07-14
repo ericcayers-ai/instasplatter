@@ -5,6 +5,7 @@ mod mesh;
 mod pipeline;
 mod profiler;
 mod project;
+mod queue;
 mod settings;
 mod sfm;
 mod splat;
@@ -18,10 +19,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::Manager;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AppState {
-    jobs: Mutex<HashMap<String, Arc<JobHandle>>>,
+    jobs: Arc<Mutex<HashMap<String, Arc<JobHandle>>>>,
 }
 
 static PROFILE: OnceLock<HardwareProfile> = OnceLock::new();
@@ -265,6 +267,61 @@ fn cancel_job(state: tauri::State<'_, AppState>, job_id: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn enqueue_jobs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Err("No inputs to enqueue.".into());
+    }
+    let q = queue::global();
+    let ids = q.enqueue(paths);
+    q.try_start_next(&app, Arc::clone(&state.jobs));
+    queue::emit_now(&app);
+    Ok(ids)
+}
+
+#[tauri::command]
+fn list_queue() -> serde_json::Value {
+    let q = queue::global();
+    serde_json::json!({
+        "items": q.list(),
+        "paused": q.is_paused(),
+    })
+}
+
+#[tauri::command]
+fn pause_queue(app: tauri::AppHandle, paused: bool) {
+    queue::global().set_paused(paused);
+    queue::emit_now(&app);
+}
+
+#[tauri::command]
+fn cancel_queue_item(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) {
+    queue::global().cancel_item(&id, &state.jobs);
+    queue::emit_now(&app);
+}
+
+#[tauri::command]
+fn clear_finished_queue(app: tauri::AppHandle) {
+    queue::global().clear_finished();
+    queue::emit_now(&app);
+}
+
+#[tauri::command]
+fn resume_queue(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    let q = queue::global();
+    q.set_paused(false);
+    q.try_start_next(&app, Arc::clone(&state.jobs));
+    queue::emit_now(&app);
+}
+
+#[tauri::command]
 fn list_projects() -> Vec<ProjectSummary> {
     project::list_projects(&pipeline::jobs_dir())
 }
@@ -291,33 +348,91 @@ fn save_project_orientation(workspace: String, rotation: [f32; 9]) -> Result<(),
     proj.save()
 }
 
-/// Dev/test hook: starts a job on launch. Reads INSTASPLATTER_AUTOSTART, or a
-/// single-shot `autostart.txt` in the app data dir (consumed on read). Both are
-/// ignored unless INSTASPLATTER_DEV is set.
-#[tauri::command]
-fn get_autostart() -> Option<String> {
+/// Consume one-shot developer input paths (single or batch). Ignored unless
+/// `INSTASPLATTER_DEV` is set. Shared by Rust setup and the frontend hook so a
+/// path is never started twice (HMR / double mount).
+fn take_dev_inputs() -> Vec<String> {
     if !dev_mode() {
-        return None;
+        return Vec::new();
     }
-    // Single-shot per app process: frontend reloads (HMR) must not re-trigger.
     static CONSUMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if CONSUMED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return None;
+        return Vec::new();
     }
-    if let Ok(v) = std::env::var("INSTASPLATTER_AUTOSTART") {
+
+    let mut paths = Vec::new();
+
+    // Semi-colon / newline separated list, or a path to a batch file.
+    if let Ok(v) = std::env::var("INSTASPLATTER_BATCH") {
+        let v = v.trim().to_string();
         if !v.is_empty() {
-            return Some(v);
+            let as_file = PathBuf::from(&v);
+            if as_file.is_file() {
+                if let Ok(body) = std::fs::read_to_string(&as_file) {
+                    paths.extend(parse_path_list(&body));
+                }
+            } else {
+                paths.extend(parse_path_list(&v));
+            }
         }
     }
+
+    if let Ok(v) = std::env::var("INSTASPLATTER_AUTOSTART") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            paths.push(v);
+        }
+    }
+
+    let batch_marker = settings::app_data_dir().join("batch.txt");
+    if let Ok(body) = std::fs::read_to_string(&batch_marker) {
+        let _ = std::fs::remove_file(&batch_marker);
+        paths.extend(parse_path_list(&body));
+    }
+
     let marker = settings::app_data_dir().join("autostart.txt");
     if let Ok(v) = std::fs::read_to_string(&marker) {
         let _ = std::fs::remove_file(&marker);
         let v = v.trim().to_string();
         if !v.is_empty() {
-            return Some(v);
+            paths.push(v);
         }
     }
+
+    // De-dupe while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|p| seen.insert(p.clone()));
+    paths
+}
+
+fn parse_path_list(body: &str) -> Vec<String> {
+    let body = body.trim_start_matches('\u{feff}');
+    body.split(|c| c == '\n' || c == '\r' || c == ';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Kept for frontend compatibility. Batch / autostart is started from Rust
+/// `setup` so multi-file smoke does not depend on WebView boot order.
+#[tauri::command]
+fn get_autostart() -> Option<String> {
     None
+}
+
+/// Start enqueued smoke / batch inputs from Rust so runs do not depend on the
+/// WebView finishing boot (agent and CI smoke path).
+fn maybe_start_dev_batch(app: &tauri::AppHandle, state: &AppState) {
+    let paths = take_dev_inputs();
+    if paths.is_empty() {
+        return;
+    }
+    log::info!("dev batch: enqueueing {} input(s)", paths.len());
+    let q = queue::global();
+    let _ids = q.enqueue(paths);
+    q.try_start_next(app, Arc::clone(&state.jobs));
+    queue::emit_now(app);
 }
 
 /// A splat's ground plane, and the rotation that stands the scene upright on
@@ -465,6 +580,7 @@ async fn export_mesh(
     dest_path: String,
     resolution: Option<u32>,
     textured: Option<bool>,
+    quality: Option<String>,
 ) -> Result<usize, String> {
     use tauri::Emitter;
     let ws = PathBuf::from(&workspace);
@@ -478,11 +594,17 @@ async fn export_mesh(
         let cloud = ply::read_ply(Path::new(&splat_path))?;
 
         let images = ws.join("images");
-        let opts = mesh::MeshOptions {
-            resolution: resolution.unwrap_or(384).clamp(64, 1024),
-            textured: textured.unwrap_or(true) && images.is_dir(),
-            ..Default::default()
+        let q = quality.as_deref().unwrap_or("high");
+        let mut opts = match q {
+            "draft" => mesh::MeshOptions::draft(),
+            "max" => mesh::MeshOptions::max(),
+            _ => mesh::MeshOptions::default(),
         };
+        if let Some(r) = resolution {
+            opts.resolution = r.clamp(64, 1024);
+        }
+        opts.textured = textured.unwrap_or(true) && images.is_dir();
+        let opts = opts;
 
         let m = mesh::extract(&cloud, &model, images.is_dir().then_some(images.as_path()), opts, |p, detail| {
             let _ = app.emit(
@@ -539,8 +661,8 @@ fn export_diagnostics(
     out.push_str("## Engines\n");
     let st = engines::status();
     out.push_str(&format!(
-        "colmap: {}, brush: {}, ffmpeg: {}\n\n",
-        st.colmap, st.brush, st.ffmpeg
+        "colmap: {}, brush: {}, ffmpeg: {}, dav2: {}, vggt-commercial: {}, vggt-omega: {}\n\n",
+        st.colmap, st.brush, st.ffmpeg, st.depth_anything_v2, st.vggt_commercial, st.vggt_omega
     ));
 
     out.push_str("## Settings\n");
@@ -584,6 +706,16 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let state = app.state::<AppState>().inner().clone();
+            // Defer one tick so plugins / window are live before GPU jobs start.
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                maybe_start_dev_batch(&handle, &state);
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_hardware_profile,
             get_settings,
@@ -594,6 +726,12 @@ pub fn run() {
             get_autostart,
             start_job,
             cancel_job,
+            enqueue_jobs,
+            list_queue,
+            pause_queue,
+            resume_queue,
+            cancel_queue_item,
+            clear_finished_queue,
             resume_project,
             list_projects,
             delete_project,

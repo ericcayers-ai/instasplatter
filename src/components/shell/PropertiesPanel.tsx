@@ -154,6 +154,7 @@ export default function PropertiesPanel() {
                 refineEvery: null, ssimWeight: null, exportEvery: null,
                 strictness: null, keepIntermediates: null,
                 progressiveResolution: null, mipFilter: null, liveInit: null,
+                denseInit: null, useNeuralInit: null, allowResearchSidecars: null,
                 exportFormat: null,
               })
             }
@@ -241,17 +242,35 @@ export default function PropertiesPanel() {
         </Row>
         <Row
           label="Progressive resolution"
-          hint="Train at reduced resolution first and raise it on a schedule. Faster, at the cost of restarting the optimizer at each step. Off by default until measured end to end."
+          hint="Train at reduced resolution first and raise it on a schedule. On by default."
         >
           <BoolSelect value={settings.progressiveResolution} onChange={(v) => set({ progressiveResolution: v })} />
         </Row>
         <Row
           label="Mip-Splatting filter"
-          hint="Bound each Gaussian to the sampling rate of the cameras that saw it. Reduces aliasing and oversized blobs. Off by default until measured end to end."
+          hint="Bound each Gaussian to the sampling rate of the cameras that saw it. On by default."
         >
           <BoolSelect value={settings.mipFilter} onChange={(v) => set({ mipFilter: v })} />
         </Row>
-        <Row label="Live update every" hint="Steps between viewport refreshes">
+        <Row
+          label="Dense init"
+          hint="Seed training from COLMAP patch-match MVS or an installed neural sidecar. On by default."
+        >
+          <BoolSelect value={settings.denseInit} onChange={(v) => set({ denseInit: v })} />
+        </Row>
+        <Row
+          label="Neural densifiers"
+          hint="Prefer Depth Anything V2 or VGGT-Commercial when installed. With Research sidecars ON, prefer VGGT-Ω."
+        >
+          <BoolSelect value={settings.useNeuralInit} onChange={(v) => set({ useNeuralInit: v })} />
+        </Row>
+        <Row
+          label="Research sidecars"
+          hint="Allow non-commercial VGGT-Ω / VGGT-NC weights. Off by default; licensing risk. Prefer Omega when enabled."
+        >
+          <BoolSelect value={settings.allowResearchSidecars} onChange={(v) => set({ allowResearchSidecars: v })} />
+        </Row>
+        <Row label="Live update every" hint="Steps between Brush checkpoints; the viewport interpolates between them">
           <AutoNumber value={settings.exportEvery} autoValue={resolved?.exportEvery} min={100} max={5000} step={100} onChange={(v) => set({ exportEvery: v })} />
         </Row>
       </Section>

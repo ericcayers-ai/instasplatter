@@ -8,8 +8,10 @@
 
 pub mod brush;
 pub mod colmap;
+pub mod dense;
 pub mod gating;
 pub mod ingest;
+pub mod sidecars;
 
 use crate::project::Project;
 use crate::settings::{app_data_dir, ResolvedSettings};
@@ -231,6 +233,9 @@ pub async fn run_job(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
 
     ctx.stage_started("sfm", "Solving cameras");
     solve_cameras(ctx, &images_dir).await?;
+    ctx.check_cancel()?;
+    // Dense geometry bootstrap: neural sidecar → COLMAP MVS → sparse seed.
+    let _ = dense::densify_after_sfm(ctx, &images_dir).await?;
     ctx.check_cancel()?;
     let sparse = ctx.workspace.join("sparse");
     ctx.update_project(|p| p.sparse_dir = Some(sparse.to_string_lossy().into_owned()));

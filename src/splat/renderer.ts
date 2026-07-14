@@ -193,6 +193,11 @@ export class SplatRenderer {
   private lastFrameTime = 0;
   private fpsAccum = 0;
   private fpsFrames = 0;
+  /** Live checkpoint interpolation: ease toward the newest PLY. */
+  private lerpActive = false;
+  private lerpStart = 0;
+  private lerpDurationMs = 2200;
+  private lerpPending = false;
 
   public camera: CameraState = defaultCamera();
   public autoOrbit = false;
@@ -292,10 +297,15 @@ export class SplatRenderer {
     requestAnimationFrame(loop);
   }
 
-  /** Load (or hot-swap to) a splat .ply from raw bytes. */
-  loadPly(buffer: ArrayBuffer, autoFrame: boolean) {
+  /** Load (or hot-swap to) a splat .ply from raw bytes.
+   *  When `interpolate` is true and the splat count matches the previous
+   *  load, attributes ease across `durationMs` instead of snapping. */
+  loadPly(buffer: ArrayBuffer, autoFrame: boolean, interpolate = true, durationMs = 2200) {
     this.pendingAutoFrame = autoFrame;
-    this.worker.postMessage({ type: "parse", buffer }, [buffer]);
+    this.lerpDurationMs = durationMs;
+    this.worker.postMessage({ type: "parse", buffer, interpolate: interpolate && !autoFrame }, [
+      buffer,
+    ]);
   }
 
   // ---- Model orientation (ROADMAP-V2 1.3) ----
@@ -386,39 +396,57 @@ export class SplatRenderer {
   private sceneCenter: Vec3 = [0, 0, 0];
   private sceneRadius = 0;
 
-  private onWorker(msg: any) {
+  private uploadTex(texdata: Uint32Array, count: number) {
     const gl = this.gl;
+    this.count = count;
+    const rows = Math.max(1, Math.ceil(this.count / 512));
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA32UI,
+      1024,
+      rows,
+      0,
+      gl.RGBA_INTEGER,
+      gl.UNSIGNED_INT,
+      this.padTo(texdata, 1024 * rows * 4),
+    );
+    this.lastSortVP = null;
+    this.onStats?.(this.count);
+  }
+
+  private onWorker(msg: any) {
     if (msg.type === "parsed") {
       const texdata: Uint32Array = msg.texdata;
-      this.count = msg.count;
       this.sceneCenter = msg.sceneCenter;
       this.sceneRadius = msg.sceneRadius;
       this.pivot = msg.sceneCenter;
-
-      // The shader addresses texels as ((idx & 511) << 1, idx >> 9), so the
-      // texture is 1024 texels wide with two adjacent texels per splat.
-      const rows = Math.max(1, Math.ceil(this.count / 512));
-      gl.bindTexture(gl.TEXTURE_2D, this.texture);
-      gl.texImage2D(
-        gl.TEXTURE_2D, 0, gl.RGBA32UI, 1024, rows, 0,
-        gl.RGBA_INTEGER, gl.UNSIGNED_INT,
-        this.padTo(texdata, 1024 * rows * 4),
-      );
+      this.uploadTex(texdata, msg.count);
 
       if (this.pendingAutoFrame && msg.sceneRadius > 0) {
         this.frameScene();
       }
-      this.lastSortVP = null; // force a re-sort against the new data
-      this.onStats?.(this.count);
+      if (msg.canInterpolate) {
+        this.lerpActive = true;
+        this.lerpStart = performance.now();
+        this.lerpPending = false;
+      } else {
+        this.lerpActive = false;
+      }
+    } else if (msg.type === "lerped") {
+      this.lerpPending = false;
+      this.uploadTex(msg.texdata, msg.count);
     } else if (msg.type === "sorted") {
       const idx: Uint32Array = msg.depthIndex;
       this.sortedCount = Math.min(msg.count, this.count);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, idx, gl.DYNAMIC_DRAW);
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.indexBuffer);
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, idx, this.gl.DYNAMIC_DRAW);
       this.sortPending = false;
     } else if (msg.type === "error") {
       console.error("splat worker:", msg.message);
       this.sortPending = false;
+      this.lerpPending = false;
     }
   }
 
@@ -492,6 +520,17 @@ export class SplatRenderer {
       }
     }
     this.lastFrameTime = now;
+
+    // Ease Gaussian attributes between Brush checkpoint exports so the
+    // viewport feels continuous without exporting every few hundred steps.
+    if (this.lerpActive && !this.lerpPending) {
+      const t = Math.min(1, (now - this.lerpStart) / this.lerpDurationMs);
+      // Smoothstep.
+      const s = t * t * (3 - 2 * t);
+      this.worker.postMessage({ type: "lerp", t: s });
+      this.lerpPending = true;
+      if (t >= 1) this.lerpActive = false;
+    }
 
     gl.viewport(0, 0, w, h);
     gl.clearColor(0, 0, 0, 0);

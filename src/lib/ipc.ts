@@ -36,12 +36,18 @@ export interface Settings {
   exportEvery?: number | null;
   strictness?: number | null;
   keepIntermediates?: boolean | null;
-  /** Train at reduced resolution first, then raise it. */
+  /** Train at reduced resolution first, then raise it. Default ON. */
   progressiveResolution?: boolean | null;
-  /** Bound Gaussian size to the sampling rate (Mip-Splatting). */
+  /** Bound Gaussian size to the sampling rate (Mip-Splatting). Default ON. */
   mipFilter?: boolean | null;
   /** Register cameras incrementally instead of a blocking COLMAP pass. */
   liveInit?: boolean | null;
+  /** Dense MVS / neural pointmap seeding before training. Default ON. */
+  denseInit?: boolean | null;
+  /** Use installed DAV2 / VGGT-commercial sidecars when present. Default ON. */
+  useNeuralInit?: boolean | null;
+  /** Allow non-commercial research sidecars. Default OFF. */
+  allowResearchSidecars?: boolean | null;
   exportFormat?: string | null;
 }
 
@@ -63,6 +69,9 @@ export interface ResolvedSettings {
   progressiveResolution: boolean;
   mipFilter: boolean;
   liveInit: boolean;
+  denseInit: boolean;
+  useNeuralInit: boolean;
+  allowResearchSidecars: boolean;
   exportFormat: string;
 }
 
@@ -70,6 +79,9 @@ export interface EngineStatus {
   colmap: boolean;
   brush: boolean;
   ffmpeg: boolean;
+  depthAnythingV2: boolean;
+  vggtCommercial: boolean;
+  vggtOmega: boolean;
 }
 
 /** A camera solved by the live-init engine, ready to draw as a frustum. */
@@ -143,6 +155,23 @@ export interface FormatChoice {
 /** Row-major 3x3. */
 export type Mat3 = number[];
 
+export interface QueueItem {
+  id: string;
+  inputPath: string;
+  displayName: string;
+  state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
+  jobId: string | null;
+  workspace: string | null;
+  error: string | null;
+  progress: number;
+  detail: string;
+}
+
+export interface QueueSnapshot {
+  items: QueueItem[];
+  paused: boolean;
+}
+
 export const api = {
   getHardwareProfile: () => invoke<HardwareProfile>("get_hardware_profile"),
   getSettings: () => invoke<Settings>("get_settings"),
@@ -154,6 +183,12 @@ export const api = {
 
   startJob: (inputPath: string) => invoke<string>("start_job", { inputPath }),
   cancelJob: (jobId: string) => invoke<void>("cancel_job", { jobId }),
+  enqueueJobs: (paths: string[]) => invoke<string[]>("enqueue_jobs", { paths }),
+  listQueue: () => invoke<QueueSnapshot>("list_queue"),
+  pauseQueue: (paused: boolean) => invoke<void>("pause_queue", { paused }),
+  resumeQueue: () => invoke<void>("resume_queue"),
+  cancelQueueItem: (id: string) => invoke<void>("cancel_queue_item", { id }),
+  clearFinishedQueue: () => invoke<void>("clear_finished_queue"),
 
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
   resumeProject: (workspace: string) => invoke<string>("resume_project", { workspace }),
@@ -179,7 +214,7 @@ export const api = {
     workspace: string,
     splatPath: string,
     destPath: string,
-    opts?: { resolution?: number; textured?: boolean },
+    opts?: { resolution?: number; textured?: boolean; quality?: string },
   ) =>
     invoke<number>("export_mesh", {
       workspace,
@@ -187,6 +222,7 @@ export const api = {
       destPath,
       resolution: opts?.resolution ?? null,
       textured: opts?.textured ?? null,
+      quality: opts?.quality ?? null,
     }),
 
   /** Writes hardware, settings, engine and project state plus recent logs. */
@@ -199,4 +235,6 @@ export const api = {
     listen<EngineDownloadEvent>("engine://download", (e) => cb(e.payload)),
   onMeshProgress: (cb: (e: MeshProgressEvent) => void): Promise<UnlistenFn> =>
     listen<MeshProgressEvent>("mesh://progress", (e) => cb(e.payload)),
+  onQueueSnapshot: (cb: (e: QueueSnapshot) => void): Promise<UnlistenFn> =>
+    listen<QueueSnapshot>("queue://snapshot", (e) => cb(e.payload)),
 };

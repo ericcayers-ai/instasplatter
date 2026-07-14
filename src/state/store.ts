@@ -6,6 +6,7 @@ import type {
   HardwareProfile,
   JobEvent,
   ProjectSummary,
+  QueueItem,
   ResolvedSettings,
   Settings,
   SplatFormat,
@@ -80,6 +81,8 @@ interface AppStore {
   logConsoleOpen: boolean;
 
   recentProjects: ProjectSummary[];
+  queueItems: QueueItem[];
+  queuePaused: boolean;
 
   jobId: string | null;
   inputPath: string | null;
@@ -117,6 +120,11 @@ interface AppStore {
   resumeProject: (workspace: string) => Promise<void>;
   deleteProjectEntry: (workspace: string) => Promise<void>;
   startJob: (path: string) => Promise<void>;
+  enqueueJobs: (paths: string[]) => Promise<void>;
+  pauseQueue: () => Promise<void>;
+  resumeQueue: () => Promise<void>;
+  cancelQueueItem: (id: string) => Promise<void>;
+  clearFinishedQueue: () => Promise<void>;
   cancelJob: () => Promise<void>;
   backHome: () => void;
   handleJobEvent: (e: JobEvent) => void;
@@ -154,6 +162,8 @@ export const useStore = create<AppStore>((set, get) => ({
   logConsoleOpen: readBool(LOG_CONSOLE_KEY, false),
 
   recentProjects: [],
+  queueItems: [],
+  queuePaused: false,
 
   jobId: null,
   inputPath: null,
@@ -206,6 +216,27 @@ export const useStore = create<AppStore>((set, get) => ({
     // affect it are not tracked live; a plain re-read on init is enough here.
     set({ engineStatus });
     await api.onJobEvent((e) => get().handleJobEvent(e));
+    await api.onQueueSnapshot((snap) => {
+      set({ queueItems: snap.items, queuePaused: snap.paused });
+      const running = snap.items.find((i) => i.state === "running");
+      if (running?.jobId && get().jobId !== running.jobId && get().screen === "home") {
+        // Promote the active batch item into the processing screen.
+        set({
+          screen: "processing",
+          jobId: running.jobId,
+          inputPath: running.inputPath,
+          workspace: running.workspace,
+          stages: freshStages(),
+          logs: [],
+          notices: [],
+          cameras: [],
+          jobStartedAt: Date.now(),
+          jobSettingsSnapshot: get().resolved,
+        });
+      }
+    });
+    const snap = await api.listQueue().catch(() => null);
+    if (snap) set({ queueItems: snap.items, queuePaused: snap.paused });
     // Dev/test hook: start a job immediately if requested via env var.
     const auto = await api.getAutostart().catch(() => null);
     if (auto && !get().jobId) void get().startJob(auto);
@@ -329,6 +360,40 @@ export const useStore = create<AppStore>((set, get) => ({
     }
   },
 
+  enqueueJobs: async (paths) => {
+    if (paths.length === 0) return;
+    try {
+      const st = await api.getEngineStatus();
+      if (!st.colmap || !st.brush) {
+        await api.installEngines();
+        set({ engineStatus: await api.getEngineStatus() });
+      }
+      await api.enqueueJobs(paths);
+      const snap = await api.listQueue();
+      set({ queueItems: snap.items, queuePaused: snap.paused });
+    } catch (err) {
+      set({ jobError: String(err), screen: "processing" });
+    }
+  },
+
+  pauseQueue: async () => {
+    await api.pauseQueue(true);
+    set({ queuePaused: true });
+  },
+
+  resumeQueue: async () => {
+    await api.resumeQueue();
+    set({ queuePaused: false });
+  },
+
+  cancelQueueItem: async (id) => {
+    await api.cancelQueueItem(id);
+  },
+
+  clearFinishedQueue: async () => {
+    await api.clearFinishedQueue();
+  },
+
   cancelJob: async () => {
     const { jobId } = get();
     if (jobId) await api.cancelJob(jobId);
@@ -367,6 +432,11 @@ export const useStore = create<AppStore>((set, get) => ({
         set((s) => ({
           stages: s.stages.map((st) =>
             st.id === e.stage ? { ...st, progress: e.progress, detail: e.detail, state: "active" } : st,
+          ),
+          queueItems: s.queueItems.map((q) =>
+            q.jobId === e.jobId
+              ? { ...q, progress: e.progress, detail: e.detail }
+              : q,
           ),
         }));
         break;

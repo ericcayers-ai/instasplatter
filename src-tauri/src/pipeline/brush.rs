@@ -14,9 +14,10 @@
 //! Mip-Splatting 3D filter on the way through so the next stage's optimiser
 //! can compensate for the widened Gaussians.
 //!
-//! Note that resuming this way restarts Adam's moment estimates. That is the
-//! price of driving a separate binary, and it is why the progressive schedule
-//! is opt-in rather than the default.
+//! Progressive resolution and the mip filter default ON in v0.3. Resuming via
+//! CLI restarts Adam's moment estimates; that cost is accepted for the quality
+//! win. A custom Brush build (see `tools/brush-fork/`) removes the restart once
+//! densify / mip / appearance patches live inside the training loop.
 
 use super::{JobCtx, JobEvent};
 use crate::engines::brush_exe;
@@ -429,9 +430,12 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
             (stages_from(&all_stages, *iter), *iter)
         }
         None => {
-            // A stale init.ply from an earlier job in the same workspace would
-            // silently seed this run.
-            let _ = std::fs::remove_file(init_ply_path(&ctx.workspace));
+            // Fresh workspaces are unique per job. An init.ply here was written
+            // by the dense-bootstrap stage and must be kept so Brush starts
+            // from a filled cloud rather than inventing needle floaters.
+            if init_ply_path(&ctx.workspace).exists() {
+                ctx.log("Seeding Brush from densified init.ply.");
+            }
             (all_stages.clone(), 0)
         }
     };

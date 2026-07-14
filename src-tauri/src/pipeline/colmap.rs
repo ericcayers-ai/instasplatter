@@ -10,6 +10,15 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// Spawn a COLMAP subcommand, stream stderr/stdout lines to the UI log and
 /// a progress callback, honor cancellation.
+pub async fn run_colmap_pub(
+    ctx: &JobCtx,
+    stage_progress: (f32, f32),
+    args: &[&str],
+    total_hint: usize,
+) -> Result<(), String> {
+    run_colmap(ctx, stage_progress, args, total_hint).await
+}
+
 async fn run_colmap(
     ctx: &JobCtx,
     stage_progress: (f32, f32),
@@ -107,6 +116,8 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
             "OPENCV",
             "--FeatureExtraction.use_gpu",
             gpu,
+            "--SiftExtraction.max_num_features",
+            "8192",
         ],
         n_images,
     )
@@ -117,7 +128,9 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     let sequential = match ctx.settings.matcher.as_str() {
         "sequential" => true,
         "exhaustive" => false,
-        _ => n_images > 100, // auto
+        // Prefer sequential for video-length sets, but keep exhaustive for
+        // small folders where loops and revisits are common.
+        _ => n_images > 80,
     };
     ctx.stage_progress("sfm", 0.35, "Matching features…");
     if sequential {
@@ -129,7 +142,9 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
                 "--database_path",
                 &db_s,
                 "--SequentialMatching.overlap",
-                "15",
+                "20",
+                "--SequentialMatching.loop_detection",
+                "1",
                 "--FeatureMatching.use_gpu",
                 gpu,
             ],
@@ -165,6 +180,16 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
             &img_s,
             "--output_path",
             &sparse_s,
+            "--Mapper.min_num_matches",
+            "12",
+            "--Mapper.init_min_num_inliers",
+            "80",
+            "--Mapper.abs_pose_min_num_inliers",
+            "20",
+            "--Mapper.filter_max_reproj_error",
+            "3.5",
+            "--Mapper.ba_global_max_num_iterations",
+            "40",
         ],
         n_images,
     )

@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.2.0-green)
+![Status](https://img.shields.io/badge/status-v0.3.0-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-TBD-lightgrey)
@@ -15,7 +15,7 @@
 
 ---
 
-> **v0.2.0** ships the V2 roadmap phases the codebase can own: professional reconstruction UI, live camera tracking (opt-in), splat and mesh export, checkpoint resume, and exhaustive error handling. Phase status and deferred items are in **[ROADMAP-V2.md](ROADMAP-V2.md)**. The original long-range plan is in **[ROADMAP.md](ROADMAP.md)**.
+> **v0.3.0** is the quality overhaul: dense MVS / neural init (ON by default), progressive resolution and Mip-Splatting ON, live splat interpolation between Brush checkpoints, batch queue for multiple videos/folders, stronger floater suppression, and a custom Brush build path for training-loop patches. Research and license notes live in **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**. Phase history is in **[ROADMAP-V2.md](ROADMAP-V2.md)**.
 
 ---
 
@@ -23,12 +23,14 @@
 
 InstaSplatter turns ordinary captures into photorealistic **3D Gaussian splats** with no command line and no config files.
 
-Drop an `.mp4` or a folder of images onto the window and the scene materializes in the viewport while it trains. Resolution, frame count, iteration budget, and quality trade-offs are **automatically tuned to your PC**. Power users can open Settings and override every knob; everyone else never has to.
+Drop an `.mp4`, a folder of images, or several at once onto the window and the scene materializes in the viewport while it trains. Resolution, frame count, iteration budget, and quality trade-offs are **automatically tuned to your PC**. Power users can open Settings and override every knob; everyone else never has to.
 
 ## Why it is different
 
-- **Live, not batch.** You watch the splat form and refine in real time.
-- **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python runtime required.
+- **Live, not batch.** You watch the splat form and refine in real time, with smooth interpolation between training checkpoints.
+- **Dense by default.** COLMAP patch-match MVS (and optional Depth Anything V2 / VGGT-Commercial sidecars) seeds training so needle/floater clouds are far less common.
+- **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python runtime required for the base install.
+- **Batch queue.** Enqueue multiple videos or folders; GPU training stays serialized.
 - **Clean output controls.** A Clean vs. detailed slider maps to floater-suppression losses in the trainer.
 - **Truly drag-and-drop.** Zero required configuration to get a result.
 - **Local and private.** All processing runs on your machine.
@@ -37,15 +39,18 @@ Drop an `.mp4` or a folder of images onto the window and the scene materializes 
 
 | | |
 |---|---|
-| **Input** | Video (`.mp4`, `.mov`, …) or an image folder (`.jpg`, `.png`, …) |
-| **Smart frame selection** | Adaptive video extraction, blur rejection, even temporal subsampling |
+| **Input** | Video (`.mp4`, `.mov`, …), an image folder, or a batch of either |
+| **Smart frame selection** | Adaptive video extraction, mild blur rejection, even temporal subsampling |
 | **Camera solving** | COLMAP 4.1 SfM (default) or opt-in live incremental tracking with COLMAP fallback |
-| **Live reconstruction** | Brush (wgpu) training streamed into a WebGL2 splat viewport |
+| **Dense init** | Patch-match MVS → `init.ply`; optional DAV2 / VGGT-Commercial sidecars |
+| **Live reconstruction** | Brush (wgpu) training streamed into a WebGL2 splat viewport with attribute lerp |
+| **Quality defaults** | Progressive resolution, Mip-Splatting filter, raised densify budget |
 | **Clean-up** | Opacity/scale regularization and a Clean vs. detailed strictness slider |
 | **Auto-tuning** | Hardware profiling → auto preset, live ETA |
 | **Export** | `.ply`, `.splat`, `.spz` splats; optional textured mesh as glb, OBJ, or PLY |
 | **Settings** | Full panel, every value defaulting to Auto, quality presets |
 | **Resume** | Project bundles with checkpoint resume after interruption |
+| **Batch** | Queue, pause, cancel, and per-item progress in the UI |
 
 ## Requirements
 

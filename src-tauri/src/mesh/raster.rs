@@ -32,7 +32,8 @@ const MAX_RADIUS_PX: f32 = 96.0;
 const DILATION: f32 = 0.3;
 
 /// Opacity a pixel must accumulate before its depth is believed.
-const MIN_ALPHA: f32 = 0.5;
+/// Raised in v0.3 so TSDF fusion gets cleaner walls (DN-Splatter style confidence).
+const MIN_ALPHA: f32 = 0.62;
 
 /// Depth and normals rendered from one camera.
 #[derive(Debug, Clone)]
@@ -69,7 +70,7 @@ pub struct RenderOptions {
 
 impl Default for RenderOptions {
     fn default() -> RenderOptions {
-        RenderOptions { max_dim: 640 }
+        RenderOptions { max_dim: 960 }
     }
 }
 
