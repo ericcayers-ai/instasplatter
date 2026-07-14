@@ -155,6 +155,7 @@ export default function PropertiesPanel() {
                 strictness: null, keepIntermediates: null,
                 progressiveResolution: null, mipFilter: null, liveInit: null,
                 denseInit: null, useNeuralInit: null, allowResearchSidecars: null,
+                postPolish: null,
                 exportFormat: null,
               })
             }
@@ -254,21 +255,27 @@ export default function PropertiesPanel() {
         </Row>
         <Row
           label="Dense init"
-          hint="Seed training from COLMAP patch-match MVS or an installed neural sidecar. On by default."
+          hint="Compose COLMAP MVS with any installed neural densifier and the sparse cloud. On by default."
         >
           <BoolSelect value={settings.denseInit} onChange={(v) => set({ denseInit: v })} />
         </Row>
         <Row
           label="Neural densifiers"
-          hint="Prefer Depth Anything V2 or VGGT-Commercial when installed. With Research sidecars ON, prefer VGGT-Ω."
+          hint="AND with MVS when present (DAV2 / VGGT-Commercial). Research ON prefers VGGT-Ω."
         >
           <BoolSelect value={settings.useNeuralInit} onChange={(v) => set({ useNeuralInit: v })} />
         </Row>
         <Row
           label="Research sidecars"
-          hint="Allow non-commercial VGGT-Ω / VGGT-NC weights. Off by default; licensing risk. Prefer Omega when enabled."
+          hint="Allow non-commercial VGGT-Ω / Difix. Off by default; licensing risk."
         >
           <BoolSelect value={settings.allowResearchSidecars} onChange={(v) => set({ allowResearchSidecars: v })} />
+        </Row>
+        <Row
+          label="Post polish"
+          hint="Run NVIDIA Fixer after training when installed (commercial Open Model). Difix only with Research ON."
+        >
+          <BoolSelect value={settings.postPolish} onChange={(v) => set({ postPolish: v })} />
         </Row>
         <Row label="Live update every" hint="Steps between Brush checkpoints; the viewport interpolates between them">
           <AutoNumber value={settings.exportEvery} autoValue={resolved?.exportEvery} min={100} max={5000} step={100} onChange={(v) => set({ exportEvery: v })} />

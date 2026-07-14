@@ -661,8 +661,15 @@ fn export_diagnostics(
     out.push_str("## Engines\n");
     let st = engines::status();
     out.push_str(&format!(
-        "colmap: {}, brush: {}, ffmpeg: {}, dav2: {}, vggt-commercial: {}, vggt-omega: {}\n\n",
-        st.colmap, st.brush, st.ffmpeg, st.depth_anything_v2, st.vggt_commercial, st.vggt_omega
+        "colmap: {}, brush: {}{}, ffmpeg: {}, dav2: {}, vggt-commercial: {}, vggt-omega: {}, fixer: {}\n\n",
+        st.colmap,
+        st.brush,
+        if st.brush_custom { " (custom)" } else { "" },
+        st.ffmpeg,
+        st.depth_anything_v2,
+        st.vggt_commercial,
+        st.vggt_omega,
+        st.fixer
     ));
 
     out.push_str("## Settings\n");

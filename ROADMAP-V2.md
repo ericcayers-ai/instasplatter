@@ -15,6 +15,8 @@ Writing conventions for this document and for all UI copy it produces: plain, fu
 
 ## Status
 
+**v0.3.1 (2026-07-14).** Research sweep proof in `docs/PAPER-SWEEP-2024+.md`. Dense init now **composes** neural ∧ COLMAP MVS ∧ sparse (no longer exclusive). NVIDIA Fixer polish hook (commercial Open Model) default ON when installed. Mesh defaults denser. Custom Brush auto-detect surfaced in engine status. Full paper and license table: [docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md).
+
 **v0.3.0 (2026-07-14).** Quality overhaul: dense MVS / neural init ON by default, progressive resolution and Mip-Splatting ON, live splat interpolation, batch queue (Rust + UI), BOM-safe settings, floater losses tuned after over-prune, mesh extraction quality pass (2DGS/DN-Splatter-inspired TSDF), VGGT-Ω research sidecar path (CC BY-NC; commercial path remains VGGT-1B-Commercial). Training-loop SOTA still needs a custom Brush build under `engines/brush-custom/` (see `tools/brush-fork/`). Full paper and license table: [docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md).
 
 | Phase | Assigned to | State |

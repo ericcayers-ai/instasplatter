@@ -45,14 +45,14 @@ pub struct MeshOptions {
 
 impl Default for MeshOptions {
     fn default() -> MeshOptions {
-        // v0.3 High quality defaults, inspired by 2DGS / AGS-Mesh settings.
+        // v0.3.1 High quality defaults, inspired by 2DGS / AGS-Mesh settings.
         MeshOptions {
-            resolution: 640,
-            render_dim: 960,
+            resolution: 768,
+            render_dim: 1024,
             bounds_quantile: 0.98,
             textured: true,
-            smooth_passes: 2,
-            min_component_fraction: 0.02,
+            smooth_passes: 3,
+            min_component_fraction: 0.015,
             poisson_fallback: true,
         }
     }
@@ -618,7 +618,9 @@ mod tests {
     fn extraction_can_be_cancelled_from_the_progress_callback() {
         let cloud = sphere_shell(200);
         let model = ring_of_cameras(4, 64);
-        let err = extract(&cloud, &model, None, MeshOptions::default(), |_, _| {
+        // Use a small volume so the run reaches the progress callback (High
+        // defaults allocate too large a grid for this synthetic fixture).
+        let err = extract(&cloud, &model, None, MeshOptions::draft(), |_, _| {
             Err("__cancelled__".to_string())
         })
         .unwrap_err();
@@ -629,8 +631,8 @@ mod tests {
     fn extraction_refuses_an_empty_splat_or_a_scene_with_no_cameras() {
         let cloud = sphere_shell(100);
         let model = ring_of_cameras(4, 64);
-        assert!(extract(&SplatCloud::default(), &model, None, MeshOptions::default(), |_, _| Ok(())).is_err());
-        assert!(extract(&cloud, &Model::default(), None, MeshOptions::default(), |_, _| Ok(())).is_err());
+        assert!(extract(&SplatCloud::default(), &model, None, MeshOptions::draft(), |_, _| Ok(())).is_err());
+        assert!(extract(&cloud, &Model::default(), None, MeshOptions::draft(), |_, _| Ok(())).is_err());
     }
 
     #[test]
@@ -640,7 +642,7 @@ mod tests {
         let mut cloud = sphere_shell(500);
         cloud.opacity_logit.iter_mut().for_each(|o| *o = -6.0);
         let model = ring_of_cameras(4, 64);
-        let err = extract(&cloud, &model, None, MeshOptions::default(), |_, _| Ok(())).unwrap_err();
+        let err = extract(&cloud, &model, None, MeshOptions::draft(), |_, _| Ok(())).unwrap_err();
         assert!(err.contains("No camera saw enough"), "{err}");
     }
 

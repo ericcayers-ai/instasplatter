@@ -95,6 +95,9 @@ export default function DropZone() {
           {profile.gpu_name}, {vram} GB, auto preset:{" "}
           <b className="text-ink">{resolved?.preset ?? profile.auto_preset}</b>
           {resolved?.denseInit !== false && <span className="text-accent"> · dense init</span>}
+          {resolved?.progressiveResolution !== false && <span className="text-accent"> · progressive</span>}
+          {resolved?.mipFilter !== false && <span className="text-accent"> · mip</span>}
+          {resolved?.postPolish !== false && <span className="text-accent"> · polish</span>}
         </div>
       )}
 

@@ -420,6 +420,10 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
     let exports = exports_dir(&ctx.workspace);
     std::fs::create_dir_all(&exports).map_err(|e| e.to_string())?;
 
+    if crate::engines::brush_is_custom() {
+        ctx.log("Using custom Brush binary (engines/brush-custom).");
+    }
+
     let all_stages = plan_stages(s.total_steps, s.max_resolution, s.progressive_resolution);
 
     let (stages, start_iter) = match &resume {

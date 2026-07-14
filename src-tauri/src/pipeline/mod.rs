@@ -277,6 +277,9 @@ async fn finalize(
     let result_ref = result.clone();
     tokio::task::block_in_place(move || brush::bake_final_filter(ctx_ref, &result_ref))?;
 
+    // NVIDIA Fixer (commercial) or Difix (research) polish when installed.
+    let _ = sidecars::try_polish(ctx, &result).await;
+
     // ROADMAP-V2 1.4: autosave, so a completed reconstruction is never lost.
     // Recorded before the cleanup below deletes the exports it superseded.
     let result_str = result.to_string_lossy().into_owned();

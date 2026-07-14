@@ -48,6 +48,8 @@ export interface Settings {
   useNeuralInit?: boolean | null;
   /** Allow non-commercial research sidecars. Default OFF. */
   allowResearchSidecars?: boolean | null;
+  /** Run NVIDIA Fixer (or Difix if Research ON) after train when installed. Default ON. */
+  postPolish?: boolean | null;
   exportFormat?: string | null;
 }
 
@@ -72,16 +74,19 @@ export interface ResolvedSettings {
   denseInit: boolean;
   useNeuralInit: boolean;
   allowResearchSidecars: boolean;
+  postPolish: boolean;
   exportFormat: string;
 }
 
 export interface EngineStatus {
   colmap: boolean;
   brush: boolean;
+  brushCustom: boolean;
   ffmpeg: boolean;
   depthAnythingV2: boolean;
   vggtCommercial: boolean;
   vggtOmega: boolean;
+  fixer: boolean;
 }
 
 /** A camera solved by the live-init engine, ready to draw as a frustum. */

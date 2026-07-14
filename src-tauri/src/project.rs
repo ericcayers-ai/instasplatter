@@ -199,6 +199,7 @@ mod tests {
             dense_init: true,
             use_neural_init: true,
             allow_research_sidecars: false,
+            post_polish: true,
             strictness: 0.5,
             export_format: "ply".into(),
             keep_intermediates: false,

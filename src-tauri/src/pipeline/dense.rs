@@ -1,14 +1,11 @@
 //! Dense geometry bootstrap after sparse SfM.
 //!
 //! Needle / empty-cloud failures usually start from a sparse COLMAP point
-//! cloud that is too thin for Brush to densify into solid surfaces. When
-//! CUDA is available we run COLMAP's patch-match MVS and fuse a dense
-//! cloud into `init.ply` as isotropic Gaussians. Otherwise we still seed
-//! Brush from the sparse `points3D` cloud, which is denser than leaving
-//! Brush to invent its own cold start.
+//! cloud that is too thin for Brush to densify into solid surfaces. v0.3.1
+//! **composes** neural densifiers (DAV2 / VGGT) with COLMAP patch-match MVS
+//! and the sparse cloud into one `init.ply` (AND, not pick-one).
 //!
-//! Neural densifiers (Depth Anything V2, VGGT commercial) land in
-//! [`super::sidecars`] when their binaries are present.
+//! Neural densifiers land in [`super::sidecars`] when their binaries are present.
 
 use super::brush;
 use super::JobCtx;
@@ -248,8 +245,8 @@ fn seed_from_sparse_model(ctx: &JobCtx, model: &Model) -> Result<usize, String> 
     write_init_from_points(ctx, xyz, rgb, "sparse COLMAP")
 }
 
-/// Attempt COLMAP patch-match stereo densification. Returns Ok(true) when a
-/// denser init.ply was written, Ok(false) when the sparse fallback was used.
+/// Attempt dense init by **composing** neural densify ∧ COLMAP MVS ∧ sparse seed.
+/// Returns Ok(true) when a denser-than-sparse `init.ply` was written.
 pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, String> {
     if !ctx.settings.dense_init {
         // Still seed from sparse points when densify is off: cold Brush starts
@@ -263,26 +260,72 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
 
     ctx.stage_progress("sfm", 0.85, "Densifying geometry…");
 
-    // Neural sidecars first: they produce denser pointmaps when installed.
-    if let Some(n) = super::sidecars::try_dense_init(ctx, images_dir).await? {
-        ctx.log(format!("Neural dense init produced {n} Gaussians."));
-        return Ok(true);
-    }
-
     let model_dir = colmap::find_model_dir(&ctx.workspace)
         .ok_or("No sparse model to densify.")?;
     let model = colmap::read_model(&model_dir)?;
 
-    // CUDA MVS is the primary densifier on NVIDIA; without it, skip straight
-    // to the sparse seed (still better than no init.ply).
-    if !ctx.settings.sift_gpu {
+    let mut xyz: Vec<[f32; 3]> = Vec::new();
+    let mut rgb: Vec<[u8; 3]> = Vec::new();
+    let mut labels: Vec<&str> = Vec::new();
+
+    // 1) Neural densifier (DAV2 / VGGT) — points only; we merge below.
+    if let Some((nx, nr, name)) = super::sidecars::try_neural_points(ctx, images_dir).await? {
+        ctx.log(format!("Neural dense init ({name}): {} points (will merge).", nx.len()));
+        xyz.extend(nx);
+        rgb.extend(nr);
+        labels.push("neural");
+    }
+
+    // 2) COLMAP patch-match MVS when CUDA COLMAP is available.
+    if ctx.settings.sift_gpu {
+        match run_mvs_fused(ctx, images_dir, &model_dir, &model).await {
+            Ok(Some((mx, mr))) => {
+                ctx.log(format!("COLMAP MVS: {} fused points (will merge).", mx.len()));
+                xyz.extend(mx);
+                rgb.extend(mr);
+                labels.push("MVS");
+            }
+            Ok(None) => {}
+            Err(e) => {
+                ctx.notice(format!("Dense MVS failed ({e}). Continuing with other seeds."));
+            }
+        }
+    } else if labels.is_empty() {
         ctx.notice(
-            "Dense MVS needs a CUDA COLMAP build. Seeding training from the sparse cloud instead.",
+            "Dense MVS needs a CUDA COLMAP build. Seeding from neural/sparse clouds instead.",
         );
+    }
+
+    // 3) Always merge high-confidence sparse points (thin structures).
+    let (sx, sr) = filter_sparse_points(&model.points);
+    let sparse_n = sx.len();
+    xyz.extend(sx);
+    rgb.extend(sr);
+    if sparse_n > 0 {
+        labels.push("sparse");
+    }
+
+    if xyz.len() < 32 {
         seed_from_sparse_model(ctx, &model)?;
         return Ok(false);
     }
 
+    let label = if labels.is_empty() {
+        "sparse COLMAP".to_string()
+    } else {
+        labels.join("+")
+    };
+    write_init_from_points(ctx, xyz, rgb, &label)?;
+    Ok(labels.iter().any(|l| *l == "neural" || *l == "MVS"))
+}
+
+/// Run undistort → patch-match → fusion. Returns fused XYZRGB or None.
+async fn run_mvs_fused(
+    ctx: &JobCtx,
+    images_dir: &Path,
+    model_dir: &Path,
+    model: &Model,
+) -> Result<Option<(Vec<[f32; 3]>, Vec<[u8; 3]>)>, String> {
     let ws = &ctx.workspace;
     let dense = ws.join("dense");
     let undistorted = dense.join("undistorted");
@@ -293,7 +336,6 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
 
     std::fs::create_dir_all(&dense).map_err(|e| e.to_string())?;
 
-    // 1) Undistort into a workspace patch-match understands.
     if let Err(e) = super::colmap::run_colmap_pub(
         ctx,
         (0.82, 0.88),
@@ -312,15 +354,10 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
     )
     .await
     {
-        ctx.notice(format!(
-            "Dense undistort failed ({e}). Seeding from the sparse cloud."
-        ));
-        seed_from_sparse_model(ctx, &model)?;
-        return Ok(false);
+        let _ = std::fs::remove_dir_all(&dense);
+        return Err(format!("undistort: {e}"));
     }
 
-    // 2) Patch-match stereo. Cap by training resolution so Draft/Eco stays
-    // interactive; geom_consistency is reserved for High/Max budgets.
     let mvs_size = ctx.settings.max_resolution.clamp(480, 1600).to_string();
     let use_geom = matches!(
         ctx.settings.preset,
@@ -345,14 +382,10 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
     )
     .await
     {
-        ctx.notice(format!(
-            "Patch-match stereo failed ({e}). Seeding from the sparse cloud."
-        ));
-        seed_from_sparse_model(ctx, &model)?;
-        return Ok(false);
+        let _ = std::fs::remove_dir_all(&dense);
+        return Err(format!("patch-match: {e}"));
     }
 
-    // 3) Fuse depth maps into a coloured point cloud.
     let fused = PathBuf::from(&und_s).join("fused.ply");
     let fused_s = fused.to_string_lossy().into_owned();
     if let Err(e) = super::colmap::run_colmap_pub(
@@ -373,40 +406,20 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
     )
     .await
     {
-        ctx.notice(format!(
-            "Stereo fusion failed ({e}). Seeding from the sparse cloud."
-        ));
-        seed_from_sparse_model(ctx, &model)?;
-        return Ok(false);
+        let _ = std::fs::remove_dir_all(&dense);
+        return Err(format!("fusion: {e}"));
     }
 
     if !fused.exists() {
-        ctx.notice("Stereo fusion produced no cloud. Seeding from the sparse cloud.");
-        seed_from_sparse_model(ctx, &model)?;
-        return Ok(false);
+        let _ = std::fs::remove_dir_all(&dense);
+        return Ok(None);
     }
 
-    match read_xyzrgb_ply(&fused) {
-        Ok((xyz, rgb)) => {
-            // Merge sparse high-confidence points so thin structures survive.
-            let (sx, sr) = filter_sparse_points(&model.points);
-            let mut xyz = xyz;
-            let mut rgb = rgb;
-            xyz.extend(sx);
-            rgb.extend(sr);
-            write_init_from_points(ctx, xyz, rgb, "MVS+sparse")?;
-            // Drop the bulky undistorted workspace; training only needs init.ply
-            // and the original sparse poses/images.
-            let _ = std::fs::remove_dir_all(&dense);
-            Ok(true)
-        }
-        Err(e) => {
-            ctx.notice(format!(
-                "Could not read fused.ply ({e}). Seeding from the sparse cloud."
-            ));
-            seed_from_sparse_model(ctx, &model)?;
-            Ok(false)
-        }
+    let result = read_xyzrgb_ply(&fused);
+    let _ = std::fs::remove_dir_all(&dense);
+    match result {
+        Ok((xyz, rgb)) => Ok(Some((xyz, rgb))),
+        Err(e) => Err(e),
     }
 }
 

@@ -56,6 +56,13 @@ pub fn brush_exe() -> PathBuf {
     engines_dir().join("brush").join("brush_app.exe")
 }
 
+pub fn brush_is_custom() -> bool {
+    engines_dir()
+        .join("brush-custom")
+        .join("brush_app.exe")
+        .exists()
+}
+
 pub fn colmap_exe() -> PathBuf {
     engines_dir().join("colmap").join("bin").join("colmap.exe")
 }
@@ -91,10 +98,13 @@ fn ffmpeg_available() -> bool {
 pub struct EngineStatus {
     pub colmap: bool,
     pub brush: bool,
+    /// True when `%LOCALAPPDATA%/InstaSplatter/engines/brush-custom/brush_app.exe` is used.
+    pub brush_custom: bool,
     pub ffmpeg: bool,
     pub depth_anything_v2: bool,
     pub vggt_commercial: bool,
     pub vggt_omega: bool,
+    pub fixer: bool,
 }
 
 pub fn status() -> EngineStatus {
@@ -102,10 +112,12 @@ pub fn status() -> EngineStatus {
     EngineStatus {
         colmap: colmap_exe().exists(),
         brush: brush_exe().exists(),
+        brush_custom: brush_is_custom(),
         ffmpeg: ffmpeg_available(),
         depth_anything_v2: sc.depth_anything_v2,
         vggt_commercial: sc.vggt_commercial,
         vggt_omega: sc.vggt_omega,
+        fixer: sc.fixer,
     }
 }
 

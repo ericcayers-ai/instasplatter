@@ -56,6 +56,9 @@ pub struct Settings {
     pub use_neural_init: Option<bool>,
     /// Allow non-commercial research sidecars (VGGT-NC, etc.). Default OFF.
     pub allow_research_sidecars: Option<bool>,
+    /// Run NVIDIA Fixer / Difix polish after training when a launcher is installed.
+    /// Default ON (no-op until Fixer is present).
+    pub post_polish: Option<bool>,
 
     // ---- Cleanliness / robustness ----
     /// 0 (Detailed) .. 1 (Clean). Scales floater-suppression losses & noise.
@@ -107,6 +110,7 @@ pub struct ResolvedSettings {
     pub dense_init: bool,
     pub use_neural_init: bool,
     pub allow_research_sidecars: bool,
+    pub post_polish: bool,
     pub strictness: f32,
     pub export_format: String,
     pub keep_intermediates: bool,
@@ -151,6 +155,7 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         dense_init: settings.dense_init.unwrap_or(true),
         use_neural_init: settings.use_neural_init.unwrap_or(true),
         allow_research_sidecars: settings.allow_research_sidecars.unwrap_or(false),
+        post_polish: settings.post_polish.unwrap_or(true),
         strictness,
         export_format: settings
             .export_format
@@ -196,6 +201,7 @@ mod tests {
         assert!(r.dense_init);
         assert!(r.use_neural_init);
         assert!(!r.allow_research_sidecars);
+        assert!(r.post_polish);
         assert!(!r.live_init);
         assert!((r.blur_reject_fraction - 0.08).abs() < 1e-6);
     }

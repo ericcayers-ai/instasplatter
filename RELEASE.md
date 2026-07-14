@@ -5,7 +5,7 @@
 Download the latest installer from [GitHub Releases](https://github.com/ericcayers-ai/instasplatter/releases), or build locally:
 
 ```
-src-tauri/target/release/bundle/nsis/InstaSplatter_0.2.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InstaSplatter_0.3.1_x64-setup.exe
 ```
 
 Run it, then launch InstaSplatter from the Start menu. To skip the installer:
@@ -45,6 +45,18 @@ node --experimental-strip-types src/splat/camera.ts
 
 168 Rust unit tests cover the linear algebra, the COLMAP and PLY readers and writers, the SPZ encoder, the incremental camera solver, and the mesh extractor. The camera-control maths in `src/splat/camera.ts` has its own numeric checks.
 
+## What is new in v0.3.1
+
+**Research proof.** `docs/PAPER-SWEEP-2024+.md` inventories 45 post-2024 papers/repos with license, status, and greppable integration points.
+
+**Composed dense init.** Neural densifiers (DAV2 / VGGT-commercial) now **merge** with COLMAP MVS and sparse points instead of short-circuiting each other.
+
+**Fixer polish.** NVIDIA Fixer (commercial Open Model License) runs after training when `engines/sidecars/fixer` is installed (`postPolish` default ON). Difix remains research-only.
+
+**Mesh.** Higher default TSDF resolution (768 / 1024 render) with stronger cleanup.
+
+**Brush custom.** `brush-custom` override is auto-detected and reported in engine status; fork scaffolding under `tools/brush-fork/`.
+
 ## What is new in v0.2.0
 
 **Interface.** Distinctive InstaSplatter identity: Syne display type, IBM Plex body and mono, a restrained splatter motif on the home screen, light and dark themes, and keyboard focus rings.
@@ -61,13 +73,10 @@ node --experimental-strip-types src/splat/camera.ts
 
 ## Settings that default to off
 
-Three settings are off until they have been measured against an end-to-end baseline:
-
 - **Live camera tracking.** Camera intrinsics are guessed from the image size and are not refined, so poses carry whatever error that guess introduces. COLMAP remains the accurate path.
-- **Progressive resolution.** Training restarts at each resolution step, which resets the optimiser's moment estimates.
-- **Mip-Splatting filter.** Applied between stages and baked into the result, rather than acting as a training-time regularizer.
+- **Research sidecars.** NC weights (VGGT-Ω, Difix research). Off until you accept the license risk.
 
-Each is a single toggle in Settings.
+Progressive resolution, Mip-Splatting, dense init, neural densifiers (when installed), and post polish (when Fixer is installed) default **ON**.
 
 ## Manual end-to-end gate
 
