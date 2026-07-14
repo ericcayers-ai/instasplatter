@@ -1,23 +1,14 @@
-//! Optional neural dense-init and post-polish sidecars.
+//! Optional neural dense-init, pose, and post-polish sidecars.
 //!
-//! Default policy (v0.3.1): use the newest license-viable sidecar when present.
-//! Neural densifiers **compose** with COLMAP MVS (see `dense::densify_after_sfm`).
+//! Dual-mode policy (v0.5):
+//! - **Standard**: VGGT-Commercial / DAV2 / RoMa v2 / Fixer (commercial-safe).
+//! - **Experimental** (license ack): + Ω / MASt3R / DUSt3R / Difix; merge all densifiers.
 //!
-//! | Sidecar | License | Priority |
-//! | --- | --- | --- |
-//! | Depth Anything V2 Small / latest | Apache-2.0 | ON when installed |
-//! | VGGT-1B-Commercial | Meta AUP (no military) | ON when installed + accepted |
-//! | NVIDIA Fixer | NVIDIA Open Model (commercial OK) | ON when installed (`post_polish`) |
-//! | VGGT-Ω (VGGT-Omega) | CC BY-NC-4.0 | research opt-in only (newest, best quality) |
-//! | VGGT-1B (NC) / Difix research | CC BY-NC / gated | research opt-in only |
-//! | MASt3R / DUSt3R / Pi3 weights | NC | not shipped |
-//!
-//! Why not VGGT-Ω by default: as of May 2026 the published Omega checkpoint
-//! is CC BY-NC-4.0 on Hugging Face (`facebook/VGGT-Omega`). Until Meta ships
-//! a commercial Omega weight, shipping it ON for a commercial product is a
-//! license risk. Prefer Omega when the user enables Research sidecars.
+//! Do **not** vendor GPL Lichtfeld densify plugin sources — RoMa orchestration is
+//! clean-room (MIT RoMa v2 APIs + our filters).
 
 use super::dense;
+use super::solver;
 use super::JobCtx;
 use crate::settings::app_data_dir;
 use serde::{Deserialize, Serialize};
@@ -30,13 +21,17 @@ use tokio::io::AsyncWriteExt;
 pub struct SidecarStatus {
     pub depth_anything_v2: bool,
     pub vggt_commercial: bool,
-    /// Newest VGGT (Ω). Non-commercial weights; research path only.
+    /// Newest VGGT (Ω). Non-commercial weights; Experimental only.
     pub vggt_omega: bool,
-    /// Present but non-commercial / research-only; never used unless opted in.
+    /// Present but non-commercial / research-only; Experimental only.
     pub vggt_research: bool,
+    pub mast3r: bool,
+    pub dust3r: bool,
+    /// RoMa v2 densify (MIT densifier + user-installed DINOv3 weights).
+    pub roma_v2: bool,
     /// NVIDIA Fixer (commercial Open Model License) polish launcher.
     pub fixer: bool,
-    /// Difix3D+ research launcher (gated; Research ON only).
+    /// Difix3D+ research launcher (gated; Experimental only).
     pub difix: bool,
 }
 
@@ -83,13 +78,14 @@ pub fn status() -> SidecarStatus {
         .join("ACCEPTED")
         .exists()
         && launcher("vggt-commercial").exists();
-    let vggt_omega = launcher("vggt-omega").exists();
-    let vggt_r = launcher("vggt-research").exists();
     SidecarStatus {
         depth_anything_v2: dav2,
         vggt_commercial: vggt_c,
-        vggt_omega,
-        vggt_research: vggt_r,
+        vggt_omega: launcher("vggt-omega").exists(),
+        vggt_research: launcher("vggt-research").exists(),
+        mast3r: launcher("mast3r").exists(),
+        dust3r: launcher("dust3r").exists(),
+        roma_v2: launcher("roma-v2").exists(),
         fixer: launcher("fixer").exists(),
         difix: launcher("difix").exists(),
     }
@@ -102,9 +98,18 @@ struct Request<'a> {
     workspace: &'a str,
     sparse_dir: Option<&'a str>,
     max_points: u32,
+    /// "sfm" | "densify" | "polish" — launchers that support multi-role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task: Option<&'a str>,
+    /// RoMa quality: "fast" | "base" | "high" | "precise".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quality: Option<&'a str>,
     /// Optional path for polish sidecars (Fixer / Difix).
     #[serde(skip_serializing_if = "Option::is_none")]
     splat_path: Option<&'a str>,
+    /// Lichtfeld-recipe style knobs (ignored by launchers that do not need them).
+    reference_fraction: f32,
+    neighbors_per_ref: u32,
 }
 
 async fn invoke_launcher(
@@ -112,7 +117,16 @@ async fn invoke_launcher(
     name: &str,
     images_dir: &Path,
     splat_path: Option<&Path>,
+    task: Option<&str>,
+    quality: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
+    if solver::is_research_sidecar(name) && !ctx.settings.experimental_mode {
+        ctx.log(format!(
+            "Skipping {name}: research/NC sidecar requires Experimental Mode."
+        ));
+        return Ok(None);
+    }
+
     let launch = launcher(name);
     if !launch.exists() {
         return Ok(None);
@@ -121,12 +135,22 @@ async fn invoke_launcher(
 
     let sparse = crate::colmap::find_model_dir(&ctx.workspace);
     let splat_s = splat_path.map(|p| p.to_string_lossy().into_owned());
+    let quality_owned = quality.map(|s| s.to_string());
     let req = Request {
         images_dir: &images_dir.to_string_lossy(),
         workspace: &ctx.workspace.to_string_lossy(),
         sparse_dir: sparse.as_ref().map(|p| p.to_str().unwrap_or("")),
-        max_points: 1_200_000,
+        max_points: if ctx.settings.experimental_mode {
+            2_000_000
+        } else {
+            1_200_000
+        },
+        task,
+        quality: quality_owned.as_deref(),
         splat_path: splat_s.as_deref(),
+        // Lichtfeld densify plugin defaults (recipe only — not their GPL code).
+        reference_fraction: 0.3,
+        neighbors_per_ref: 8,
     };
     let body = serde_json::to_string(&req).map_err(|e| e.to_string())?;
 
@@ -178,6 +202,10 @@ async fn invoke_launcher(
         .map(PathBuf::from);
     match path {
         Some(p) if p.exists() => Ok(Some(p)),
+        Some(p) if p.to_string_lossy().eq_ignore_ascii_case("ok") => {
+            // Pose sidecars may print "OK" after writing workspace/sparse.
+            Ok(Some(p))
+        }
         _ => {
             ctx.log(format!("[{name}] produced no output path"));
             Ok(None)
@@ -203,8 +231,140 @@ fn consume_point_ply(ply_path: &Path) -> Result<(Vec<[f32; 3]>, Vec<[u8; 3]>), S
     })
 }
 
-/// Collect points from the highest-priority neural densifier that succeeds.
-/// Does **not** write `init.ply`; the caller merges with MVS / sparse.
+fn sparse_model_usable(workspace: &Path) -> bool {
+    crate::colmap::find_model_dir(workspace)
+        .and_then(|d| crate::colmap::read_model(&d).ok())
+        .map(|m| m.images.len() >= 2)
+        .unwrap_or(false)
+}
+
+/// Run a pose/SfM sidecar that writes a COLMAP sparse model under `workspace/sparse`.
+/// Returns the solver name on success.
+pub async fn try_neural_poses(
+    ctx: &JobCtx,
+    images_dir: &Path,
+    chain: &[&str],
+) -> Result<Option<String>, String> {
+    for name in chain {
+        ctx.check_cancel()?;
+        // Clear partial sparse so a failed neural write cannot confuse COLMAP.
+        let sparse = ctx.workspace.join("sparse");
+        let _ = std::fs::remove_dir_all(&sparse);
+        let _ = std::fs::create_dir_all(sparse.join("0"));
+
+        match invoke_launcher(ctx, name, images_dir, None, Some("sfm"), None).await {
+            Ok(Some(path)) => {
+                // Accept: printed model dir, printed cameras.txt parent, or "OK" + usable sparse.
+                let looks_ok = if path.to_string_lossy().eq_ignore_ascii_case("ok") {
+                    sparse_model_usable(&ctx.workspace)
+                } else if path.is_dir() {
+                    crate::colmap::read_model(&path)
+                        .map(|m| m.images.len() >= 2)
+                        .unwrap_or(false)
+                        || sparse_model_usable(&ctx.workspace)
+                } else if path.extension().and_then(|e| e.to_str()) == Some("txt")
+                    || path.file_name().and_then(|f| f.to_str()) == Some("cameras.bin")
+                {
+                    sparse_model_usable(&ctx.workspace)
+                } else if path.extension().and_then(|e| e.to_str()) == Some("ply") {
+                    // Some launchers emit poses + dense points; poses land in sparse/.
+                    sparse_model_usable(&ctx.workspace)
+                } else {
+                    sparse_model_usable(&ctx.workspace)
+                };
+
+                if looks_ok {
+                    // If the sidecar wrote elsewhere, copy into workspace/sparse/0.
+                    if path.is_dir() && path != sparse.join("0") && path != sparse {
+                        if let Ok(model) = crate::colmap::read_model(&path) {
+                            let dest = sparse.join("0");
+                            let _ = std::fs::create_dir_all(&dest);
+                            let _ = crate::colmap::write_model_txt(&dest, &model);
+                        }
+                    }
+                    if sparse_model_usable(&ctx.workspace) {
+                        ctx.notice(solver::camera_chip(name));
+                        return Ok(Some((*name).to_string()));
+                    }
+                }
+                ctx.log(format!("[{name}] SfM output was not a usable COLMAP model."));
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                ctx.notice(format!("{name} pose solver skipped: {e}"));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Optional light COLMAP triangulation / bundle adjust on an existing sparse model.
+pub async fn maybe_refine_poses_with_colmap(
+    ctx: &JobCtx,
+    images_dir: &Path,
+) -> Result<(), String> {
+    let model_dir = match crate::colmap::find_model_dir(&ctx.workspace) {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    let model = crate::colmap::read_model(&model_dir)?;
+    // Only refine when frame count is high — matches Standard plan A1.
+    if model.images.len() < 80 && !ctx.settings.experimental_mode {
+        return Ok(());
+    }
+    let n = model.images.len();
+    let img_s = images_dir.to_string_lossy().into_owned();
+    let model_s = model_dir.to_string_lossy().into_owned();
+    let db = ctx.workspace.join("database.db");
+    if !db.exists() {
+        // Without a feature DB, skip BA rather than re-running full SfM.
+        ctx.log("Skipping COLMAP BA refine (no feature database yet).");
+        return Ok(());
+    }
+    let db_s = db.to_string_lossy().into_owned();
+    ctx.log("Refining neural poses with limited COLMAP bundle adjustment…");
+    match super::colmap::run_colmap_pub(
+        ctx,
+        (0.7, 0.82),
+        &[
+            "point_triangulator",
+            "--database_path",
+            &db_s,
+            "--image_path",
+            &img_s,
+            "--input_path",
+            &model_s,
+            "--output_path",
+            &model_s,
+        ],
+        n,
+    )
+    .await
+    {
+        Ok(()) => {
+            let _ = super::colmap::run_colmap_pub(
+                ctx,
+                (0.82, 0.88),
+                &[
+                    "bundle_adjuster",
+                    "--input_path",
+                    &model_s,
+                    "--output_path",
+                    &model_s,
+                ],
+                n,
+            )
+            .await;
+        }
+        Err(e) => {
+            ctx.log(format!("COLMAP refine skipped: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// Collect points from neural densifiers.
+/// Standard: first usable success. Experimental: merge every available source.
 pub async fn try_neural_points(
     ctx: &JobCtx,
     images_dir: &Path,
@@ -214,29 +374,28 @@ pub async fn try_neural_points(
     }
 
     let st = status();
-    let order: Vec<&str> = {
-        let mut v = Vec::new();
-        if ctx.settings.allow_research_sidecars && st.vggt_omega {
-            v.push("vggt-omega");
-        }
-        if st.vggt_commercial {
-            v.push("vggt-commercial");
-        }
-        if st.depth_anything_v2 {
-            v.push("depth-anything-v2");
-        }
-        if ctx.settings.allow_research_sidecars && st.vggt_research {
-            v.push("vggt-research");
-        }
-        v
-    };
+    let order = solver::densify_neural_order(&ctx.settings, &st);
+    if order.is_empty() {
+        return Ok(None);
+    }
+
+    let merge_all = ctx.settings.experimental_mode;
+    let mut xyz: Vec<[f32; 3]> = Vec::new();
+    let mut rgb: Vec<[u8; 3]> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
 
     for name in order {
         ctx.check_cancel()?;
-        match invoke_launcher(ctx, name, images_dir, None).await {
+        match invoke_launcher(ctx, name, images_dir, None, Some("densify"), None).await {
             Ok(Some(ply_path)) => match consume_point_ply(&ply_path) {
-                Ok((xyz, rgb)) if xyz.len() >= 32 => {
-                    return Ok(Some((xyz, rgb, name.to_string())));
+                Ok((px, pr)) if px.len() >= 32 => {
+                    if merge_all {
+                        xyz.extend(px);
+                        rgb.extend(pr);
+                        labels.push(name.to_string());
+                    } else {
+                        return Ok(Some((px, pr, name.to_string())));
+                    }
                 }
                 Ok(_) => ctx.log(format!("[{name}] too few points")),
                 Err(e) => ctx.log(format!("[{name}] could not consume output: {e}")),
@@ -247,7 +406,47 @@ pub async fn try_neural_points(
             }
         }
     }
+
+    if merge_all && xyz.len() >= 32 {
+        return Ok(Some((xyz, rgb, labels.join("+"))));
+    }
     Ok(None)
+}
+
+/// RoMa v2 densify (Lichtfeld-style recipe via clean-room sidecar).
+pub async fn try_roma_densify(
+    ctx: &JobCtx,
+    images_dir: &Path,
+) -> Result<Option<(Vec<[f32; 3]>, Vec<[u8; 3]>)>, String> {
+    if !ctx.settings.dense_init || !status().roma_v2 {
+        return Ok(None);
+    }
+    let q = ctx.settings.roma_quality.as_str();
+    match invoke_launcher(ctx, "roma-v2", images_dir, None, Some("densify"), Some(q)).await
+    {
+        Ok(Some(ply_path)) => match consume_point_ply(&ply_path) {
+            Ok((xyz, rgb)) if xyz.len() >= 32 => {
+                ctx.log(format!(
+                    "RoMa v2 densify ({q}): {} points (will merge).",
+                    xyz.len()
+                ));
+                Ok(Some((xyz, rgb)))
+            }
+            Ok(_) => {
+                ctx.log("[roma-v2] too few points");
+                Ok(None)
+            }
+            Err(e) => {
+                ctx.log(format!("[roma-v2] could not consume output: {e}"));
+                Ok(None)
+            }
+        },
+        Ok(None) => Ok(None),
+        Err(e) => {
+            ctx.notice(format!("RoMa densify skipped: {e}"));
+            Ok(None)
+        }
+    }
 }
 
 /// Try neural densifiers and write `init.ply` (kept for diagnostics / future callers).
@@ -262,20 +461,13 @@ pub async fn try_dense_init(ctx: &JobCtx, images_dir: &Path) -> Result<Option<us
     }
 }
 
-/// Post-train polish via NVIDIA Fixer (commercial) or Difix (research).
-/// Returns `true` when `result_ply` was replaced with a polished splat.
+/// Post-train polish. Standard: Fixer. Experimental: Difix then Fixer (both if present).
 pub async fn try_polish(ctx: &JobCtx, result_ply: &Path) -> Result<bool, String> {
     if !ctx.settings.post_polish {
         return Ok(false);
     }
     let st = status();
-    let mut order: Vec<&str> = Vec::new();
-    if st.fixer {
-        order.push("fixer");
-    }
-    if ctx.settings.allow_research_sidecars && st.difix {
-        order.push("difix");
-    }
+    let order = solver::polish_order(&ctx.settings, &st);
     if order.is_empty() {
         return Ok(false);
     }
@@ -286,16 +478,24 @@ pub async fn try_polish(ctx: &JobCtx, result_ply: &Path) -> Result<bool, String>
         .canonicalize()
         .unwrap_or_else(|_| ctx.workspace.join("images"));
 
+    let mut any = false;
+    let mut labels = Vec::new();
     for name in order {
         ctx.check_cancel()?;
         ctx.stage_progress("finalize", 0.7, &format!("Polishing with {name}…"));
-        match invoke_launcher(ctx, name, &images, Some(result_ply)).await {
+        match invoke_launcher(ctx, name, &images, Some(result_ply), Some("polish"), None).await
+        {
             Ok(Some(out)) => {
                 if out != result_ply {
                     std::fs::copy(&out, result_ply).map_err(|e| e.to_string())?;
                 }
                 ctx.log(format!("{name} polished the result splat."));
-                return Ok(true);
+                labels.push(name.to_string());
+                any = true;
+                // Experimental: continue so Fixer can run after Difix.
+                if !ctx.settings.experimental_mode {
+                    break;
+                }
             }
             Ok(None) => {
                 ctx.log(format!("[{name}] produced no polished splat"));
@@ -305,5 +505,8 @@ pub async fn try_polish(ctx: &JobCtx, result_ply: &Path) -> Result<bool, String>
             }
         }
     }
-    Ok(false)
+    if any {
+        ctx.notice(format!("Polish: {}", labels.join(" → ")));
+    }
+    Ok(any)
 }

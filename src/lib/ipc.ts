@@ -46,9 +46,13 @@ export interface Settings {
   denseInit?: boolean | null;
   /** Use installed DAV2 / VGGT-commercial sidecars when present. Default ON. */
   useNeuralInit?: boolean | null;
-  /** Allow non-commercial research sidecars. Default OFF. */
+  /** Allow non-commercial research sidecars. Default OFF. Forced ON in Experimental. */
   allowResearchSidecars?: boolean | null;
-  /** Run NVIDIA Fixer (or Difix if Research ON) after train when installed. Default ON. */
+  /** Master Experimental Mode (NC research stack). Requires license ack. */
+  experimentalMode?: boolean | null;
+  /** User accepted NC research license modal. */
+  experimentalLicenseAcked?: boolean | null;
+  /** Run NVIDIA Fixer (or Difix if Experimental) after train when installed. Default ON. */
   postPolish?: boolean | null;
   /** Trainer: auto | brush | gsplat. Auto prefers gsplat on CUDA when installed. */
   trainer?: string | null;
@@ -81,6 +85,8 @@ export interface ResolvedSettings {
   denseInit: boolean;
   useNeuralInit: boolean;
   allowResearchSidecars: boolean;
+  experimentalMode: boolean;
+  experimentalLicenseAcked: boolean;
   postPolish: boolean;
   trainer: string;
   gsplatStrategy: string;
@@ -88,6 +94,7 @@ export interface ResolvedSettings {
   gsplatAntialiased: boolean;
   gsplatAppearance: boolean;
   gsplatBilateralGrid: boolean;
+  romaQuality: string;
   exportFormat: string;
 }
 
@@ -99,7 +106,11 @@ export interface EngineStatus {
   depthAnythingV2: boolean;
   vggtCommercial: boolean;
   vggtOmega: boolean;
+  mast3r: boolean;
+  dust3r: boolean;
+  romaV2: boolean;
   fixer: boolean;
+  difix: boolean;
   gsplat: boolean;
 }
 

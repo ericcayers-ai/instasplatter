@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.3.0-green)
+![Status](https://img.shields.io/badge/status-v0.5.0-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -17,7 +17,7 @@
 
 ---
 
-> **v0.3.0** is the quality overhaul: dense MVS / neural init (ON by default), progressive resolution and Mip-Splatting ON, live splat interpolation between Brush checkpoints, batch queue for multiple videos/folders, stronger floater suppression, and a custom Brush build path for training-loop patches. Research and license notes live in **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**. Phase history is in **[ROADMAP-V2.md](ROADMAP-V2.md)**.
+> **v0.5.0** is the dual-mode quality overhaul: **Standard Mode** is VGGT-Commercial-first with RoMa v2 densify (Lichtfeld-style recipe, not the GPL plugin) composed with DAV2/MVS; **Experimental Mode** is a TitleBar master toggle (NC license ack) unlocking Ω → MASt3R → DUSt3R, merge-all densify, Difix+Fixer, and Max floors. Research and license notes live in **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 
@@ -27,10 +27,22 @@ InstaSplatter turns ordinary captures into photorealistic **3D Gaussian splats**
 
 Drop an `.mp4`, a folder of images, or several at once onto the window and the scene materializes in the viewport while it trains. Resolution, frame count, iteration budget, and quality trade-offs are **automatically tuned to your PC**. Power users can open Settings and override every knob; everyone else never has to.
 
+## Dual mode (Standard vs Experimental)
+
+| | Standard (default) | Experimental (opt-in) |
+|---|---|---|
+| Cameras | VGGT-Commercial → COLMAP | Ω → MASt3R → DUSt3R → VGGT-C → COLMAP |
+| Dense init | RoMa v2 ∧ DAV2 ∧ MVS ∧ sparse | Merge **all** densifiers |
+| Polish | Fixer | Difix then Fixer |
+| License | Commercial-safe defaults | NC research after one-time ack |
+| UI | Quiet | Red/violet banner + solver chips |
+
+NC weights are never shipped in the installer. See [tools/sidecars/README.md](tools/sidecars/README.md).
+
 ## Why it is different
 
 - **Live, not batch.** You watch the splat form and refine in real time, with smooth interpolation between training checkpoints.
-- **Dense by default.** COLMAP patch-match MVS (and optional Depth Anything V2 / VGGT-Commercial sidecars) seeds training so needle/floater clouds are far less common.
+- **Dense by default.** RoMa + COLMAP patch-match MVS (and optional Depth Anything V2 / VGGT sidecars) seed training so needle/floater clouds are far less common.
 - **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python runtime required for the base install.
 - **Batch queue.** Enqueue multiple videos or folders; GPU training stays serialized.
 - **Clean output controls.** A Clean vs. detailed slider maps to floater-suppression losses in the trainer.
@@ -43,12 +55,11 @@ Drop an `.mp4`, a folder of images, or several at once onto the window and the s
 |---|---|
 | **Input** | Video (`.mp4`, `.mov`, …), an image folder, or a batch of either |
 | **Smart frame selection** | Adaptive video extraction, mild blur rejection, even temporal subsampling |
-| **Camera solving** | COLMAP 4.1 SfM (default) or opt-in live incremental tracking with COLMAP fallback |
-| **Dense init** | Patch-match MVS → `init.ply`; optional DAV2 / VGGT-Commercial sidecars |
-| **Live reconstruction** | Brush (wgpu) training streamed into a WebGL2 splat viewport with attribute lerp |
+| **Camera solving** | VGGT-Commercial primary (Standard), COLMAP fallback, or Experimental NC chain |
+| **Dense init** | RoMa v2 ∧ neural ∧ patch-match MVS ∧ sparse → `init.ply` |
+| **Live reconstruction** | Brush (wgpu) or gsplat (CUDA) streamed into a WebGL2 splat viewport |
 | **Quality defaults** | Progressive resolution, Mip-Splatting filter, raised densify budget |
-| **Clean-up** | Opacity/scale regularization and a Clean vs. detailed strictness slider |
-| **Auto-tuning** | Hardware profiling → auto preset, live ETA |
+| **Experimental Mode** | TitleBar toggle + NC license modal + Max floors |
 | **Export** | `.ply`, `.splat`, `.spz` splats; optional textured mesh as glb, OBJ, or PLY |
 | **Settings** | Full panel, every value defaulting to Auto, quality presets |
 | **Resume** | Project bundles with checkpoint resume after interruption |

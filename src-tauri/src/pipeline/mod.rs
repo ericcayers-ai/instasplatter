@@ -1,10 +1,9 @@
 //! Pipeline orchestrator: ingestion, frame gating, camera solving, live
 //! Gaussian training, export. Progress is streamed to the UI as it happens.
 //!
-//! Cameras are solved either by the native incremental engine (ROADMAP-V2
-//! Phase 2), which registers poses one frame at a time so the scene paints
-//! itself in, or by a blocking COLMAP pass. The incremental engine falls back
-//! to COLMAP automatically, and says so, when it loses confidence.
+//! Dual-mode (v0.5):
+//! - **Standard**: VGGT-Commercial primary poses → COLMAP BA/fallback; RoMa∧DAV2∧MVS.
+//! - **Experimental**: Ω→MASt3R→DUSt3R→VGGT-C→COLMAP; merge-all densify; Difix+Fixer.
 
 pub mod brush;
 pub mod colmap;
@@ -13,6 +12,7 @@ pub mod gating;
 pub mod gsplat;
 pub mod ingest;
 pub mod sidecars;
+pub mod solver;
 
 use crate::project::Project;
 use crate::settings::{app_data_dir, ResolvedSettings};
@@ -203,25 +203,63 @@ pub fn discard_workspace(workspace: &Path) {
     }
 }
 
-/// Solve camera poses, preferring the incremental engine when it is enabled.
+/// Solve camera poses.
+/// Standard: VGGT-Commercial primary → optional COLMAP refine → COLMAP fallback.
+/// Experimental: Ω → MASt3R → DUSt3R → VGGT-C → COLMAP.
+/// Live-init (when enabled) still runs first and falls back into this chain.
 async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     if ctx.settings.live_init {
         match crate::sfm::run_incremental(ctx, images_dir).await {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                ctx.notice(solver::camera_chip("live-init"));
+                return Ok(());
+            }
             Err(e) if e == "__cancelled__" => return Err(e),
             Err(reason) => {
-                // ROADMAP-V2 2.6: say plainly that it switched, then switch.
                 ctx.notice(format!(
                     "Live camera tracking stopped early ({reason}). Falling back to the batch camera solver."
                 ));
                 ctx.check_cancel()?;
-                // Start from a clean slate: partial poses would confuse COLMAP.
                 let _ = std::fs::remove_dir_all(ctx.workspace.join("sparse"));
                 let _ = std::fs::remove_file(brush::init_ply_path(&ctx.workspace));
             }
         }
     }
-    colmap::run_sfm(ctx, images_dir).await
+
+    let st = sidecars::status();
+    let chain: Vec<&str> = if ctx.settings.experimental_mode {
+        solver::experimental_pose_chain(&st)
+    } else {
+        solver::standard_pose_chain(&st)
+    };
+
+    if !chain.is_empty() {
+        ctx.stage_progress("sfm", 0.05, "Neural camera solver…");
+        match sidecars::try_neural_poses(ctx, images_dir, &chain).await? {
+            Some(name) => {
+                let _ = sidecars::maybe_refine_poses_with_colmap(ctx, images_dir).await;
+                ctx.log(format!("Camera solver: {name}"));
+                ctx.notice(format!("Trainer: {}", ctx.settings.trainer));
+                return Ok(());
+            }
+            None => {
+                ctx.notice(if ctx.settings.experimental_mode {
+                    "Neural pose chain exhausted. Falling back to COLMAP."
+                } else {
+                    "VGGT-Commercial unavailable or failed. Falling back to COLMAP."
+                });
+            }
+        }
+    }
+
+    colmap::run_sfm(ctx, images_dir).await?;
+    if chain.is_empty() {
+        ctx.notice(solver::camera_chip("colmap"));
+    } else {
+        ctx.notice(solver::camera_chip("colmap-fallback"));
+    }
+    ctx.notice(format!("Trainer: {}", ctx.settings.trainer));
+    Ok(())
 }
 
 /// Run the full pipeline for one input. Returns the final .ply path.

@@ -43,14 +43,16 @@ Columns: **Status** ∈ {integrated, wired-default-ON, opt-in, deferred, rejecte
 | 3 | COLMAP | 4.1 | [colmap/colmap](https://github.com/colmap/colmap) | SfM/init | BSD | wired-default-ON | Batch SfM + patch-match MVS | `colmap.rs`, `dense.rs::patch_match_stereo` |
 | 4 | GLOMAP | 2024 | [colmap/glomap](https://github.com/colmap/glomap) | SfM/init | BSD | deferred | Classical incremental SfM already native; GLOMAP binary not wired | `sfm/mod.rs` live path instead |
 | 5 | VGGT | CVPR 2025 | [facebookresearch/vggt](https://github.com/facebookresearch/vggt) | SfM/init | NC weights | opt-in | `vggt-research` launcher only if Research ON | `sidecars.rs` `vggt-research` |
-| 6 | VGGT-1B-Commercial | Jul 2025 | HF `facebook/VGGT-1B-Commercial` | SfM/init | Meta AUP | wired-default-ON | Sidecar when `ACCEPTED` + launcher | `vggt_commercial`, `ACCEPTED` |
-| 7 | VGGT-Ω | CVPR 2026 Oral | [vggt-omega](https://github.com/facebookresearch/vggt-omega) arXiv:2605.15195 | SfM/init | CC BY-NC-4.0 | opt-in | Preferred when Research ON | `vggt_omega`, `allow_research_sidecars` |
-| 8 | MASt3R / DUSt3R | 2024 | naver dust3r/mast3r | SfM/init | CC BY-NC-SA | rejected | License blocks shipping | RESEARCH-STACK rejected table |
+| 6 | VGGT-1B-Commercial | Jul 2025 | HF `facebook/VGGT-1B-Commercial` | SfM/init | Meta AUP | wired-default-ON | **Standard primary poses** + densify when `ACCEPTED` | `try_neural_poses`, `vggt_commercial` |
+| 7 | VGGT-Ω | CVPR 2026 Oral | [vggt-omega](https://github.com/facebookresearch/vggt-omega) arXiv:2605.15195 | SfM/init | CC BY-NC-4.0 | opt-in | **Experimental** preferred pose chain head | `vggt_omega`, `experimental_mode` |
+| 8 | MASt3R / DUSt3R | 2024 | naver dust3r/mast3r | SfM/init | CC BY-NC-SA | opt-in | **Experimental** pose + dense merge (not Standard) | `mast3r`, `dust3r`, `solver.rs` |
 | 9 | π³ / Pi3 | 2025 | [yyfz/Pi3](https://github.com/yyfz/Pi3) | SfM/init | CC BY-NC weights | rejected | Same | sidecars header comment |
 | 10 | GlueMap / feed-forward SfM glue | 2025–26 | [colmap/gluemap](https://github.com/colmap/gluemap) | SfM/init | mixed | deferred | Would wrap Pi3/VGGT; NC backbones | docs only |
 | 11 | InstantSplat | 2024 | InstantSplat repos | SfM/init | often NC/GS | deferred | Pose-free idea → VGGT sidecar instead | ROADMAP Phase 3 |
 | 12 | AnySplat | 2025 | feed-forward GS | densify/train | verify | deferred | Out of scope (feed-forward NVS product) | — |
-| 13 | Depth Anything V2 | 2024 | [Depth-Anything-V2](https://github.com/DepthAnything/Depth-Anything-V2) | densify/train | Apache-2.0 | wired-default-ON | Dense-init sidecar; **composed with MVS** | `depth_anything_v2`, `try_neural_points` |
+| 13 | Depth Anything V2 | 2024 | [Depth-Anything-V2](https://github.com/DepthAnything/Depth-Anything-V2) | densify/train | Apache-2.0 | wired-default-ON | Dense-init sidecar; **composed with MVS + RoMa** | `depth_anything_v2`, `try_neural_points` |
+| 13b | RoMa v2 densify | 2024–26 | [Parskatt/RoMaV2](https://github.com/Parskatt/RoMaV2) | densify/train | MIT (+ DINOv3 meta custom) | wired-default-ON | Lichtfeld-*recipe* clean-room sidecars; **not** GPL plugin | `roma-v2`, `try_roma_densify` |
+| 13c | Lichtfeld Densification Plugin | 2025 | [shadygm/Lichtfeld-Densification-Plugin](https://github.com/shadygm/Lichtfeld-Densification-Plugin) | densify/train | **GPL-3.0** | rejected (as vendor) | Recipe inspiration only — never copy sources | docs / roma-v2 README |
 | 14 | Dense sparse→Gaussian seed | our | — | densify/train | Apache-friendly | integrated | Always write `init.ply` | `dense.rs::points_to_gaussians` |
 | 15 | COLMAP patch-match MVS | COLMAP | colmap stereo | densify/train | BSD | wired-default-ON | After neural merge when CUDA | `densify_after_sfm` |
 | 16 | DashGaussian | CVPR 2025 | [DashGaussian](https://github.com/YouyuChen0207/DashGaussian) | densify/train | CC BY-NC-SA | wired-default-ON | **Reimplemented** progressive stages | `plan_stages`, `progressive_resolution` |
@@ -72,8 +74,9 @@ Columns: **Status** ∈ {integrated, wired-default-ON, opt-in, deferred, rejecte
 | 32 | GOF / PGSR / RaDe-GS | 2024 | various | mesh | Inria NC | rejected | Reference only | ROADMAP-V2 |
 | 33 | GS-2M | 2025 | ndming/GS-2M | mesh | MIT-leaning | deferred | PBR mesh later | ROADMAP Phase 4.4 |
 | 34 | MeshSplat / FatesGS | 2025 | awesome list | mesh | verify | deferred | Feed-forward mesh not core | — |
-| 35 | Difix3D+ | CVPR 2025 | [nv-tlabs/Difix3D](https://github.com/nv-tlabs/Difix3D) | post-process | research/gated | opt-in | Research path `difix` sidecar | `tools/sidecars/README.md` |
+| 35 | Difix3D+ | CVPR 2025 | [nv-tlabs/Difix3D](https://github.com/nv-tlabs/Difix3D) | post-process | research/gated | opt-in | **Experimental** polish before Fixer | `difix`, `polish_order` |
 | 36 | NVIDIA Fixer | 2025–26 | [HF nvidia/Fixer](https://huggingface.co/nvidia/Fixer) | post-process | NVIDIA Open Model (**commercial OK**) | wired-default-ON | When launcher installed | `post_polish`, `fixer` sidecar |
+| 46 | Dual-mode Experimental UI | 2026 | our | UX / policy | Apache-2.0 | integrated | TitleBar toggle, NC modal, banner, Max floors | `experimental_mode`, TitleBar |
 | 37 | GSFixer / GSFix3D | 2025 | [GVCLab/GSFixer](https://github.com/GVCLab/GSFixer) | post-process | Apache + GS NC + RAIL | rejected | Bundled GS license blocks commercial | RESEARCH-STACK |
 | 38 | on-the-fly-nvs | Inria | graphdeco | SfM/init | Inria NC | deferred | Algorithm → native live init | `sfm::run_incremental` |
 | 39 | CUT3R | 2024+ | — | SfM/init | CC BY-NC-SA | deferred | Architecture template only | ROADMAP-V2 2.2 |
@@ -100,7 +103,8 @@ Columns: **Status** ∈ {integrated, wired-default-ON, opt-in, deferred, rejecte
 | MCMC-style mean noise | Brush stock + `--mean-noise-weight` from `strictness` |
 | Dense init (MVS + sparse seed) | `pipeline/dense.rs::densify_after_sfm` |
 | Neural sidecars | `pipeline/sidecars.rs` |
-| Compose neural **and** MVS | `densify_after_sfm` merges clouds (v0.3.1+) |
+| Compose neural **and** MVS **and** RoMa | `densify_after_sfm` merges clouds (v0.5+) |
+| Dual-mode Experimental | `settings::experimental_mode`, `solver.rs` |
 | Live incremental SfM | `sfm/mod.rs::run_incremental` |
 | Mesh TSDF + cleanup + fallback | `mesh/mod.rs`, `tsdf.rs`, `raster.rs` |
 | Live lerp | `src/splat/worker.ts`, `renderer.ts` |
@@ -120,24 +124,35 @@ Columns: **Status** ∈ {integrated, wired-default-ON, opt-in, deferred, rejecte
 | SAM2 class masks | Sidecar not built |
 | Difix research distill loop | Heavy; Fixer launcher path only |
 | GLOMAP binary | Not downloaded/wired |
-| MASt3R / Pi3 | NC |
+| MASt3R / Pi3 | NC — Experimental stubs only (`tools/sidecars/mast3r`) |
 
 ---
 
-## Target composed pipeline (v0.3.1)
+## Target composed pipelines (v0.5 dual-mode)
+
+**Standard:**
 
 ```
-Video → frame gate (blur)
-  → [live init OR COLMAP]  (+ VGGT-Ω only if Research; else VGGT-commercial / COLMAP)
-  → Neural points (DAV2 and/or VGGT)  AND  COLMAP MVS  AND  sparse seed  → merged init.ply
-  → Brush train: progressive ∧ mip bake ∧ AbsGS opac/scale ∧ MCMC noise knobs
-  → [brush-custom] in-loop mip / SpotLess / appearance when binary present
-  → Fixer polish if installed (commercial NVIDIA Open Model); else Difix research opt-in
-  → Live PLY lerp viewport
-  → Mesh export: dense TSDF ∧ smooth ∧ island cull ∧ oriented-point fallback
+Video → frame gate
+  → VGGT-Commercial (primary) → optional COLMAP BA / COLMAP fallback
+  → RoMa v2 ∧ DAV2/VGGT-C ∧ COLMAP MVS ∧ sparse → merged init.ply
+  → gsplat or Brush (progressive ∧ mip ∧ AbsGS ∧ MCMC)
+  → Fixer polish if installed
+  → Live PLY lerp → Mesh
 ```
 
-All AND features default ON where license allows (`allow_research_sidecars` stays OFF).
+**Experimental (after license ack):**
+
+```
+Video → frame gate
+  → Ω → MASt3R → DUSt3R → VGGT-C → COLMAP
+  → Merge ALL densifiers (incl. RoMa precise)
+  → Difix → Fixer
+  → gsplat Max (all strategies) or Brush Max
+  → Live PLY lerp → Mesh
+```
+
+Standard AND features default ON where license allows (`experimental_mode` stays OFF).
 
 ---
 

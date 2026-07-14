@@ -35,6 +35,38 @@ function ThemeToggle() {
   );
 }
 
+function ExperimentalToggle() {
+  const settings = useStore((s) => s.settings);
+  const resolved = useStore((s) => s.resolved);
+  const requestExperimental = useStore((s) => s.requestExperimental);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const on = !!(resolved?.experimentalMode ?? settings.experimentalMode);
+
+  return (
+    <button
+      onClick={() => {
+        if (on) {
+          void updateSettings({ experimentalMode: false });
+        } else {
+          requestExperimental();
+        }
+      }}
+      className={`btn px-2.5 py-1 text-[11px] font-semibold tracking-wide ${
+        on
+          ? "border-danger/60 bg-danger/20 text-danger shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-danger)_35%,transparent)]"
+          : "text-ink-dim hover:text-ink"
+      }`}
+      title={
+        on
+          ? "Experimental Mode ON — NC research stack active"
+          : "Enable Experimental Mode (NC research models)"
+      }
+    >
+      {on ? "Experimental ON" : "Experimental"}
+    </button>
+  );
+}
+
 export default function TitleBar() {
   const screen = useStore((s) => s.screen);
   const stages = useStore((s) => s.stages);
@@ -82,6 +114,7 @@ export default function TitleBar() {
       </div>
 
       <div className="flex items-center gap-2">
+        <ExperimentalToggle />
         {screen === "processing" && (
           <>
             {running && (

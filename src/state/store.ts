@@ -92,6 +92,13 @@ interface AppStore {
   logs: LogLine[];
   /** Plain statements the pipeline made that are not failures. */
   notices: string[];
+  /** Status chips emitted by the pipeline (Cameras / Init / Polish / Trainer). */
+  pipelineChips: {
+    cameras?: string;
+    init?: string;
+    polish?: string;
+    trainer?: string;
+  };
   /** Cameras the live-init engine has solved, in registration order. */
   cameras: CameraRegistered[];
   registeredCameras: number;
@@ -108,6 +115,8 @@ interface AppStore {
   jobStartedAt: number;
   elapsedSecs: number | null;
   meshStatus: string | null;
+  /** First-enable Experimental Mode license modal. */
+  experimentalModalOpen: boolean;
 
   init: () => Promise<void>;
   setThemePreference: (p: ThemePreference) => void;
@@ -116,6 +125,9 @@ interface AppStore {
   toggleRightPanel: () => void;
   setLogConsoleOpen: (open: boolean) => void;
   updateSettings: (patch: Partial<Settings>) => Promise<void>;
+  requestExperimental: () => void;
+  acceptExperimental: () => Promise<void>;
+  declineExperimental: () => void;
   refreshProjects: () => Promise<void>;
   resumeProject: (workspace: string) => Promise<void>;
   deleteProjectEntry: (workspace: string) => Promise<void>;
@@ -171,6 +183,7 @@ export const useStore = create<AppStore>((set, get) => ({
   stages: freshStages(),
   logs: [],
   notices: [],
+  pipelineChips: {},
   cameras: [],
   registeredCameras: 0,
   totalCameras: 0,
@@ -185,6 +198,7 @@ export const useStore = create<AppStore>((set, get) => ({
   jobStartedAt: 0,
   elapsedSecs: null,
   meshStatus: null,
+  experimentalModalOpen: false,
 
   init: async () => {
     // React StrictMode double-invokes effects in dev; init exactly once.
@@ -229,6 +243,7 @@ export const useStore = create<AppStore>((set, get) => ({
           stages: freshStages(),
           logs: [],
           notices: [],
+          pipelineChips: {},
           cameras: [],
           jobStartedAt: Date.now(),
           jobSettingsSnapshot: get().resolved,
@@ -269,6 +284,28 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ resolved: await api.getResolvedSettings() });
   },
 
+  requestExperimental: () => {
+    const s = get().settings;
+    if (s.experimentalLicenseAcked) {
+      void get().updateSettings({ experimentalMode: true, allowResearchSidecars: true });
+      return;
+    }
+    set({ experimentalModalOpen: true });
+  },
+
+  acceptExperimental: async () => {
+    set({ experimentalModalOpen: false });
+    await get().updateSettings({
+      experimentalMode: true,
+      experimentalLicenseAcked: true,
+      allowResearchSidecars: true,
+    });
+  },
+
+  declineExperimental: () => {
+    set({ experimentalModalOpen: false });
+  },
+
   refreshProjects: async () => {
     try {
       const list = await api.listProjects();
@@ -287,6 +324,7 @@ export const useStore = create<AppStore>((set, get) => ({
       stages: freshStages(),
       logs: [],
       notices: [],
+      pipelineChips: {},
       cameras: [],
       registeredCameras: 0,
       totalCameras: 0,
@@ -328,6 +366,7 @@ export const useStore = create<AppStore>((set, get) => ({
       stages: freshStages(),
       logs: [],
       notices: [],
+      pipelineChips: {},
       cameras: [],
       registeredCameras: 0,
       totalCameras: 0,
@@ -409,6 +448,7 @@ export const useStore = create<AppStore>((set, get) => ({
       workspace: null,
       cameras: [],
       notices: [],
+      pipelineChips: {},
       meshStatus: null,
     });
     void get().refreshProjects();
@@ -444,7 +484,15 @@ export const useStore = create<AppStore>((set, get) => ({
         set((s) => ({ logs: [...s.logs.slice(-800), { time: Date.now(), line: e.line }] }));
         break;
       case "notice":
-        set((s) => ({ notices: [...s.notices, e.message] }));
+        set((s) => {
+          const chips = { ...s.pipelineChips };
+          const msg = e.message;
+          if (/^Cameras:/i.test(msg)) chips.cameras = msg;
+          else if (/^Init:/i.test(msg)) chips.init = msg;
+          else if (/^Polish:/i.test(msg)) chips.polish = msg;
+          else if (/^Trainer:/i.test(msg)) chips.trainer = msg;
+          return { notices: [...s.notices, msg], pipelineChips: chips };
+        });
         break;
       case "cameraRegistered":
         set((s) => ({

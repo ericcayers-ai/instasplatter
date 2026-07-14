@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import DropZone from "./components/DropZone";
 import Processing from "./components/Processing";
 import TitleBar from "./components/shell/TitleBar";
+import ExperimentalBanner from "./components/shell/ExperimentalBanner";
+import ExperimentalLicenseModal from "./components/shell/ExperimentalLicenseModal";
 import SceneTree from "./components/shell/SceneTree";
 import PropertiesPanel from "./components/shell/PropertiesPanel";
 import LogConsole from "./components/shell/LogConsole";
@@ -19,6 +21,7 @@ export default function App() {
   return (
     <div className="flex h-full w-full flex-col">
       <TitleBar />
+      <ExperimentalBanner />
       <div className="flex min-h-0 flex-1">
         <SceneTree />
         <main className="min-w-0 flex-1">{screen === "home" ? <DropZone /> : <Processing />}</main>
@@ -26,6 +29,7 @@ export default function App() {
       </div>
       <LogConsole />
       <StatusBar />
+      <ExperimentalLicenseModal />
     </div>
   );
 }

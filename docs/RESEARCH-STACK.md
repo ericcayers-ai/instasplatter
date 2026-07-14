@@ -1,100 +1,101 @@
-# Research stack (v0.3.1)
+# Research stack (v0.5.0) — dual mode
 
-Evidence-first inventory: **[PAPER-SWEEP-2024+.md](./PAPER-SWEEP-2024+.md)** (40+ entries, greppable status, license, integration points).
+Evidence-first inventory: **[PAPER-SWEEP-2024+.md](./PAPER-SWEEP-2024+.md)**.
 
-Post-2024 Gaussian Splatting and feed-forward SfM / mesh work evaluated for
-InstaSplatter. Policy: integrate what improves quality and is license-viable;
-special opt-in only for uncertain or NC-licensed paths. Prefer the **newest**
-viable release of each component. Features **compose (AND)**; they are not
-mutually exclusive "pick one model" toggles unless technically required.
+InstaSplatter runs as **two stacks** behind one Experimental Mode toggle.
 
-## Composed default pipeline
+| | **Standard Mode** (default) | **Experimental Mode** (license ack) |
+|---|---|---|
+| Intent | Best quality that stays commercially redistributable | Absolute max quality; personal/research; NC OK after ack |
+| Cameras | **VGGT-1B-Commercial first** → light COLMAP BA/fallback | **VGGT-Ω → MASt3R → DUSt3R → VGGT-C → COLMAP** |
+| Dense init | **RoMa v2 densify** ∧ DAV2 ∧ COLMAP MVS ∧ sparse/VGGT | Same **plus** Ω/MASt3R/DUSt3R pointmaps — merge everything |
+| Polish | NVIDIA Fixer when installed | **Difix then Fixer** |
+| Trainer | gsplat Auto on CUDA else Brush | Force gsplat Max + strategies; Brush Max if no gsplat |
+| Caps | Balanced→High floors when neural stack present | Force Max-tier frames/res/steps/splats |
+| UI | Quiet chrome | TitleBar Experimental ON + NC banner + solver chips |
+
+Weights / PyTorch sidecars stay **user-installed** under
+`%LOCALAPPDATA%/InstaSplatter/engines/sidecars/`. Base NSIS installer stays lean
+(COLMAP + Brush only).
+
+## Standard Mode pipeline
 
 ```
 Video → frame gate
-  → COLMAP (or live init)  + optional VGGT-Ω if Research ON
-  → Neural densify (DAV2 / VGGT-commercial) ∧ COLMAP MVS ∧ sparse seed → init.ply
-  → Brush: progressive ∧ mip bake ∧ AbsGS opac/scale L1 ∧ MCMC mean-noise knobs
-  → [brush-custom] in-loop mip / SpotLess / appearance when override binary present
-  → Fixer polish when installed (NVIDIA Open Model, commercial OK)
-  → Live PLY lerp viewport
-  → Mesh: dense TSDF ∧ smooth ∧ island cull ∧ oriented-point fallback
+  → VGGT-Commercial poses (if ACCEPTED) → optional COLMAP BA
+      else COLMAP SfM (or live-init → COLMAP)
+  → RoMa v2 densify ∧ DAV2/VGGT-C ∧ COLMAP MVS ∧ sparse → init.ply
+  → gsplat (CUDA) or Brush: progressive ∧ mip ∧ AbsGS opac/scale ∧ MCMC
+  → Fixer polish when installed
+  → Live PLY lerp viewport → Mesh export
 ```
+
+## Experimental Mode pipeline
+
+```
+Video → frame gate
+  → VGGT-Ω → MASt3R-SfM → DUSt3R → VGGT-C → COLMAP  (first usable success)
+  → Merge ALL densifiers (Ω/MASt3R/DUSt3R + RoMa precise + DAV2 + MVS + sparse)
+  → Difix then Fixer
+  → gsplat Max (MCMC+AbsGrad+AA+appearance+bilagrid) or Brush Max
+  → Live PLY lerp viewport → Mesh export
+```
+
+## License map (hard constraints)
+
+| Component | License | Standard | Experimental |
+|---|---|---|---|
+| VGGT-1B-Commercial | Meta AUP (commercial) | Primary SfM | Fallback in chain |
+| VGGT-Ω | CC BY-NC-4.0 | Never | Preferred SfM |
+| MASt3R / DUSt3R | CC BY-NC-SA | Never | Pose + dense merge |
+| RoMa v2 code | **MIT** ([Parskatt/RoMaV2](https://github.com/Parskatt/RoMaV2)) | Densify sidecar | Densify (`precise`) |
+| DINOv3 (RoMa backbone) | Meta custom — review for redistrib | User-install weights | Same |
+| Lichtfeld Densification Plugin | **GPL-3.0** | **Do not copy** — recipe only | Same |
+| Difix3D+ | Research/gated | Off | Preferred polish (then Fixer) |
+| NVIDIA Fixer | NVIDIA Open Model | ON when installed | ON when installed |
+| COLMAP / DAV2 / gsplat / Brush | BSD / Apache / Apache | ON | ON |
+
+Inspiration for densify behavior:
+[shadygm/Lichtfeld-Densification-Plugin](https://github.com/shadygm/Lichtfeld-Densification-Plugin)
+(RoMa matching, certainty/reproj/Sampson/parallax filters, reference-fraction +
+neighbors-per-ref). Our path is clean-room Apache-friendly orchestration + MIT RoMa APIs.
 
 ## Selected (shipped or wired)
 
 | Project | Version / note | License | Role | Default | Code proof |
 | --- | --- | --- | --- | --- | --- |
 | Brush | v0.3.0 CLI; `brush-custom` override | Apache-2.0 | Trainer (MCMC-style stock) | ON | `engines.rs::brush_exe` |
-| COLMAP | 4.1 patch-match MVS | BSD | SfM + dense init (composes with neural) | ON when CUDA | `dense.rs::densify_after_sfm` |
-| Dense sparse→Gaussian seed | our code | Apache-friendly | Always seed `init.ply` | ON | `points_to_gaussians` |
+| COLMAP | 4.1 patch-match MVS | BSD | SfM fallback + dense MVS | ON when CUDA | `dense.rs`, `colmap.rs` |
+| RoMa v2 densify | clean-room recipe | MIT densifier | Dense matches → init.ply | ON when installed | `roma-v2`, `try_roma_densify` |
 | Depth Anything V2 | Small / latest Apache | Apache-2.0 | Neural densify sidecar | ON when installed | `sidecars.rs` |
-| VGGT-1B-Commercial | Jul 2025 commercial CKPT | Meta AUP | Neural poses/pointmaps | ON when installed + ACCEPTED | `vggt-commercial` |
+| VGGT-1B-Commercial | Jul 2025 commercial CKPT | Meta AUP | Primary Standard poses | ON when installed + ACCEPTED | `try_neural_poses` |
 | DashGaussian-style progressive | reimplemented | — | Coarse→fine Brush stages | ON | `plan_stages` |
 | Mip-Splatting 3D filter | reimplemented (ref NC) | — | Stage-boundary + bake | ON | `mipfilter.rs` |
 | AbsGS-style opac/scale L1 | via Brush CLI knobs | — | Floater suppression | ON | `opac_loss_weight` |
-| 3DGS-MCMC knobs | Brush stock + noise weight | Inria ref NC | Mean noise / splat cap | ON | `mean_noise_weight`, `max_splats` |
-| 2DGS / DN-Splatter / AGS-Mesh | recipe only | Apache (DN/2DGS) | Denser TSDF, cleanup, fallback | ON | `mesh/mod.rs` |
-| NVIDIA Fixer | HF `nvidia/Fixer` | NVIDIA Open Model | Post-train polish sidecar | ON when installed | `post_polish`, `try_polish` |
+| NVIDIA Fixer | HF `nvidia/Fixer` | NVIDIA Open Model | Post-train polish | ON when installed | `try_polish` |
 | Live splat interpolation | our code | — | Lerp attrs between PLY exports | ON | `src/splat/worker.ts` |
 | Batch queue | our code | — | Serialize GPU jobs, UI queue | ON | queue / UI |
+| Experimental Mode UI | our code | — | Toggle + NC modal + banner | OFF | TitleBar / ExperimentalBanner |
 
-## Counts (maintain with PAPER-SWEEP)
-
-| Bucket | Count (approx.) |
-| --- | --- |
-| Inventories in PAPER-SWEEP | **45** |
-| wired-default-ON / integrated | **~22** |
-| opt-in (Research / special) | **~6** |
-| deferred (fork / later) | **~12** |
-| rejected | **~5** |
-
-## VGGT-Ω (VGGT-Omega) — newest, not default
+## VGGT-Ω / MASt3R / DUSt3R — Experimental only
 
 | Item | Detail |
 | --- | --- |
-| Paper | CVPR 2026 Oral, Meta + Oxford, arXiv:2605.15195 |
-| Code | https://github.com/facebookresearch/vggt-omega |
-| Hugging Face | `facebook/VGGT-Omega` (`vggt_omega_1b_512.pt` preferred) |
-| License | **CC BY-NC-4.0** (non-commercial) as of May 2026 |
-| Decision | **Research opt-in only** (`allowResearchSidecars`). Prefer over VGGT-1B-Commercial when research is enabled. |
-| Why not ON by default | No commercial Omega checkpoint yet. |
+| VGGT-Ω | CC BY-NC-4.0; preferred Experimental SfM (`vggt-omega`) |
+| MASt3R / DUSt3R | CC BY-NC-SA; Experimental pose + densify merge |
+| Gate | `experimentalMode` + `experimentalLicenseAcked` (forces `allowResearchSidecars`) |
+| Why not ON by default | NC licenses block commercial redistribution |
 
-## Rejected or special opt-in
+## Rejected for Standard (available Experimental where noted)
 
 | Project | License | Decision |
 | --- | --- | --- |
-| VGGT-1B (original NC) | CC BY-NC | Research opt-in only |
-| MASt3R / DUSt3R | CC BY-NC-SA | Not shipped |
+| VGGT-1B (original NC) | CC BY-NC | Experimental densify only |
+| MASt3R / DUSt3R | CC BY-NC-SA | Experimental only |
 | π³ / Pi3 weights | CC BY-NC (code BSD) | Not shipped |
-| SuGaR | mixed / GS-license adjacent | Algorithm reference; oriented-point fallback is our own |
-| GOF / PGSR / RaDe-GS | often Inria NC | Reference only |
-| Difix3D+ research weights | research / gated | Research sidecar `difix` (prefer Fixer for commercial) |
+| Lichtfeld densify plugin | GPL-3.0 | Recipe reimplementation only — **never vendor** |
+| Difix3D+ research weights | research / gated | Experimental polish |
 | GSFixer / GSFix3D | Apache + **GS NC** + RAIL++ | Deferred / rejected for commercial bundling |
-| CityGaussian / FlashSplat | NC / wrong task | Skip |
-| SAM2 masks | Apache | Sidecar later (SpotLess path) |
-
-## Mesh overhaul
-
-| Change | Source inspiration | License stance |
-| --- | --- | --- |
-| Default resolution 768, render 1024 | 2DGS / AGS-Mesh | our code |
-| Depth confidence floor (α≥0.62) | DN-Splatter | our code |
-| Laplacian smooth + island cull | standard cleanup | our code |
-| Oriented-point TSDF rebuild fallback | DN-Splatter / AGS-Mesh | recipe only |
-| Quality presets draft / high / max | — | our code |
-| UV atlas | — | still deferred |
-| Full screened Poisson | — | deferred |
-
-## Brush fork path
-
-Stock Brush remains the default download. Drop a custom build at
-`%LOCALAPPDATA%/InstaSplatter/engines/brush-custom/brush_app.exe` to override
-(auto-detected; see engine status `brushCustom`).
-
-See `tools/brush-fork/README.md` and `tools/brush-fork/patches/` for AbsGS densify,
-true in-loop mip, MCMC relocate, appearance embeddings, SpotLess masks, and
-FastGS-style budgeted densify.
 
 ## Sidecar install
 
@@ -102,36 +103,24 @@ See `tools/sidecars/README.md`. Base app never depends on PyTorch.
 
 | Folder | When used |
 | --- | --- |
-| `depth-anything-v2` | Default neural densify (Apache) |
-| `vggt-commercial` (+ `ACCEPTED`) | Default neural SfM densify |
-| `vggt-omega` | Research ON only |
-| `fixer` | Default polish when present (NVIDIA Open Model) |
-| `difix` | Research ON only |
-| `gsplat-train` | **Default trainer on NVIDIA** when installed (Apache-2.0) |
+| `roma-v2` | Standard densify (MIT); Experimental too (`precise`) |
+| `depth-anything-v2` | Neural densify (Apache) |
+| `vggt-commercial` (+ `ACCEPTED`) | Standard primary poses + densify |
+| `vggt-omega` / `mast3r` / `dust3r` | Experimental only |
+| `fixer` | Default polish when present |
+| `difix` | Experimental polish (before Fixer) |
+| `gsplat-train` | Default trainer on NVIDIA when installed |
 
 ## gsplat parity (nerfstudio-project/gsplat, Apache-2.0)
 
-Audited against `_refs/gsplat` main (2026-07-14 clone). Second engine path:
-`pipeline/gsplat.rs` + `tools/sidecars/gsplat-train/`.
-
 | gsplat feature | InstaSplatter status |
 | --- | --- |
-| CUDA rasterization library | Via `gsplat-train` sidecar (not vendored into installer) |
-| `simple_trainer` default strategy | Wired as `gsplatStrategy=default` |
-| AbsGrad densify (`DefaultStrategy.absgrad`) | **ON** by default when strategy=default |
-| MCMC densify (`MCMCStrategy`) | **ON** default strategy (`mcmc`) |
-| Antialiased / mip raster (`rasterize_mode=antialiased`) | **ON** (`gsplatAntialiased`) |
-| Opacity / scale regularizers | Mapped from AbsGS-style strictness losses |
-| Appearance embeddings (`app_opt`) | **ON** when full `simple_trainer` available |
-| Bilateral grid post-process | **ON** (`gsplatBilateralGrid`); needs bilagrid dep |
-| PPISP alternative | Research/extra dep; pass `postProcessing=ppisp` via full trainer |
-| Sparse Adam / visible Adam | Deferred (experimental in gsplat) |
-| Packed raster | Deferred (memory mode) |
-| 3DGUT (`with_ut` + `with_eval3d`) | Deferred (MCMC-only path; nvidia/eval focused) |
-| 2DGS trainer (`simple_trainer_2dgs`) | Deferred; mesh recipe already uses 2DGS-style TSDF |
-| HiGS inference render | Deferred (viewer-side) |
-| PNG compression / SOG export | Deferred |
-| LiDAR / NCore / surgical dynamic | Out of scope |
-| Brush progressive + mip bake + live lerp | Kept on Brush path; still compose with dense init |
+| CUDA rasterization library | Via `gsplat-train` sidecar |
+| MCMC densify | **ON** default strategy |
+| AbsGrad densify | **ON** when strategy=default |
+| Antialiased / mip raster | **ON** |
+| Appearance embeddings | **ON** when full trainer available |
+| Bilateral grid | **ON** |
 
-**Trainer Auto:** CUDA + `gsplat-train` installed → gsplat; else Brush (portable).
+**Trainer Auto:** CUDA + `gsplat-train` → gsplat; else Brush.
+Experimental forces Max floors and prefers gsplat with all strategies ON.

@@ -104,7 +104,11 @@ pub struct EngineStatus {
     pub depth_anything_v2: bool,
     pub vggt_commercial: bool,
     pub vggt_omega: bool,
+    pub mast3r: bool,
+    pub dust3r: bool,
+    pub roma_v2: bool,
     pub fixer: bool,
+    pub difix: bool,
     pub gsplat: bool,
 }
 
@@ -118,7 +122,11 @@ pub fn status() -> EngineStatus {
         depth_anything_v2: sc.depth_anything_v2,
         vggt_commercial: sc.vggt_commercial,
         vggt_omega: sc.vggt_omega,
+        mast3r: sc.mast3r,
+        dust3r: sc.dust3r,
+        roma_v2: sc.roma_v2,
         fixer: sc.fixer,
+        difix: sc.difix,
         gsplat: crate::pipeline::gsplat::is_installed(),
     }
 }

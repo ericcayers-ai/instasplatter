@@ -1,9 +1,10 @@
 //! Dense geometry bootstrap after sparse SfM.
 //!
 //! Needle / empty-cloud failures usually start from a sparse COLMAP point
-//! cloud that is too thin for Brush to densify into solid surfaces. v0.3.1
-//! **composes** neural densifiers (DAV2 / VGGT) with COLMAP patch-match MVS
-//! and the sparse cloud into one `init.ply` (AND, not pick-one).
+//! cloud that is too thin for Brush to densify into solid surfaces. v0.5
+//! **composes** RoMa v2 ∧ neural densifiers (DAV2 / VGGT / Experimental NC)
+//! with COLMAP patch-match MVS and the sparse cloud into one `init.ply`
+//! (AND, not pick-one / early-return).
 //!
 //! Neural densifiers land in [`super::sidecars`] when their binaries are present.
 
@@ -266,24 +267,31 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
 
     let mut xyz: Vec<[f32; 3]> = Vec::new();
     let mut rgb: Vec<[u8; 3]> = Vec::new();
-    let mut labels: Vec<&str> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
 
-    // 1) Neural densifier (DAV2 / VGGT) — points only; we merge below.
+    // 1) RoMa v2 densify (Lichtfeld-style recipe) — compose, never early-return.
+    if let Some((rx, rr)) = super::sidecars::try_roma_densify(ctx, images_dir).await? {
+        xyz.extend(rx);
+        rgb.extend(rr);
+        labels.push("RoMa".into());
+    }
+
+    // 2) Neural densifiers (DAV2 / VGGT / Experimental NC merge-all).
     if let Some((nx, nr, name)) = super::sidecars::try_neural_points(ctx, images_dir).await? {
         ctx.log(format!("Neural dense init ({name}): {} points (will merge).", nx.len()));
         xyz.extend(nx);
         rgb.extend(nr);
-        labels.push("neural");
+        labels.push(name);
     }
 
-    // 2) COLMAP patch-match MVS when CUDA COLMAP is available.
+    // 3) COLMAP patch-match MVS when CUDA COLMAP is available.
     if ctx.settings.sift_gpu {
         match run_mvs_fused(ctx, images_dir, &model_dir, &model).await {
             Ok(Some((mx, mr))) => {
                 ctx.log(format!("COLMAP MVS: {} fused points (will merge).", mx.len()));
                 xyz.extend(mx);
                 rgb.extend(mr);
-                labels.push("MVS");
+                labels.push("MVS".into());
             }
             Ok(None) => {}
             Err(e) => {
@@ -296,13 +304,13 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
         );
     }
 
-    // 3) Always merge high-confidence sparse points (thin structures).
+    // 4) Always merge high-confidence sparse / VGGT points (thin structures).
     let (sx, sr) = filter_sparse_points(&model.points);
     let sparse_n = sx.len();
     xyz.extend(sx);
     rgb.extend(sr);
     if sparse_n > 0 {
-        labels.push("sparse");
+        labels.push("sparse".into());
     }
 
     if xyz.len() < 32 {
@@ -315,8 +323,17 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
     } else {
         labels.join("+")
     };
+    ctx.notice(format!("Init: {label}"));
     write_init_from_points(ctx, xyz, rgb, &label)?;
-    Ok(labels.iter().any(|l| *l == "neural" || *l == "MVS"))
+    Ok(labels.iter().any(|l| {
+        l == "RoMa"
+            || l == "MVS"
+            || l.contains("vggt")
+            || l.contains("depth")
+            || l.contains("mast3r")
+            || l.contains("dust3r")
+            || l.contains('+') // multi-source neural merge label
+    }))
 }
 
 /// Run undistort → patch-match → fusion. Returns fused XYZRGB or None.
@@ -447,5 +464,17 @@ mod tests {
         assert_eq!(x.len(), 10);
         assert_eq!(x[0][0], 0.0);
         assert!(x.last().unwrap()[0] >= 90.0);
+    }
+
+    #[test]
+    fn subsample_compose_preserves_multiple_sources() {
+        let mut xyz: Vec<[f32; 3]> = (0..100).map(|i| [i as f32, 0.0, 0.0]).collect();
+        let mut rgb = vec![[10u8, 10, 10]; 100];
+        xyz.extend((0..50).map(|i| [0.0, i as f32, 1.0]));
+        rgb.extend(vec![[20u8, 20, 20]; 50]);
+        let (x, r) = subsample(xyz, rgb, 80);
+        assert_eq!(x.len(), 80);
+        assert_eq!(r.len(), 80);
+        assert_eq!(x[0][0], 0.0);
     }
 }

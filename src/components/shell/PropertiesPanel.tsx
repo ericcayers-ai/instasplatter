@@ -155,6 +155,7 @@ export default function PropertiesPanel() {
                 strictness: null, keepIntermediates: null,
                 progressiveResolution: null, mipFilter: null, liveInit: null,
                 denseInit: null, useNeuralInit: null, allowResearchSidecars: null,
+                experimentalMode: null, experimentalLicenseAcked: null,
                 postPolish: null, trainer: null, gsplatStrategy: null,
                 gsplatAbsgrad: null, gsplatAntialiased: null,
                 gsplatAppearance: null, gsplatBilateralGrid: null,
@@ -192,6 +193,33 @@ export default function PropertiesPanel() {
           );
         })}
       </div>
+
+      <Section title="Mode">
+        <Row
+          label="Experimental Mode"
+          hint="NC research stack (VGGT-Ω, MASt3R, DUSt3R, Difix). Requires a one-time license ack. Prefer the TitleBar toggle."
+        >
+          <BoolSelect
+            value={settings.experimentalMode}
+            onChange={(v) => {
+              if (v === true) {
+                useStore.getState().requestExperimental();
+              } else {
+                set({ experimentalMode: false });
+              }
+            }}
+          />
+        </Row>
+        <Row
+          label="Research sidecars"
+          hint="Forced ON when Experimental is active. Standalone opt-in for NC densify/polish without Max floors."
+        >
+          <BoolSelect
+            value={settings.allowResearchSidecars}
+            onChange={(v) => set({ allowResearchSidecars: v })}
+          />
+        </Row>
+      </Section>
 
       <Section title="Input">
         <Row label="Max frames" hint="Frames used for reconstruction">
@@ -298,19 +326,13 @@ export default function PropertiesPanel() {
         </Row>
         <Row
           label="Neural densifiers"
-          hint="AND with MVS when present (DAV2 / VGGT-Commercial). Research ON prefers VGGT-Ω."
+          hint="AND with MVS / RoMa when present (DAV2 / VGGT-Commercial). Experimental merges Ω / MASt3R / DUSt3R too."
         >
           <BoolSelect value={settings.useNeuralInit} onChange={(v) => set({ useNeuralInit: v })} />
         </Row>
         <Row
-          label="Research sidecars"
-          hint="Allow non-commercial VGGT-Ω / Difix. Off by default; licensing risk."
-        >
-          <BoolSelect value={settings.allowResearchSidecars} onChange={(v) => set({ allowResearchSidecars: v })} />
-        </Row>
-        <Row
           label="Post polish"
-          hint="Run NVIDIA Fixer after training when installed (commercial Open Model). Difix only with Research ON."
+          hint="NVIDIA Fixer when installed. Experimental also runs Difix first when present."
         >
           <BoolSelect value={settings.postPolish} onChange={(v) => set({ postPolish: v })} />
         </Row>
