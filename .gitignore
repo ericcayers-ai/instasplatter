@@ -5,3 +5,8 @@ src-tauri/gen/schemas
 *.local
 .DS_Store
 target/
+_refs/
+graphify-out/
+release-out/
+.graphify_hook_installed
+.graphifyignore

@@ -313,7 +313,7 @@ async fn start_one(
         return Err("Input path does not exist.".into());
     }
     let st = engines::status();
-    if !st.colmap || !st.brush {
+    if !st.colmap || !(st.brush || st.gsplat) {
         return Err("__engines_missing__".into());
     }
     if !st.ffmpeg && input.is_file() {

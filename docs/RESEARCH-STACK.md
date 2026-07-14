@@ -107,3 +107,31 @@ See `tools/sidecars/README.md`. Base app never depends on PyTorch.
 | `vggt-omega` | Research ON only |
 | `fixer` | Default polish when present (NVIDIA Open Model) |
 | `difix` | Research ON only |
+| `gsplat-train` | **Default trainer on NVIDIA** when installed (Apache-2.0) |
+
+## gsplat parity (nerfstudio-project/gsplat, Apache-2.0)
+
+Audited against `_refs/gsplat` main (2026-07-14 clone). Second engine path:
+`pipeline/gsplat.rs` + `tools/sidecars/gsplat-train/`.
+
+| gsplat feature | InstaSplatter status |
+| --- | --- |
+| CUDA rasterization library | Via `gsplat-train` sidecar (not vendored into installer) |
+| `simple_trainer` default strategy | Wired as `gsplatStrategy=default` |
+| AbsGrad densify (`DefaultStrategy.absgrad`) | **ON** by default when strategy=default |
+| MCMC densify (`MCMCStrategy`) | **ON** default strategy (`mcmc`) |
+| Antialiased / mip raster (`rasterize_mode=antialiased`) | **ON** (`gsplatAntialiased`) |
+| Opacity / scale regularizers | Mapped from AbsGS-style strictness losses |
+| Appearance embeddings (`app_opt`) | **ON** when full `simple_trainer` available |
+| Bilateral grid post-process | **ON** (`gsplatBilateralGrid`); needs bilagrid dep |
+| PPISP alternative | Research/extra dep; pass `postProcessing=ppisp` via full trainer |
+| Sparse Adam / visible Adam | Deferred (experimental in gsplat) |
+| Packed raster | Deferred (memory mode) |
+| 3DGUT (`with_ut` + `with_eval3d`) | Deferred (MCMC-only path; nvidia/eval focused) |
+| 2DGS trainer (`simple_trainer_2dgs`) | Deferred; mesh recipe already uses 2DGS-style TSDF |
+| HiGS inference render | Deferred (viewer-side) |
+| PNG compression / SOG export | Deferred |
+| LiDAR / NCore / surgical dynamic | Out of scope |
+| Brush progressive + mip bake + live lerp | Kept on Brush path; still compose with dense init |
+
+**Trainer Auto:** CUDA + `gsplat-train` installed → gsplat; else Brush (portable).

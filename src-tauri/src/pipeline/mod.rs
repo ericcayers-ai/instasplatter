@@ -10,6 +10,7 @@ pub mod brush;
 pub mod colmap;
 pub mod dense;
 pub mod gating;
+pub mod gsplat;
 pub mod ingest;
 pub mod sidecars;
 
@@ -241,7 +242,7 @@ pub async fn run_job(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
     ctx.update_project(|p| p.sparse_dir = Some(sparse.to_string_lossy().into_owned()));
 
     ctx.stage_started("train", "Training splats");
-    let final_ply = brush::train(ctx, None).await?;
+    let final_ply = train_with_engine(ctx, None).await?;
     ctx.check_cancel()?;
 
     finalize(ctx, &final_ply, started).await
@@ -257,10 +258,25 @@ pub async fn resume_job(ctx: &JobCtx, checkpoint: PathBuf, start_iter: u32) -> R
     ctx.stage_progress("sfm", 1.0, "Cameras already solved");
 
     ctx.stage_started("train", "Training splats");
-    let final_ply = brush::train(ctx, Some((checkpoint, start_iter))).await?;
+    let final_ply = train_with_engine(ctx, Some((checkpoint, start_iter))).await?;
     ctx.check_cancel()?;
 
     finalize(ctx, &final_ply, started).await
+}
+
+async fn train_with_engine(
+    ctx: &JobCtx,
+    resume: Option<(PathBuf, u32)>,
+) -> Result<PathBuf, String> {
+    match ctx.settings.trainer.as_str() {
+        "gsplat" => gsplat::train(ctx, resume).await,
+        "brush" => brush::train(ctx, resume).await,
+        // "auto" already resolved in settings::resolve
+        other => {
+            ctx.notice(format!("Unknown trainer '{other}', using Brush."));
+            brush::train(ctx, resume).await
+        }
+    }
 }
 
 async fn finalize(

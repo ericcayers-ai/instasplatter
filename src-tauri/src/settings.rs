@@ -59,6 +59,14 @@ pub struct Settings {
     /// Run NVIDIA Fixer / Difix polish after training when a launcher is installed.
     /// Default ON (no-op until Fixer is present).
     pub post_polish: Option<bool>,
+    /// Trainer: "auto" | "brush" | "gsplat". Auto prefers gsplat on CUDA when installed.
+    pub trainer: Option<String>,
+    /// gsplat densify strategy: "mcmc" | "default" (AbsGrad when absgrad on).
+    pub gsplat_strategy: Option<String>,
+    pub gsplat_absgrad: Option<bool>,
+    pub gsplat_antialiased: Option<bool>,
+    pub gsplat_appearance: Option<bool>,
+    pub gsplat_bilateral_grid: Option<bool>,
 
     // ---- Cleanliness / robustness ----
     /// 0 (Detailed) .. 1 (Clean). Scales floater-suppression losses & noise.
@@ -111,6 +119,13 @@ pub struct ResolvedSettings {
     pub use_neural_init: bool,
     pub allow_research_sidecars: bool,
     pub post_polish: bool,
+    /// Resolved trainer engine: "brush" or "gsplat".
+    pub trainer: String,
+    pub gsplat_strategy: String,
+    pub gsplat_absgrad: bool,
+    pub gsplat_antialiased: bool,
+    pub gsplat_appearance: bool,
+    pub gsplat_bilateral_grid: bool,
     pub strictness: f32,
     pub export_format: String,
     pub keep_intermediates: bool,
@@ -156,6 +171,16 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         use_neural_init: settings.use_neural_init.unwrap_or(true),
         allow_research_sidecars: settings.allow_research_sidecars.unwrap_or(false),
         post_polish: settings.post_polish.unwrap_or(true),
+        trainer: resolve_trainer(settings, profile),
+        gsplat_strategy: settings
+            .gsplat_strategy
+            .clone()
+            .filter(|s| s == "mcmc" || s == "default")
+            .unwrap_or_else(|| "mcmc".into()),
+        gsplat_absgrad: settings.gsplat_absgrad.unwrap_or(true),
+        gsplat_antialiased: settings.gsplat_antialiased.unwrap_or(true),
+        gsplat_appearance: settings.gsplat_appearance.unwrap_or(true),
+        gsplat_bilateral_grid: settings.gsplat_bilateral_grid.unwrap_or(true),
         strictness,
         export_format: settings
             .export_format
@@ -168,6 +193,27 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         opac_loss_weight: scale(2e-8),
         scale_loss_weight: scale(2e-7),
         mean_noise_weight: 45.0 * (0.5 + strictness as f64),
+    }
+}
+
+fn resolve_trainer(settings: &Settings, profile: &HardwareProfile) -> String {
+    match settings.trainer.as_deref() {
+        Some("brush") => "brush".into(),
+        Some("gsplat") => {
+            if crate::pipeline::gsplat::is_installed() {
+                "gsplat".into()
+            } else {
+                "brush".into()
+            }
+        }
+        _ => {
+            // Auto: NVIDIA + CUDA + installed gsplat-train → gsplat; else Brush.
+            if profile.has_cuda && crate::pipeline::gsplat::is_installed() {
+                "gsplat".into()
+            } else {
+                "brush".into()
+            }
+        }
     }
 }
 
@@ -202,6 +248,10 @@ mod tests {
         assert!(r.use_neural_init);
         assert!(!r.allow_research_sidecars);
         assert!(r.post_polish);
+        assert_eq!(r.trainer, "brush"); // test profile has CUDA but no gsplat sidecar in CI
+        assert_eq!(r.gsplat_strategy, "mcmc");
+        assert!(r.gsplat_absgrad);
+        assert!(r.gsplat_antialiased);
         assert!(!r.live_init);
         assert!((r.blur_reject_fraction - 0.08).abs() < 1e-6);
     }

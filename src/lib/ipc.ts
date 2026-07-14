@@ -50,6 +50,13 @@ export interface Settings {
   allowResearchSidecars?: boolean | null;
   /** Run NVIDIA Fixer (or Difix if Research ON) after train when installed. Default ON. */
   postPolish?: boolean | null;
+  /** Trainer: auto | brush | gsplat. Auto prefers gsplat on CUDA when installed. */
+  trainer?: string | null;
+  gsplatStrategy?: string | null;
+  gsplatAbsgrad?: boolean | null;
+  gsplatAntialiased?: boolean | null;
+  gsplatAppearance?: boolean | null;
+  gsplatBilateralGrid?: boolean | null;
   exportFormat?: string | null;
 }
 
@@ -75,6 +82,12 @@ export interface ResolvedSettings {
   useNeuralInit: boolean;
   allowResearchSidecars: boolean;
   postPolish: boolean;
+  trainer: string;
+  gsplatStrategy: string;
+  gsplatAbsgrad: boolean;
+  gsplatAntialiased: boolean;
+  gsplatAppearance: boolean;
+  gsplatBilateralGrid: boolean;
   exportFormat: string;
 }
 
@@ -87,6 +100,7 @@ export interface EngineStatus {
   vggtCommercial: boolean;
   vggtOmega: boolean;
   fixer: boolean;
+  gsplat: boolean;
 }
 
 /** A camera solved by the live-init engine, ready to draw as a frustum. */

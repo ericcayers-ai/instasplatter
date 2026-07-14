@@ -152,3 +152,13 @@ All AND features default ON where license allows (`allow_research_sidecars` stay
 | Repo grep | Symbols listed in columns above |
 
 Companion: [RESEARCH-STACK.md](./RESEARCH-STACK.md) (ship policy + status summary).
+
+## Addendum — gsplat audit (2026-07-14)
+
+Cloned `https://github.com/nerfstudio-project/gsplat` (Apache-2.0) into
+`_refs/gsplat` (gitignored). Features mapped into:
+- sidecar `tools/sidecars/gsplat-train/` (`run.py`, `train_mini.py`)
+- Rust `pipeline/gsplat.rs`
+- settings `trainer` / `gsplat_*` (compose ON)
+
+See RESEARCH-STACK **gsplat parity** table for row-by-row status.

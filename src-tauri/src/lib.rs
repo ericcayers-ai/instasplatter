@@ -159,7 +159,7 @@ async fn start_job(
 
     // Engines must be present before we start.
     let st = engines::status();
-    if !st.colmap || !st.brush {
+    if !st.colmap || !(st.brush || st.gsplat) {
         return Err("__engines_missing__".into());
     }
     if !st.ffmpeg && input.is_file() {
@@ -224,7 +224,7 @@ async fn resume_project(
         return Err("This project cannot be resumed.".into());
     }
     let st = engines::status();
-    if !st.brush {
+    if !(st.brush || st.gsplat) {
         return Err("__engines_missing__".into());
     }
 
@@ -661,7 +661,7 @@ fn export_diagnostics(
     out.push_str("## Engines\n");
     let st = engines::status();
     out.push_str(&format!(
-        "colmap: {}, brush: {}{}, ffmpeg: {}, dav2: {}, vggt-commercial: {}, vggt-omega: {}, fixer: {}\n\n",
+        "colmap: {}, brush: {}{}, ffmpeg: {}, dav2: {}, vggt-commercial: {}, vggt-omega: {}, fixer: {}, gsplat: {}\n\n",
         st.colmap,
         st.brush,
         if st.brush_custom { " (custom)" } else { "" },
@@ -669,7 +669,8 @@ fn export_diagnostics(
         st.depth_anything_v2,
         st.vggt_commercial,
         st.vggt_omega,
-        st.fixer
+        st.fixer,
+        st.gsplat
     ));
 
     out.push_str("## Settings\n");

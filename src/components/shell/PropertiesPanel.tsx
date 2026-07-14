@@ -155,7 +155,9 @@ export default function PropertiesPanel() {
                 strictness: null, keepIntermediates: null,
                 progressiveResolution: null, mipFilter: null, liveInit: null,
                 denseInit: null, useNeuralInit: null, allowResearchSidecars: null,
-                postPolish: null,
+                postPolish: null, trainer: null, gsplatStrategy: null,
+                gsplatAbsgrad: null, gsplatAntialiased: null,
+                gsplatAppearance: null, gsplatBilateralGrid: null,
                 exportFormat: null,
               })
             }
@@ -240,6 +242,41 @@ export default function PropertiesPanel() {
         </Row>
         <Row label="SSIM weight" hint="Structural vs. photometric loss balance">
           <AutoNumber value={settings.ssimWeight} autoValue={resolved?.ssimWeight} min={0} max={1} step={0.05} onChange={(v) => set({ ssimWeight: v })} />
+        </Row>
+        <Row
+          label="Trainer"
+          hint="Auto uses gsplat (CUDA) when the gsplat-train sidecar is installed; otherwise Brush (portable)."
+        >
+          <AutoSelect
+            value={settings.trainer ?? null}
+            options={[
+              { id: "brush", label: "Brush (wgpu)" },
+              { id: "gsplat", label: "gsplat (CUDA)" },
+            ]}
+            onChange={(v) => set({ trainer: v })}
+          />
+        </Row>
+        <Row
+          label="gsplat strategy"
+          hint="MCMC densify (default) or Default+AbsGrad. Only used when training with gsplat."
+        >
+          <AutoSelect
+            value={settings.gsplatStrategy ?? null}
+            options={[
+              { id: "mcmc", label: "MCMC" },
+              { id: "default", label: "Default + AbsGrad" },
+            ]}
+            onChange={(v) => set({ gsplatStrategy: v })}
+          />
+        </Row>
+        <Row label="gsplat antialiased" hint="In-loop mip-style AA (gsplat rasterize_mode). On by default.">
+          <BoolSelect value={settings.gsplatAntialiased} onChange={(v) => set({ gsplatAntialiased: v })} />
+        </Row>
+        <Row label="gsplat appearance" hint="Per-image appearance embeddings when using full simple_trainer. On by default.">
+          <BoolSelect value={settings.gsplatAppearance} onChange={(v) => set({ gsplatAppearance: v })} />
+        </Row>
+        <Row label="gsplat bilateral grid" hint="View-dependent color correction (bilagrid / PPISP path). On by default.">
+          <BoolSelect value={settings.gsplatBilateralGrid} onChange={(v) => set({ gsplatBilateralGrid: v })} />
         </Row>
         <Row
           label="Progressive resolution"

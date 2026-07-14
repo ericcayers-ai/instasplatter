@@ -105,6 +105,7 @@ pub struct EngineStatus {
     pub vggt_commercial: bool,
     pub vggt_omega: bool,
     pub fixer: bool,
+    pub gsplat: bool,
 }
 
 pub fn status() -> EngineStatus {
@@ -118,6 +119,7 @@ pub fn status() -> EngineStatus {
         vggt_commercial: sc.vggt_commercial,
         vggt_omega: sc.vggt_omega,
         fixer: sc.fixer,
+        gsplat: crate::pipeline::gsplat::is_installed(),
     }
 }
 
