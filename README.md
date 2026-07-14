@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.5.0-green)
+![Status](https://img.shields.io/badge/status-v0.5.1-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -17,7 +17,7 @@
 
 ---
 
-> **v0.5.0** is the dual-mode quality overhaul: **Standard Mode** is VGGT-Commercial-first with RoMa v2 densify (Lichtfeld-style recipe, not the GPL plugin) composed with DAV2/MVS; **Experimental Mode** is a TitleBar master toggle (NC license ack) unlocking Ω → MASt3R → DUSt3R, merge-all densify, Difix+Fixer, and Max floors. Research and license notes live in **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.5.1** patches the dual-mode quality overhaul: **Standard Mode** stays VGGT-Commercial-first with RoMa v2 densify (Lichtfeld-style recipe, not the GPL plugin) composed with DAV2/MVS; **Experimental Mode** is a TitleBar master toggle (NC license ack) unlocking Ω → MASt3R → DUSt3R, merge-all densify, Difix+Fixer, and Max floors. Research and license notes live in **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 

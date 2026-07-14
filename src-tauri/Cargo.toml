@@ -1,6 +1,6 @@
 [package]
 name = "instasplatter"
-version = "0.5.0"
+version = "0.5.1"
 description = "Drag-and-drop live Gaussian Splat reconstruction"
 authors = ["Eric Ayers"]
 edition = "2021"

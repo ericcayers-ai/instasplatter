@@ -207,4 +207,25 @@ mod tests {
         st.difix = true;
         assert_eq!(polish_order(&r, &st), vec!["difix", "fixer"]);
     }
+
+    #[test]
+    fn standard_densify_excludes_nc_even_when_installed() {
+        let s = Settings {
+            allow_research_sidecars: Some(true),
+            experimental_mode: Some(false),
+            ..Default::default()
+        };
+        let r = resolve(&s, &profile());
+        let mut st = empty_st();
+        st.vggt_omega = true;
+        st.mast3r = true;
+        st.dust3r = true;
+        st.vggt_commercial = true;
+        st.depth_anything_v2 = true;
+        assert_eq!(
+            densify_neural_order(&r, &st),
+            vec!["vggt-commercial", "depth-anything-v2"]
+        );
+        assert!(!r.allow_research_sidecars);
+    }
 }

@@ -200,25 +200,29 @@ export default function PropertiesPanel() {
           hint="NC research stack (VGGT-Ω, MASt3R, DUSt3R, Difix). Requires a one-time license ack. Prefer the TitleBar toggle."
         >
           <BoolSelect
-            value={settings.experimentalMode}
+            value={
+              resolved
+                ? resolved.experimentalMode
+                : settings.experimentalMode === true && settings.experimentalLicenseAcked === true
+                  ? true
+                  : settings.experimentalMode === false
+                    ? false
+                    : null
+            }
             onChange={(v) => {
               if (v === true) {
                 useStore.getState().requestExperimental();
               } else {
-                set({ experimentalMode: false });
+                set({ experimentalMode: false, allowResearchSidecars: false });
               }
             }}
           />
         </Row>
-        <Row
-          label="Research sidecars"
-          hint="Forced ON when Experimental is active. Standalone opt-in for NC densify/polish without Max floors."
-        >
-          <BoolSelect
-            value={settings.allowResearchSidecars}
-            onChange={(v) => set({ allowResearchSidecars: v })}
-          />
-        </Row>
+        {resolved?.experimentalMode && (
+          <div className="px-0 py-2 text-[10px] text-danger/90">
+            Research sidecars are unlocked for this session. Standard Mode never runs NC models.
+          </div>
+        )}
       </Section>
 
       <Section title="Input">

@@ -7,6 +7,7 @@ reprojection / Sampson / parallax). Does **not** vendor GPL Lichtfeld plugin
 code — only MIT RoMaV2 APIs when installed.
 
 Protocol: JSON on stdin → print absolute PLY path on stdout.
+Fails clearly when RoMa/weights/poses are missing — never invents points.
 """
 
 from __future__ import annotations
@@ -21,8 +22,6 @@ from pathlib import Path
 # Lichtfeld-recipe default thresholds (reimplemented; not copied from GPL sources).
 MIN_CERTAINTY = 0.5
 MAX_REPROJ_PX = 2.0
-MAX_SAMPSON = 5e-4
-MIN_PARALLAX_DEG = 1.0
 
 
 def read_request() -> dict:
@@ -48,7 +47,7 @@ def write_xyzrgb_ply(path: Path, xyz, rgb) -> None:
 
 
 def parse_cameras_txt(sparse: Path):
-    """Minimal COLMAP cameras.txt / images.txt reader for optional native path."""
+    """Minimal COLMAP cameras.txt / images.txt reader."""
     cams = {}
     cam_path = sparse / "cameras.txt"
     img_path = sparse / "images.txt"
@@ -98,7 +97,6 @@ def pick_references(images: list, reference_fraction: float, neighbors_per_ref: 
                 j = r + sign * d
                 if 0 <= j < n and j != r:
                     pairs.append((r, j))
-    # Unique unordered pairs
     seen = set()
     out = []
     for a, b in pairs:
@@ -109,92 +107,8 @@ def pick_references(images: list, reference_fraction: float, neighbors_per_ref: 
     return out
 
 
-def try_romav2_match(images_dir: Path, pairs, quality: str):
-    """Attempt RoMaV2 dense matching. Returns list of (xyz, rgb) or raises."""
-    try:
-        import torch  # noqa: F401
-        # Import site is intentionally late — missing RoMa must degrade gracefully.
-        from romav2 import RoMaV2  # type: ignore
-    except Exception as e:
-        raise RuntimeError(
-            f"RoMaV2 not importable ({e}). Install Parskatt/RoMaV2 + weights."
-        ) from e
-
-    # Quality presets map to model size / resolution knobs when the API exposes them.
-    _ = quality
-    model = RoMaV2()  # type: ignore[call-arg]
-    model.eval()
-
-    # Minimal stub path: many RoMa installs expose match(img_a, img_b).
-    # When unavailable, fall through to error so the host merges other densifiers.
-    if not hasattr(model, "match"):
-        raise RuntimeError("Installed RoMaV2 build has no match() API")
-
-    from PIL import Image
-    import numpy as np
-
-    points = []
-    colors = []
-    names = sorted(
-        [
-            p
-            for p in images_dir.iterdir()
-            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
-        ]
-    )
-    for i, j in pairs[:64]:  # bound work
-        if i >= len(names) or j >= len(names):
-            continue
-        wa = Image.open(names[i]).convert("RGB")
-        wb = Image.open(names[j]).convert("RGB")
-        try:
-            out = model.match(wa, wb)
-        except TypeError:
-            # Some APIs expect paths / tensors — best-effort.
-            out = model.match(str(names[i]), str(names[j]))
-
-        # Accept a few common return layouts; filter by certainty when present.
-        certainty = None
-        warp = None
-        if isinstance(out, dict):
-            certainty = out.get("certainty")
-            warp = out.get("warp") or out.get("matches")
-        elif isinstance(out, (tuple, list)) and len(out) >= 1:
-            warp = out[0]
-            if len(out) > 1:
-                certainty = out[1]
-
-        if warp is None:
-            continue
-        w = np.asarray(warp)
-        if w.ndim < 2:
-            continue
-        # Without calibrated triangulation in this thin launcher, emit a sparse
-        # scaffold so the host still receives *something* mergeable; full
-        # triangulate is expected when sparse cams are present (below).
-        ys, xs = np.where(np.ones(w.shape[:2], dtype=bool)) if w.ndim >= 2 else ([], [])
-        # Prefer certainty mask.
-        if certainty is not None:
-            c = np.asarray(certainty)
-            if c.shape[:2] == w.shape[:2]:
-                mask = c > MIN_CERTAINTY
-                ys, xs = np.where(mask)
-        # Cap
-        idx = list(range(0, len(xs), max(1, len(xs) // 5000)))[:5000]
-        for k in idx:
-            x, y = float(xs[k]), float(ys[k])
-            # Placeholder depth plane — replaced when triangulation succeeds.
-            points.append((x * 0.001, y * 0.001, 1.0))
-            px = wa.getpixel((min(int(x), wa.width - 1), min(int(y), wa.height - 1)))
-            colors.append(px[:3])
-
-    if len(points) < 32:
-        raise RuntimeError("RoMa produced too few filtered matches")
-    return points, colors
-
-
-def triangulate_with_colmap_hint(sparse: Path, images_dir: Path, pairs):
-    """When OpenCV is available, triangulate using COLMAP poses (clean-room)."""
+def triangulate_matches(sparse: Path, images_dir: Path, match_bags):
+    """Triangulate real RoMa correspondences with COLMAP poses (OpenCV)."""
     try:
         import cv2  # type: ignore
         import numpy as np
@@ -204,8 +118,9 @@ def triangulate_with_colmap_hint(sparse: Path, images_dir: Path, pairs):
     cams, images = parse_cameras_txt(sparse)
     if not images or not cams:
         raise RuntimeError("no COLMAP text model for triangulation")
+    if not match_bags:
+        raise RuntimeError("no RoMa matches to triangulate")
 
-    # Build simple PINHOLE K from cameras.txt when possible.
     def K_for(cam_id: int):
         parts = cams[cam_id]
         model = parts[1]
@@ -214,11 +129,11 @@ def triangulate_with_colmap_hint(sparse: Path, images_dir: Path, pairs):
         if model in ("PINHOLE", "OPENCV", "SIMPLE_PINHOLE", "SIMPLE_RADIAL"):
             if model.startswith("SIMPLE"):
                 f, cx, cy = params[0], params[1], params[2]
-                return np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64), (w, h)
+                return np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float64)
             fx, fy, cx, cy = params[0], params[1], params[2], params[3]
-            return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64), (w, h)
+            return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
         f = params[0]
-        return np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]], dtype=np.float64), (w, h)
+        return np.array([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]], dtype=np.float64)
 
     def qvec_to_R(q):
         qw, qx, qy, qz = q
@@ -233,53 +148,35 @@ def triangulate_with_colmap_hint(sparse: Path, images_dir: Path, pairs):
 
     xyz = []
     rgb = []
-    names = {im["name"]: im for im in images}
     img_files = {
         p.name: p
         for p in images_dir.iterdir()
         if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
     }
 
-    for i, j in pairs[:32]:
+    for i, j, pts_a, pts_b, colors in match_bags[:32]:
         if i >= len(images) or j >= len(images):
             continue
         a, b = images[i], images[j]
-        if a["name"] not in img_files or b["name"] not in img_files:
-            continue
-        Ka, _ = K_for(a["camera_id"])
-        Kb, _ = K_for(b["camera_id"])
+        Ka = K_for(a["camera_id"])
+        Kb = K_for(b["camera_id"])
         Ra, ta = qvec_to_R(a["qvec"]), np.asarray(a["tvec"], dtype=np.float64).reshape(3, 1)
         Rb, tb = qvec_to_R(b["qvec"]), np.asarray(b["tvec"], dtype=np.float64).reshape(3, 1)
         Pa = Ka @ np.hstack([Ra, ta])
         Pb = Kb @ np.hstack([Rb, tb])
-        # Parallax gate
         ca = (-Ra.T @ ta).ravel()
         cb = (-Rb.T @ tb).ravel()
-        baseline = np.linalg.norm(ca - cb)
-        if baseline < 1e-6:
+        if np.linalg.norm(ca - cb) < 1e-6:
             continue
-        # Sample a coarse grid of correspondences as a geometric scaffold when
-        # full RoMa warp triangulation is unavailable in this environment.
-        wa = cv2.imread(str(img_files[a["name"]]))
-        if wa is None:
+        pts_a_t = np.asarray(pts_a, dtype=np.float64).T
+        pts_b_t = np.asarray(pts_b, dtype=np.float64).T
+        if pts_a_t.shape[1] < 8:
             continue
-        h, w = wa.shape[:2]
-        pts_a = []
-        pts_b = []
-        for y in range(h // 8, h, h // 8):
-            for x in range(w // 8, w, w // 8):
-                pts_a.append([float(x), float(y)])
-                pts_b.append([float(x), float(y)])  # identity warm-start; RoMa replaces when present
-        if len(pts_a) < 8:
-            continue
-        pts_a = np.asarray(pts_a, dtype=np.float64).T
-        pts_b = np.asarray(pts_b, dtype=np.float64).T
-        pts4d = cv2.triangulatePoints(Pa, Pb, pts_a, pts_b)
+        pts4d = cv2.triangulatePoints(Pa, Pb, pts_a_t, pts_b_t)
         pts = (pts4d[:3] / np.maximum(pts4d[3], 1e-8)).T
-        for p, (u, v) in zip(pts, pts_a.T):
+        for p, (u, v), col in zip(pts, pts_a_t.T, colors):
             if not np.all(np.isfinite(p)):
                 continue
-            # Reprojection gate (a)
             ph = Pa @ np.array([p[0], p[1], p[2], 1.0])
             if abs(ph[2]) < 1e-8:
                 continue
@@ -287,12 +184,92 @@ def triangulate_with_colmap_hint(sparse: Path, images_dir: Path, pairs):
             if (uu - u) ** 2 + (vv - v) ** 2 > MAX_REPROJ_PX**2:
                 continue
             xyz.append((float(p[0]), float(p[1]), float(p[2])))
-            c = wa[min(int(v), h - 1), min(int(u), w - 1)]
-            rgb.append((int(c[2]), int(c[1]), int(c[0])))  # BGR→RGB
+            rgb.append(tuple(int(c) for c in col[:3]))
 
     if len(xyz) < 32:
         raise RuntimeError("triangulation produced too few points")
     return xyz, rgb
+
+
+def try_romav2_match(images_dir: Path, pairs, quality: str, sparse_dir: Path):
+    """Match with RoMaV2 and triangulate — never emit placeholder planes."""
+    try:
+        import torch  # noqa: F401
+        from romav2 import RoMaV2  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            f"RoMaV2 not importable ({e}). Install Parskatt/RoMaV2 + weights."
+        ) from e
+
+    _ = quality
+    model = RoMaV2()  # type: ignore[call-arg]
+    model.eval()
+    if not hasattr(model, "match"):
+        raise RuntimeError("Installed RoMaV2 build has no match() API")
+
+    from PIL import Image
+    import numpy as np
+
+    if not (sparse_dir / "images.txt").exists():
+        raise RuntimeError(
+            "RoMa densify needs a COLMAP sparse model (images.txt) to triangulate; "
+            "refusing placeholder plane points"
+        )
+
+    match_bags = []
+    names = sorted(
+        [
+            p
+            for p in images_dir.iterdir()
+            if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+        ]
+    )
+    for i, j in pairs[:64]:
+        if i >= len(names) or j >= len(names):
+            continue
+        wa = Image.open(names[i]).convert("RGB")
+        try:
+            out = model.match(wa, Image.open(names[j]).convert("RGB"))
+        except TypeError:
+            out = model.match(str(names[i]), str(names[j]))
+
+        certainty = None
+        warp = None
+        if isinstance(out, dict):
+            certainty = out.get("certainty")
+            warp = out.get("warp") or out.get("matches")
+        elif isinstance(out, (tuple, list)) and len(out) >= 1:
+            warp = out[0]
+            if len(out) > 1:
+                certainty = out[1]
+        if warp is None:
+            continue
+        w = np.asarray(warp)
+        if w.ndim < 2:
+            continue
+        ys, xs = np.where(np.ones(w.shape[:2], dtype=bool))
+        if certainty is not None:
+            c = np.asarray(certainty)
+            if c.shape[:2] == w.shape[:2]:
+                ys, xs = np.where(c > MIN_CERTAINTY)
+        if w.ndim != 3 or w.shape[2] < 2:
+            continue
+        idx = list(range(0, len(xs), max(1, len(xs) // 5000)))[:5000]
+        pts_a, pts_b, cols = [], [], []
+        for k in idx:
+            x, y = float(xs[k]), float(ys[k])
+            dest = w[int(y), int(x)]
+            xb, yb = float(dest[0]), float(dest[1])
+            pts_a.append([x, y])
+            pts_b.append([xb, yb])
+            px = wa.getpixel((min(int(x), wa.width - 1), min(int(y), wa.height - 1)))
+            cols.append(px[:3])
+        if len(pts_a) >= 8:
+            match_bags.append((i, j, pts_a, pts_b, cols))
+
+    if not match_bags:
+        raise RuntimeError("RoMa produced too few filtered matches with destination coords")
+    return triangulate_matches(sparse_dir, images_dir, match_bags)
 
 
 def main() -> int:
@@ -315,21 +292,18 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_ply = out_dir / "roma_dense.ply"
 
-    xyz = rgb = None
-    err = None
     try:
-        xyz, rgb = try_romav2_match(images_dir, pairs, quality)
+        xyz, rgb = try_romav2_match(images_dir, pairs, quality, sparse_dir)
     except Exception as e:
-        err = e
-        try:
-            xyz, rgb = triangulate_with_colmap_hint(sparse_dir, images_dir, pairs)
-            err = None
-        except Exception as e2:
-            print(f"# roma-v2 failed: {err}; fallback: {e2}", file=sys.stderr)
-            return 1
+        print(
+            f"# roma-v2 densify unavailable: {e}. "
+            f"Install Parskatt/RoMaV2 + DINOv3 weights, then retry.",
+            file=sys.stderr,
+        )
+        return 1
 
     if xyz is None or len(xyz) < 32:
-        print(f"# roma-v2 too few points", file=sys.stderr)
+        print("# roma-v2 too few points", file=sys.stderr)
         return 1
 
     if len(xyz) > max_points:

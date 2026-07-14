@@ -25,4 +25,6 @@ Same stdin JSON as other sidecars (`imagesDir`, `workspace`, `sparseDir`, `task`
 - **`task: "polish"`** — read `splatPath`, print polished splat path.
 
 Copy the stub `run.py` / `run.bat` from each subfolder and replace the body with
-your local checkpoint wiring. Weights are **never** shipped in the NSIS installer.
+your local checkpoint wiring. Keep the `.stub` marker file until weights are
+wired — InstaSplatter treats `.stub` as "not ready" and never reports success
+from template launchers. Weights are **never** shipped in the NSIS installer.

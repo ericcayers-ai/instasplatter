@@ -70,24 +70,33 @@ fn launcher(name: &str) -> PathBuf {
     dir.join("run")
 }
 
+/// Template stubs ship a `.stub` marker so we never report them as "ready".
+fn is_stub_sidecar(name: &str) -> bool {
+    sidecars_dir().join(name).join(".stub").exists()
+}
+
+fn launcher_ready(name: &str) -> bool {
+    launcher(name).exists() && !is_stub_sidecar(name)
+}
+
 pub fn status() -> SidecarStatus {
-    let dav2 = launcher("depth-anything-v2").exists()
+    let dav2 = launcher_ready("depth-anything-v2")
         || sidecars_dir().join("depth-anything-v2").join("weights.onnx").exists();
     let vggt_c = sidecars_dir()
         .join("vggt-commercial")
         .join("ACCEPTED")
         .exists()
-        && launcher("vggt-commercial").exists();
+        && launcher_ready("vggt-commercial");
     SidecarStatus {
         depth_anything_v2: dav2,
         vggt_commercial: vggt_c,
-        vggt_omega: launcher("vggt-omega").exists(),
-        vggt_research: launcher("vggt-research").exists(),
-        mast3r: launcher("mast3r").exists(),
-        dust3r: launcher("dust3r").exists(),
-        roma_v2: launcher("roma-v2").exists(),
-        fixer: launcher("fixer").exists(),
-        difix: launcher("difix").exists(),
+        vggt_omega: launcher_ready("vggt-omega"),
+        vggt_research: launcher_ready("vggt-research"),
+        mast3r: launcher_ready("mast3r"),
+        dust3r: launcher_ready("dust3r"),
+        roma_v2: launcher_ready("roma-v2"),
+        fixer: launcher_ready("fixer"),
+        difix: launcher_ready("difix"),
     }
 }
 
@@ -130,6 +139,12 @@ async fn invoke_launcher(
     let launch = launcher(name);
     if !launch.exists() {
         return Ok(None);
+    }
+    if is_stub_sidecar(name) {
+        ctx.notice(format!(
+            "{name} is still a stub — install real weights and delete the .stub marker."
+        ));
+        return Err(format!("{name} stub (not wired)"));
     }
     ctx.log(format!("Running {name} sidecar…"));
 

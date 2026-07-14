@@ -46,7 +46,7 @@ export interface Settings {
   denseInit?: boolean | null;
   /** Use installed DAV2 / VGGT-commercial sidecars when present. Default ON. */
   useNeuralInit?: boolean | null;
-  /** Allow non-commercial research sidecars. Default OFF. Forced ON in Experimental. */
+  /** Allow non-commercial research sidecars. Mirror of Experimental Mode (do not set alone). */
   allowResearchSidecars?: boolean | null;
   /** Master Experimental Mode (NC research stack). Requires license ack. */
   experimentalMode?: boolean | null;

@@ -40,13 +40,14 @@ function ExperimentalToggle() {
   const resolved = useStore((s) => s.resolved);
   const requestExperimental = useStore((s) => s.requestExperimental);
   const updateSettings = useStore((s) => s.updateSettings);
-  const on = !!(resolved?.experimentalMode ?? settings.experimentalMode);
+  // Effective mode only — raw settings.experimentalMode without ack must not light up.
+  const on = !!(resolved?.experimentalMode);
 
   return (
     <button
       onClick={() => {
         if (on) {
-          void updateSettings({ experimentalMode: false });
+          void updateSettings({ experimentalMode: false, allowResearchSidecars: false });
         } else {
           requestExperimental();
         }
@@ -59,7 +60,9 @@ function ExperimentalToggle() {
       title={
         on
           ? "Experimental Mode ON — NC research stack active"
-          : "Enable Experimental Mode (NC research models)"
+          : settings.experimentalLicenseAcked
+            ? "Enable Experimental Mode (NC research models)"
+            : "Enable Experimental Mode (requires one-time NC license ack)"
       }
     >
       {on ? "Experimental ON" : "Experimental"}

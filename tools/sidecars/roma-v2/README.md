@@ -28,6 +28,7 @@ python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 # Clone / install RoMaV2 separately, then place DINOv3 weights per RoMa docs.
 # Meta DINOv3 weights: review Meta's custom license before commercial redistrib.
+# Without RoMaV2 + sparse COLMAP poses, the launcher exits non-zero (no fake points).
 ```
 
 ## Protocol

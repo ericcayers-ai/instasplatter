@@ -1,4 +1,4 @@
-# Research stack (v0.5.0) — dual mode
+# Research stack (v0.5.1) — dual mode
 
 Evidence-first inventory: **[PAPER-SWEEP-2024+.md](./PAPER-SWEEP-2024+.md)**.
 
@@ -83,7 +83,7 @@ neighbors-per-ref). Our path is clean-room Apache-friendly orchestration + MIT R
 | --- | --- |
 | VGGT-Ω | CC BY-NC-4.0; preferred Experimental SfM (`vggt-omega`) |
 | MASt3R / DUSt3R | CC BY-NC-SA; Experimental pose + densify merge |
-| Gate | `experimentalMode` + `experimentalLicenseAcked` (forces `allowResearchSidecars`) |
+| Gate | `experimentalMode` + `experimentalLicenseAcked` (forces `allowResearchSidecars`; flag alone never unlocks NC) |
 | Why not ON by default | NC licenses block commercial redistribution |
 
 ## Rejected for Standard (available Experimental where noted)

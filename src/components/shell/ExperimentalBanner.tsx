@@ -4,10 +4,9 @@ import { useStore } from "../../state/store";
 
 export default function ExperimentalBanner() {
   const resolved = useStore((s) => s.resolved);
-  const settings = useStore((s) => s.settings);
   const pipelineChips = useStore((s) => s.pipelineChips);
   const engineStatus = useStore((s) => s.engineStatus);
-  const on = !!(resolved?.experimentalMode ?? settings.experimentalMode);
+  const on = !!(resolved?.experimentalMode);
 
   if (!on) return null;
 

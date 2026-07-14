@@ -59,8 +59,8 @@ pub struct Settings {
     pub dense_init: Option<bool>,
     /// Prefer installed neural densifiers (DAV2 / VGGT commercial) when present.
     pub use_neural_init: Option<bool>,
-    /// Allow non-commercial research sidecars (VGGT-NC, etc.). Default OFF.
-    /// Forced true when Experimental Mode is on (compat mirror).
+    /// Allow non-commercial research sidecars. Resolved only when Experimental
+    /// Mode is active; a standalone stored flag never unlocks NC in Standard.
     pub allow_research_sidecars: Option<bool>,
     /// Master Experimental Mode toggle. Requires `experimental_license_acked`.
     pub experimental_mode: Option<bool>,
@@ -224,7 +224,9 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         )
     };
 
-    let allow_research = experimental || settings.allow_research_sidecars.unwrap_or(false);
+    // Research/NC sidecars are Experimental-only. A stale `allowResearchSidecars`
+    // flag must never leak NC into Standard Mode.
+    let allow_research = experimental;
 
     let mut resolved = ResolvedSettings {
         preset,
@@ -325,11 +327,8 @@ fn resolve_trainer(
             }
         }
         _ => {
-            // Auto: NVIDIA + CUDA + installed gsplat-train → gsplat; else Brush.
-            // Experimental: same preference but louder toward gsplat Max.
-            if (experimental || profile.has_cuda) && crate::pipeline::gsplat::is_installed() {
-                "gsplat".into()
-            } else if profile.has_cuda && crate::pipeline::gsplat::is_installed() {
+            // Auto: installed gsplat-train + (CUDA, or Experimental Max path) → gsplat.
+            if crate::pipeline::gsplat::is_installed() && (experimental || profile.has_cuda) {
                 "gsplat".into()
             } else {
                 "brush".into()
@@ -469,5 +468,20 @@ mod tests {
         assert!(on.allow_research_sidecars);
         assert_eq!(on.preset, Preset::Max);
         assert_eq!(on.roma_quality, "precise");
+    }
+
+    #[test]
+    fn research_flag_alone_never_enables_nc() {
+        let r = resolve(
+            &Settings {
+                allow_research_sidecars: Some(true),
+                experimental_mode: Some(false),
+                experimental_license_acked: Some(true),
+                ..Default::default()
+            },
+            &profile(),
+        );
+        assert!(!r.experimental_mode);
+        assert!(!r.allow_research_sidecars);
     }
 }
