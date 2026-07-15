@@ -1,17 +1,18 @@
 //! Dense geometry bootstrap after sparse SfM.
 //!
 //! Needle / empty-cloud failures usually start from a sparse COLMAP point
-//! cloud that is too thin for Brush to densify into solid surfaces. v0.5
-//! **composes** RoMa v2 ∧ neural densifiers (DAV2 / VGGT / Experimental NC)
-//! with COLMAP patch-match MVS and the sparse cloud into one `init.ply`
-//! (AND, not pick-one / early-return).
+//! cloud that is too thin for Brush to densify into solid surfaces.
+//! Sources are confidence-fused (Sim(3) align + voxel merge), never raw
+//! concatenation of incompatible frames.
 //!
 //! Neural densifiers land in [`super::sidecars`] when their binaries are present.
 
 use super::brush;
 use super::JobCtx;
 use crate::colmap::{self, Model, Point3D};
+use crate::math::{self, M3, V3};
 use crate::splat::{ply, SplatCloud, SH_C0};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Hard cap so an enormous fused cloud cannot exhaust VRAM before training.
@@ -20,6 +21,280 @@ const MAX_INIT_POINTS: usize = 1_500_000;
 const MAX_SPARSE_ERROR: f64 = 4.0;
 /// Minimum observations for a sparse point to seed a Gaussian.
 const MIN_TRACK_LEN: usize = 2;
+/// Voxel size as a fraction of scene scale for confidence-weighted fusion.
+const VOXEL_FRAC: f32 = 0.0025;
+/// Max orientation angle (degrees) when accepting a Sim(3) hypothesis.
+const MAX_ALIGN_ANGLE_DEG: f64 = 35.0;
+/// Max scale ratio between clouds (absolute log).
+const MAX_LOG_SCALE: f64 = 1.2; // ~e^1.2 ≈ 3.3×
+
+/// Evidence point carrying confidence + provenance for schema-v2 fusion.
+#[derive(Debug, Clone)]
+pub struct EvidencePoint {
+    pub xyz: [f32; 3],
+    pub rgb: [u8; 3],
+    pub confidence: f32,
+    #[allow(dead_code)]
+    pub source: &'static str,
+    /// Thin high-confidence tracks (sparse COLMAP) bypass voxel average.
+    pub preserve: bool,
+}
+
+/// Rigid+scale transform `p' = s R p + t`.
+#[derive(Debug, Clone, Copy)]
+pub struct Sim3 {
+    pub scale: f64,
+    pub rotation: M3,
+    pub translation: V3,
+}
+
+impl Sim3 {
+    #[allow(dead_code)]
+    pub fn identity() -> Self {
+        Self {
+            scale: 1.0,
+            rotation: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            translation: [0.0, 0.0, 0.0],
+        }
+    }
+
+    pub fn apply(&self, p: [f32; 3]) -> [f32; 3] {
+        let v = math::m3_mul_v(self.rotation, [p[0] as f64, p[1] as f64, p[2] as f64]);
+        [
+            (self.scale * v[0] + self.translation[0]) as f32,
+            (self.scale * v[1] + self.translation[1]) as f32,
+            (self.scale * v[2] + self.translation[2]) as f32,
+        ]
+    }
+}
+
+fn centroid(pts: &[[f32; 3]]) -> V3 {
+    if pts.is_empty() {
+        return [0.0, 0.0, 0.0];
+    }
+    let n = pts.len() as f64;
+    let mut c = [0.0f64; 3];
+    for p in pts {
+        c[0] += p[0] as f64;
+        c[1] += p[1] as f64;
+        c[2] += p[2] as f64;
+    }
+    [c[0] / n, c[1] / n, c[2] / n]
+}
+
+fn rms_radius(pts: &[[f32; 3]], c: V3) -> f64 {
+    if pts.is_empty() {
+        return 1.0;
+    }
+    let mut s = 0.0;
+    for p in pts {
+        let d = [
+            p[0] as f64 - c[0],
+            p[1] as f64 - c[1],
+            p[2] as f64 - c[2],
+        ];
+        s += d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    }
+    (s / pts.len() as f64).sqrt().max(1e-6)
+}
+
+/// Umeyama-style Sim(3) from source → target using centroids + covariance SVD.
+/// Uses a subsample of up to `max_pairs` points (index-aligned subsample).
+pub fn estimate_sim3(src: &[[f32; 3]], tgt: &[[f32; 3]], max_pairs: usize) -> Option<Sim3> {
+    if src.len() < 8 || tgt.len() < 8 {
+        return None;
+    }
+    let n = src.len().min(tgt.len()).min(max_pairs.max(8));
+    let step_s = src.len() as f64 / n as f64;
+    let step_t = tgt.len() as f64 / n as f64;
+    let mut a = Vec::with_capacity(n);
+    let mut b = Vec::with_capacity(n);
+    for i in 0..n {
+        a.push(src[(i as f64 * step_s) as usize]);
+        b.push(tgt[(i as f64 * step_t) as usize]);
+    }
+    let ca = centroid(&a);
+    let cb = centroid(&b);
+    let ra = rms_radius(&a, ca);
+    let rb = rms_radius(&b, cb);
+    let scale = (rb / ra).clamp((-MAX_LOG_SCALE).exp(), MAX_LOG_SCALE.exp());
+
+    // Covariance H = Σ (a-ca)(b-cb)^T
+    let mut h = [[0.0f64; 3]; 3];
+    for i in 0..n {
+        let pa = [
+            (a[i][0] as f64 - ca[0]) / ra,
+            (a[i][1] as f64 - ca[1]) / ra,
+            (a[i][2] as f64 - ca[2]) / ra,
+        ];
+        let pb = [
+            (b[i][0] as f64 - cb[0]) / rb,
+            (b[i][1] as f64 - cb[1]) / rb,
+            (b[i][2] as f64 - cb[2]) / rb,
+        ];
+        for r in 0..3 {
+            for c in 0..3 {
+                h[r][c] += pa[r] * pb[c];
+            }
+        }
+    }
+    let (u, _s, vt) = math::svd3(h);
+    let mut r = math::m3_mul(math::m3_transpose(vt), math::m3_transpose(u));
+    // Enforce proper rotation (det +1).
+    if math::m3_det(r) < 0.0 {
+        let mut vt_fix = vt;
+        vt_fix[2][0] *= -1.0;
+        vt_fix[2][1] *= -1.0;
+        vt_fix[2][2] *= -1.0;
+        r = math::m3_mul(math::m3_transpose(vt_fix), math::m3_transpose(u));
+    }
+    r = math::orthonormalize(r);
+
+    // Orientation gate: rotation angle from identity.
+    let tr = (r[0][0] + r[1][1] + r[2][2]).clamp(-1.0, 3.0);
+    let angle = ((tr - 1.0) * 0.5).clamp(-1.0, 1.0).acos().to_degrees();
+    if angle > MAX_ALIGN_ANGLE_DEG && (scale.ln().abs() > 0.15) {
+        // Large rotation + scale change ⇒ reject; treat as already-aligned
+        // only when both clouds share a near-common frame already.
+        if angle > 90.0 {
+            return None;
+        }
+    }
+    if scale.ln().abs() > MAX_LOG_SCALE {
+        return None;
+    }
+
+    let t = [
+        cb[0] - scale * (r[0][0] * ca[0] + r[0][1] * ca[1] + r[0][2] * ca[2]),
+        cb[1] - scale * (r[1][0] * ca[0] + r[1][1] * ca[1] + r[1][2] * ca[2]),
+        cb[2] - scale * (r[2][0] * ca[0] + r[2][1] * ca[1] + r[2][2] * ca[2]),
+    ];
+    Some(Sim3 {
+        scale,
+        rotation: r,
+        translation: t,
+    })
+}
+
+fn bounds_ok(pts: &[[f32; 3]], ref_pts: &[[f32; 3]]) -> bool {
+    if pts.is_empty() || ref_pts.is_empty() {
+        return false;
+    }
+    let c_ref = centroid(ref_pts);
+    let r_ref = rms_radius(ref_pts, c_ref);
+    let c = centroid(pts);
+    let r = rms_radius(pts, c);
+    if r < 1e-5 || r_ref < 1e-5 {
+        return false;
+    }
+    let center_dist = math::norm([
+        c[0] - c_ref[0],
+        c[1] - c_ref[1],
+        c[2] - c_ref[2],
+    ]);
+    center_dist < r_ref * 4.0 && (r / r_ref).ln().abs() < MAX_LOG_SCALE + 0.3
+}
+
+/// Confidence-weighted voxel fusion with preserved thin tracks.
+pub fn fuse_evidence(
+    clouds: &[Vec<EvidencePoint>],
+    scene_scale: f32,
+    max_points: usize,
+) -> (Vec<[f32; 3]>, Vec<[u8; 3]>) {
+    let voxel = (scene_scale * VOXEL_FRAC).clamp(1e-4, 0.05);
+    let inv = 1.0 / voxel;
+
+    #[derive(Default, Clone)]
+    struct Acc {
+        xyz: [f64; 3],
+        rgb: [f64; 3],
+        w: f64,
+    }
+    let mut grid: HashMap<(i32, i32, i32), Acc> = HashMap::new();
+    let mut preserved: Vec<EvidencePoint> = Vec::new();
+
+    for cloud in clouds {
+        for p in cloud {
+            if p.preserve && p.confidence >= 0.7 {
+                preserved.push(p.clone());
+                continue;
+            }
+            if p.confidence < 0.15 {
+                continue;
+            }
+            let key = (
+                (p.xyz[0] * inv).floor() as i32,
+                (p.xyz[1] * inv).floor() as i32,
+                (p.xyz[2] * inv).floor() as i32,
+            );
+            let w = p.confidence as f64;
+            let e = grid.entry(key).or_default();
+            e.xyz[0] += p.xyz[0] as f64 * w;
+            e.xyz[1] += p.xyz[1] as f64 * w;
+            e.xyz[2] += p.xyz[2] as f64 * w;
+            e.rgb[0] += p.rgb[0] as f64 * w;
+            e.rgb[1] += p.rgb[1] as f64 * w;
+            e.rgb[2] += p.rgb[2] as f64 * w;
+            e.w += w;
+        }
+    }
+
+    let mut fused: Vec<(f32, [f32; 3], [u8; 3])> = grid
+        .into_values()
+        .filter(|a| a.w > 1e-6)
+        .map(|a| {
+            let inv_w = 1.0 / a.w;
+            let xyz = [
+                (a.xyz[0] * inv_w) as f32,
+                (a.xyz[1] * inv_w) as f32,
+                (a.xyz[2] * inv_w) as f32,
+            ];
+            let rgb = [
+                (a.rgb[0] * inv_w).round().clamp(0.0, 255.0) as u8,
+                (a.rgb[1] * inv_w).round().clamp(0.0, 255.0) as u8,
+                (a.rgb[2] * inv_w).round().clamp(0.0, 255.0) as u8,
+            ];
+            (a.w as f32, xyz, rgb)
+        })
+        .collect();
+    fused.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Dedup preserved against dense voxels, then append.
+    let mut out_xyz = Vec::new();
+    let mut out_rgb = Vec::new();
+    let budget = max_points.saturating_sub(preserved.len().min(max_points / 5));
+    for (_, xyz, rgb) in fused.into_iter().take(budget) {
+        out_xyz.push(xyz);
+        out_rgb.push(rgb);
+    }
+    for p in preserved {
+        if out_xyz.len() >= max_points {
+            break;
+        }
+        out_xyz.push(p.xyz);
+        out_rgb.push(p.rgb);
+    }
+    (out_xyz, out_rgb)
+}
+
+fn evidence_from_xyzrgb(
+    xyz: Vec<[f32; 3]>,
+    rgb: Vec<[u8; 3]>,
+    source: &'static str,
+    confidence: f32,
+    preserve: bool,
+) -> Vec<EvidencePoint> {
+    xyz.into_iter()
+        .zip(rgb)
+        .map(|(xyz, rgb)| EvidencePoint {
+            xyz,
+            rgb,
+            confidence,
+            source,
+            preserve,
+        })
+        .collect()
+}
 
 /// Convert coloured XYZ points into small isotropic Gaussians Brush can train.
 pub fn points_to_gaussians(xyz: &[[f32; 3]], rgb: &[[u8; 3]], scene_scale: f32) -> SplatCloud {
@@ -110,6 +385,17 @@ fn scene_scale_of(xyz: &[[f32; 3]]) -> f32 {
         .collect();
     d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     d[(d.len() as f32 * 0.9) as usize].max(1e-3)
+}
+
+/// Scene scale hint across evidence clouds (for neural multi-source fusion).
+pub fn scene_scale_hint(clouds: &[Vec<EvidencePoint>]) -> f32 {
+    let mut xyz = Vec::new();
+    for c in clouds {
+        for p in c.iter().take(4_096) {
+            xyz.push(p.xyz);
+        }
+    }
+    scene_scale_of(&xyz)
 }
 
 /// Read a fused / point PLY (xyz + rgb) into parallel arrays.
@@ -246,7 +532,7 @@ fn seed_from_sparse_model(ctx: &JobCtx, model: &Model) -> Result<usize, String> 
     write_init_from_points(ctx, xyz, rgb, "sparse COLMAP")
 }
 
-/// Attempt dense init by **composing** neural densify ∧ COLMAP MVS ∧ sparse seed.
+/// Attempt dense init via confidence-weighted fusion (not raw concatenation).
 /// Returns Ok(true) when a denser-than-sparse `init.ply` was written.
 pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, String> {
     if !ctx.settings.dense_init {
@@ -265,53 +551,105 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
         .ok_or("No sparse model to densify.")?;
     let model = colmap::read_model(&model_dir)?;
 
-    let mut xyz: Vec<[f32; 3]> = Vec::new();
-    let mut rgb: Vec<[u8; 3]> = Vec::new();
+    // Canonical reference: sparse COLMAP / ENU frame.
+    let (sx, sr) = filter_sparse_points(&model.points);
+    let ref_xyz = sx.clone();
+    let scene = scene_scale_of(&ref_xyz);
+    let mut clouds: Vec<Vec<EvidencePoint>> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
 
-    // 1) RoMa v2 densify (Lichtfeld-style recipe) — compose, never early-return.
+    if !sx.is_empty() {
+        clouds.push(evidence_from_xyzrgb(sx, sr, "sparse", 0.85, true));
+        labels.push("sparse".into());
+    }
+
+    // Collect source clouds, align each into the sparse frame, then fuse.
+    let mut candidates: Vec<(String, Vec<[f32; 3]>, Vec<[u8; 3]>, f32)> = Vec::new();
+
     if let Some((rx, rr)) = super::sidecars::try_roma_densify(ctx, images_dir).await? {
-        xyz.extend(rx);
-        rgb.extend(rr);
-        labels.push("RoMa".into());
+        candidates.push(("RoMa".into(), rx, rr, 0.75));
     }
 
-    // 2) Neural densifiers (DAV2 / VGGT / Experimental NC merge-all).
     if let Some((nx, nr, name)) = super::sidecars::try_neural_points(ctx, images_dir).await? {
-        ctx.log(format!("Neural dense init ({name}): {} points (will merge).", nx.len()));
-        xyz.extend(nx);
-        rgb.extend(nr);
-        labels.push(name);
+        ctx.log(format!(
+            "Neural dense init ({name}): {} points (will fuse).",
+            nx.len()
+        ));
+        let conf = if name.contains("depth-anything-3") {
+            0.70
+        } else if name.contains("mapanything") {
+            0.68
+        } else if name.contains("vggt") {
+            0.72
+        } else {
+            0.60
+        };
+        candidates.push((name, nx, nr, conf));
     }
 
-    // 3) COLMAP patch-match MVS when CUDA COLMAP is available.
     if ctx.settings.sift_gpu {
         match run_mvs_fused(ctx, images_dir, &model_dir, &model).await {
             Ok(Some((mx, mr))) => {
-                ctx.log(format!("COLMAP MVS: {} fused points (will merge).", mx.len()));
-                xyz.extend(mx);
-                rgb.extend(mr);
-                labels.push("MVS".into());
+                ctx.log(format!("COLMAP MVS: {} fused points (will fuse).", mx.len()));
+                candidates.push(("MVS".into(), mx, mr, 0.80));
             }
             Ok(None) => {}
             Err(e) => {
                 ctx.notice(format!("Dense MVS failed ({e}). Continuing with other seeds."));
             }
         }
-    } else if labels.is_empty() {
+    } else if candidates.is_empty() && clouds.is_empty() {
         ctx.notice(
             "Dense MVS needs a CUDA COLMAP build. Seeding from neural/sparse clouds instead.",
         );
     }
 
-    // 4) Always merge high-confidence sparse / VGGT points (thin structures).
-    let (sx, sr) = filter_sparse_points(&model.points);
-    let sparse_n = sx.len();
-    xyz.extend(sx);
-    rgb.extend(sr);
-    if sparse_n > 0 {
-        labels.push("sparse".into());
+    for (name, mut xyz, rgb, conf) in candidates {
+        if !ref_xyz.is_empty() {
+            if !bounds_ok(&xyz, &ref_xyz) {
+                // Try Sim(3) into canonical frame.
+                match estimate_sim3(&xyz, &ref_xyz, 2_048) {
+                    Some(sim) => {
+                        xyz = xyz.iter().map(|p| sim.apply(*p)).collect();
+                        if !bounds_ok(&xyz, &ref_xyz) {
+                            ctx.log(format!(
+                                "Skipping {name}: failed orientation/bounds gate after Sim(3)."
+                            ));
+                            continue;
+                        }
+                        ctx.log(format!(
+                            "Aligned {name} into COLMAP frame (s={:.3}).",
+                            sim.scale
+                        ));
+                    }
+                    None => {
+                        ctx.log(format!(
+                            "Skipping {name}: could not Sim(3)-align to sparse frame."
+                        ));
+                        continue;
+                    }
+                }
+            }
+        }
+        let src: &'static str = match name.as_str() {
+            "RoMa" => "roma",
+            "MVS" => "mvs",
+            other if other.contains("depth-anything-3") => "da3",
+            other if other.contains("depth-anything") => "dav2",
+            other if other.contains("mapanything") => "mapanything",
+            other if other.contains("vggt") => "vggt",
+            _ => "neural",
+        };
+        clouds.push(evidence_from_xyzrgb(xyz, rgb, src, conf, false));
+        labels.push(name);
     }
+
+    if clouds.is_empty() {
+        seed_from_sparse_model(ctx, &model)?;
+        return Ok(false);
+    }
+
+    let (xyz, rgb) = fuse_evidence(&clouds, scene.max(0.01), MAX_INIT_POINTS);
 
     if xyz.len() < 32 {
         seed_from_sparse_model(ctx, &model)?;
@@ -323,7 +661,7 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
     } else {
         labels.join("+")
     };
-    ctx.notice(format!("Init: {label}"));
+    ctx.notice(format!("Init (fused): {label}"));
     write_init_from_points(ctx, xyz, rgb, &label)?;
     Ok(labels.iter().any(|l| {
         l == "RoMa"
@@ -332,7 +670,8 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
             || l.contains("depth")
             || l.contains("mast3r")
             || l.contains("dust3r")
-            || l.contains('+') // multi-source neural merge label
+            || l.contains("mapanything")
+            || l.contains('+')
     }))
 }
 
@@ -476,5 +815,46 @@ mod tests {
         assert_eq!(x.len(), 80);
         assert_eq!(r.len(), 80);
         assert_eq!(x[0][0], 0.0);
+    }
+
+    #[test]
+    fn fuse_evidence_dedups_voxels_and_keeps_preserved() {
+        let a = evidence_from_xyzrgb(
+            vec![[0.0, 0.0, 0.0], [0.001, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            vec![[255, 0, 0], [250, 0, 0], [0, 255, 0]],
+            "mvs",
+            0.8,
+            false,
+        );
+        let thin = evidence_from_xyzrgb(
+            vec![[0.5, 0.5, 0.5]],
+            vec![[0, 0, 255]],
+            "sparse",
+            0.9,
+            true,
+        );
+        let (xyz, rgb) = fuse_evidence(&[a, thin], 10.0, 100);
+        assert!(xyz.len() >= 2);
+        assert!(rgb.iter().any(|c| c[2] == 255)); // preserved blue
+    }
+
+    #[test]
+    fn sim3_identity_on_matching_clouds() {
+        let pts: Vec<[f32; 3]> = (0..64)
+            .map(|i| [(i % 8) as f32, (i / 8) as f32, 0.0])
+            .collect();
+        let sim = estimate_sim3(&pts, &pts, 64).expect("sim3");
+        assert!((sim.scale - 1.0).abs() < 0.15, "{}", sim.scale);
+        let p = sim.apply([1.0, 2.0, 0.0]);
+        assert!((p[0] - 1.0).abs() < 0.5);
+        assert!((p[1] - 2.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn bounds_gate_rejects_wild_outliers() {
+        let a: Vec<[f32; 3]> = (0..32).map(|i| [i as f32 * 0.1, 0.0, 0.0]).collect();
+        let b: Vec<[f32; 3]> = (0..32).map(|i| [i as f32 * 0.1 + 1_000.0, 0.0, 0.0]).collect();
+        assert!(!bounds_ok(&b, &a));
+        assert!(bounds_ok(&a, &a));
     }
 }

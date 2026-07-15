@@ -204,8 +204,7 @@ pub fn discard_workspace(workspace: &Path) {
 }
 
 /// Solve camera poses.
-/// Standard: VGGT-Commercial primary → optional COLMAP refine → COLMAP fallback.
-/// Experimental: Ω → MASt3R → DUSt3R → VGGT-C → COLMAP.
+/// Capture-aware candidate routing + scored hypotheses → COLMAP refine.
 /// Live-init (when enabled) still runs first and falls back into this chain.
 async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     if ctx.settings.live_init {
@@ -227,16 +226,53 @@ async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     }
 
     let st = sidecars::status();
+    let profile = solver::detect_capture_profile(
+        images_dir,
+        &ctx.workspace,
+        ctx.settings.experimental_mode,
+    );
+    ctx.log(format!("Capture profile: {profile:?}"));
     let chain: Vec<&str> = if ctx.settings.experimental_mode {
-        solver::experimental_pose_chain(&st)
+        solver::experimental_pose_candidates(profile, &st)
     } else {
-        solver::standard_pose_chain(&st)
+        solver::standard_pose_candidates(profile, &st)
     };
+
+    let prefer_pose_prior = chain.contains(&"colmap-pose-prior")
+        || matches!(profile, solver::CaptureProfile::GpsRtkDrone);
+
+    // GPS/RTK: try COLMAP pose-prior mapper before neural hypotheses.
+    if prefer_pose_prior && solver::has_pose_priors(&ctx.workspace) {
+        ctx.stage_progress("sfm", 0.05, "COLMAP pose-prior mapper…");
+        match colmap::run_sfm_with_options(ctx, images_dir, colmap::SfmOptions {
+            use_pose_priors: true,
+            use_gravity_prior: true,
+            matcher_front_end: solver::matcher_front_end(
+                &ctx.settings,
+                sidecars::lightglue_installed(),
+            )
+            .to_string(),
+        })
+        .await
+        {
+            Ok(()) => {
+                ctx.notice(solver::camera_chip("colmap-pose-prior"));
+                ctx.notice(format!("Trainer: {}", ctx.settings.trainer));
+                return Ok(());
+            }
+            Err(e) => {
+                ctx.notice(format!(
+                    "Pose-prior mapper failed ({e}). Evaluating neural hypotheses…"
+                ));
+            }
+        }
+    }
 
     if !chain.is_empty() {
         ctx.stage_progress("sfm", 0.05, "Neural camera solver…");
         match sidecars::try_neural_poses(ctx, images_dir, &chain).await? {
             Some(name) => {
+                // Guaranteed BA after neural initialization.
                 let _ = sidecars::maybe_refine_poses_with_colmap(ctx, images_dir).await;
                 ctx.log(format!("Camera solver: {name}"));
                 ctx.notice(format!("Trainer: {}", ctx.settings.trainer));
@@ -244,9 +280,9 @@ async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
             }
             None => {
                 ctx.notice(if ctx.settings.experimental_mode {
-                    "Neural pose chain exhausted. Falling back to COLMAP."
+                    "Neural pose hypotheses rejected. Falling back to COLMAP."
                 } else {
-                    "VGGT-Commercial unavailable or failed. Falling back to COLMAP."
+                    "Commercial pose hypotheses unavailable or rejected. Falling back to COLMAP."
                 });
             }
         }

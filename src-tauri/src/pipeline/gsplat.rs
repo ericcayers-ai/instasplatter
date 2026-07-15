@@ -134,6 +134,9 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
         "Training with gsplat ({strategy}; absgrad={} antialiased={} appearance={} bilagrid={})",
         s.gsplat_absgrad, s.gsplat_antialiased, s.gsplat_appearance, s.gsplat_bilateral_grid
     ));
+    if s.gsplat_strategy == "mcmc" && s.gsplat_absgrad {
+        ctx.log("Note: AbsGrad disabled under MCMC (mutually exclusive strategies).");
+    }
 
     let mut cmd = if launch.extension().and_then(|e| e.to_str()) == Some("py") {
         let mut c = tokio::process::Command::new("python");

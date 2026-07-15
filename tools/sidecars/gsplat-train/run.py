@@ -78,7 +78,14 @@ def main() -> int:
     strategy = (req.get("strategy") or "mcmc").lower()
     if strategy not in ("mcmc", "default"):
         strategy = "mcmc"
-    absgrad = bool(req.get("absgrad", True))
+    # MCMC and Default+AbsGrad are mutually exclusive.
+    if strategy == "mcmc":
+        absgrad = False
+    elif strategy == "default":
+        absgrad = bool(req.get("absgrad", True))
+    else:
+        strategy = "mcmc"
+        absgrad = False
     antialiased = bool(req.get("antialiased", True))
     app_opt = bool(req.get("appOpt", True))
     post = req.get("postProcessing")  # None | "bilateral_grid" | "ppisp"
@@ -88,7 +95,6 @@ def main() -> int:
     # data_factor ≈ downsample so longest side ~ maxResolution (approx).
     max_res = int(req.get("maxResolution") or 1280)
     data_factor = 1
-    # Leave factor 1; gsplat resizes with --data_factor. Cap via factor heuristically.
     if max_res <= 800:
         data_factor = 4
     elif max_res <= 1200:
@@ -106,6 +112,16 @@ def main() -> int:
         cand = Path(examples_root) / "simple_trainer.py"
         if cand.exists():
             trainer = cand
+
+    init_ply = req.get("initPly")
+    init_ply_path = Path(init_ply) if init_ply else None
+    if init_ply_path and not init_ply_path.exists():
+        init_ply_path = None
+    # Fall back to workspace densify seed.
+    if init_ply_path is None:
+        cand = workspace / "init.ply"
+        if cand.exists():
+            init_ply_path = cand
 
     if trainer.exists():
         cmd = [
@@ -151,6 +167,10 @@ def main() -> int:
                 "--strategy.grow_grad2d",
                 "0.0008",
             ]
+        # Official simple_trainer init path (gsplat examples).
+        if init_ply_path is not None:
+            cmd += ["--init_ply", str(init_ply_path)]
+            _log(f"gsplat-train: seeding simple_trainer from {init_ply_path}")
     else:
         # Minimal fallback train loop bundled beside this launcher.
         mini = here / "train_mini.py"
@@ -189,11 +209,11 @@ def main() -> int:
         ]
         if antialiased:
             cmd.append("--antialiased")
-        if absgrad:
+        if absgrad and strategy == "default":
             cmd.append("--absgrad")
-        init_ply = req.get("initPly")
-        if init_ply and Path(init_ply).exists():
-            cmd += ["--init_ply", init_ply]
+        if init_ply_path is not None:
+            cmd += ["--init_ply", str(init_ply_path)]
+            _log(f"gsplat-train: seeding train_mini from {init_ply_path}")
 
     _log("gsplat-train: " + " ".join(cmd))
     env = os.environ.copy()

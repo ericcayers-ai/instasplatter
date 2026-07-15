@@ -1,12 +1,25 @@
 //! Stage 2 - Structure-from-Motion via COLMAP (ROADMAP §3 stage 2).
 //! feature_extractor -> matcher (sequential for video, exhaustive otherwise)
 //! -> mapper, producing `sparse/0` in the Brush-compatible COLMAP layout.
+//!
+//! COLMAP 4.1 hooks: optional pose-prior / gravity mapper flags and LightGlue
+//! matcher routing stubs when engines are present.
 
 use super::JobCtx;
 use crate::engines::colmap_exe;
+use crate::pipeline::solver;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
+
+/// Options for [`run_sfm_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct SfmOptions {
+    pub use_pose_priors: bool,
+    pub use_gravity_prior: bool,
+    /// "auto" | "sequential" | "exhaustive" | "lightglue" | "roma"
+    pub matcher_front_end: String,
+}
 
 /// Spawn a COLMAP subcommand, stream stderr/stdout lines to the UI log and
 /// a progress callback, honor cancellation.
@@ -85,6 +98,14 @@ async fn run_colmap(
 }
 
 pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
+    run_sfm_with_options(ctx, images_dir, SfmOptions::default()).await
+}
+
+pub async fn run_sfm_with_options(
+    ctx: &JobCtx,
+    images_dir: &Path,
+    opts: SfmOptions,
+) -> Result<(), String> {
     let ws = &ctx.workspace;
     let db = ws.join("database.db");
     let sparse = ws.join("sparse");
@@ -123,14 +144,31 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     )
     .await?;
 
-    // 2) Matching. Sequential suits video and orbit captures; exhaustive is
-    //    more robust for small unordered folders.
-    let sequential = match ctx.settings.matcher.as_str() {
+    // 2) Matching. LightGlue / RoMa are routing stubs until their engines land;
+    //    sequential suits video; exhaustive for small unordered folders.
+    let front = if opts.matcher_front_end.is_empty() {
+        solver::matcher_front_end(&ctx.settings, false).to_string()
+    } else {
+        opts.matcher_front_end.clone()
+    };
+    if front == "lightglue" {
+        ctx.log(
+            "LightGlue routing requested — using COLMAP matcher until a LightGlue engine is installed.",
+        );
+    } else if front == "roma" {
+        ctx.log(
+            "RoMa matcher routing requested — densify path uses RoMa; SfM uses COLMAP matches.",
+        );
+    }
+
+    let sequential = match front.as_str() {
         "sequential" => true,
-        "exhaustive" => false,
-        // Prefer sequential for video-length sets, but keep exhaustive for
-        // small folders where loops and revisits are common.
-        _ => n_images > 80,
+        "exhaustive" | "lightglue" | "roma" => false,
+        _ => match ctx.settings.matcher.as_str() {
+            "sequential" => true,
+            "exhaustive" => false,
+            _ => n_images > 80,
+        },
     };
     ctx.stage_progress("sfm", 0.35, "Matching features…");
     if sequential {
@@ -168,34 +206,65 @@ pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     }
 
     // 3) Incremental mapping → sparse/0
+    // COLMAP 4.1: pose-prior / GPS covariance mapper when priors exist.
     ctx.stage_progress("sfm", 0.55, "Reconstructing camera poses…");
-    run_colmap(
-        ctx,
-        (0.55, 1.0),
-        &[
-            "mapper",
-            "--database_path",
-            &db_s,
-            "--image_path",
-            &img_s,
-            "--output_path",
-            &sparse_s,
-            "--Mapper.min_num_matches",
-            "12",
-            "--Mapper.init_min_num_inliers",
-            "80",
-            "--Mapper.abs_pose_min_num_inliers",
-            "20",
-            "--Mapper.filter_max_reproj_error",
-            "3.5",
-            "--Mapper.ba_global_max_num_iterations",
-            "40",
-        ],
-        n_images,
-    )
-    .await?;
+    let prior_path = [
+        ws.join("pose_priors.txt"),
+        ws.join("image_priors.txt"),
+        sparse.join("pose_priors.txt"),
+        ws.join("geo").join("pose_priors.txt"),
+    ]
+    .into_iter()
+    .find(|p| p.exists());
 
-    if !sparse.join("0").join("cameras.bin").exists() {
+    let mut mapper_args: Vec<String> = vec![
+        "mapper".into(),
+        "--database_path".into(),
+        db_s.clone(),
+        "--image_path".into(),
+        img_s.clone(),
+        "--output_path".into(),
+        sparse_s.clone(),
+        "--Mapper.min_num_matches".into(),
+        "12".into(),
+        "--Mapper.init_min_num_inliers".into(),
+        "80".into(),
+        "--Mapper.abs_pose_min_num_inliers".into(),
+        "20".into(),
+        "--Mapper.filter_max_reproj_error".into(),
+        "3.5".into(),
+        "--Mapper.ba_global_max_num_iterations".into(),
+        "40".into(),
+    ];
+
+    if opts.use_pose_priors {
+        if let Some(pp) = &prior_path {
+            let pp_s = pp.to_string_lossy().into_owned();
+            // COLMAP 3.9+/4.x pose prior path (best-effort; ignored if unsupported).
+            mapper_args.push("--Mapper.use_pose_prior".into());
+            mapper_args.push("1".into());
+            mapper_args.push("--image_list_path".into());
+            mapper_args.push(pp_s);
+            ctx.log("Mapper: enabling pose-prior / GPS prior hooks.");
+        } else {
+            ctx.log("Pose-prior requested but no pose_priors.txt found; mapping without priors.");
+        }
+    }
+    if opts.use_gravity_prior {
+        let gravity = ws.join("gravity_priors.txt");
+        if gravity.exists() {
+            mapper_args.push("--Mapper.use_prior_rotation".into());
+            mapper_args.push("1".into());
+            ctx.log("Mapper: enabling gravity / orientation prior hook.");
+        }
+    }
+
+    let mapper_refs: Vec<&str> = mapper_args.iter().map(|s| s.as_str()).collect();
+    run_colmap(ctx, (0.55, 1.0), &mapper_refs, n_images).await?;
+
+    if !sparse.join("0").join("cameras.bin").exists()
+        && !sparse.join("0").join("cameras.txt").exists()
+    {
         return Err(
             "COLMAP could not reconstruct the scene from these frames. This usually means too \
              little overlap between frames, motion blur, or a scene with too few distinct \

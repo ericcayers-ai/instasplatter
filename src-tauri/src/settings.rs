@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 fn standard_neural_boost() -> bool {
     let st = crate::pipeline::sidecars::status();
-    st.vggt_commercial || st.roma_v2
+    st.vggt_commercial || st.roma_v2 || st.depth_anything_3 || st.mapanything
 }
 
 pub fn app_data_dir() -> PathBuf {
@@ -72,8 +72,10 @@ pub struct Settings {
     pub post_polish: Option<bool>,
     /// Trainer: "auto" | "brush" | "gsplat". Auto prefers gsplat on CUDA when installed.
     pub trainer: Option<String>,
-    /// gsplat densify strategy: "mcmc" | "default" (AbsGrad when absgrad on).
+    /// gsplat densify strategy: "mcmc" | "default".
+    /// Mutually exclusive with AbsGrad: MCMC turns AbsGrad off; Default enables AbsGrad.
     pub gsplat_strategy: Option<String>,
+    /// AbsGrad densify — only applied when `gsplat_strategy == "default"`.
     pub gsplat_absgrad: Option<bool>,
     pub gsplat_antialiased: Option<bool>,
     pub gsplat_appearance: Option<bool>,
@@ -279,7 +281,8 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
             .clone()
             .filter(|s| s == "mcmc" || s == "default")
             .unwrap_or_else(|| "mcmc".into()),
-        gsplat_absgrad: settings.gsplat_absgrad.unwrap_or(true),
+        // Filled below — MCMC and Default+AbsGrad are mutually exclusive.
+        gsplat_absgrad: false,
         gsplat_antialiased: settings.gsplat_antialiased.unwrap_or(true),
         gsplat_appearance: settings.gsplat_appearance.unwrap_or(true),
         gsplat_bilateral_grid: settings.gsplat_bilateral_grid.unwrap_or(true),
@@ -298,9 +301,17 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         mean_noise_weight: 45.0 * (0.5 + strictness as f64),
     };
 
-    if experimental {
-        // Prefer gsplat Max + all strategies; else Brush Max path.
+    // MCMC vs Default+AbsGrad: mutually exclusive densify strategies.
+    // - mcmc → absgrad forced off
+    // - default → absgrad on (unless user explicitly disabled)
+    if resolved.gsplat_strategy == "mcmc" {
+        resolved.gsplat_absgrad = false;
+    } else {
         resolved.gsplat_absgrad = settings.gsplat_absgrad.unwrap_or(true);
+    }
+
+    if experimental {
+        // Prefer gsplat Max + all appearance knobs; strategy mutual exclusion remains.
         resolved.gsplat_antialiased = settings.gsplat_antialiased.unwrap_or(true);
         resolved.gsplat_appearance = settings.gsplat_appearance.unwrap_or(true);
         resolved.gsplat_bilateral_grid = settings.gsplat_bilateral_grid.unwrap_or(true);
@@ -309,6 +320,11 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
             .clone()
             .filter(|s| s == "mcmc" || s == "default")
             .unwrap_or_else(|| "mcmc".into());
+        if resolved.gsplat_strategy == "mcmc" {
+            resolved.gsplat_absgrad = false;
+        } else {
+            resolved.gsplat_absgrad = settings.gsplat_absgrad.unwrap_or(true);
+        }
     }
 
     resolved.roma_quality = if experimental {
@@ -383,7 +399,7 @@ mod tests {
         assert!(r.post_polish);
         assert_eq!(r.trainer, "brush"); // test profile has CUDA but no gsplat sidecar in CI
         assert_eq!(r.gsplat_strategy, "mcmc");
-        assert!(r.gsplat_absgrad);
+        assert!(!r.gsplat_absgrad); // MCMC excludes AbsGrad
         assert!(r.gsplat_antialiased);
         assert!(!r.live_init);
         assert!((r.blur_reject_fraction - 0.08).abs() < 1e-6);
@@ -495,5 +511,40 @@ mod tests {
         );
         assert!(!r.experimental_mode);
         assert!(!r.allow_research_sidecars);
+    }
+
+    #[test]
+    fn mcmc_and_absgrad_are_mutually_exclusive() {
+        let mcmc = resolve(
+            &Settings {
+                gsplat_strategy: Some("mcmc".into()),
+                gsplat_absgrad: Some(true), // ignored when strategy is MCMC
+                ..Default::default()
+            },
+            &profile(),
+        );
+        assert_eq!(mcmc.gsplat_strategy, "mcmc");
+        assert!(!mcmc.gsplat_absgrad);
+
+        let def = resolve(
+            &Settings {
+                gsplat_strategy: Some("default".into()),
+                gsplat_absgrad: None,
+                ..Default::default()
+            },
+            &profile(),
+        );
+        assert_eq!(def.gsplat_strategy, "default");
+        assert!(def.gsplat_absgrad);
+
+        let def_off = resolve(
+            &Settings {
+                gsplat_strategy: Some("default".into()),
+                gsplat_absgrad: Some(false),
+                ..Default::default()
+            },
+            &profile(),
+        );
+        assert!(!def_off.gsplat_absgrad);
     }
 }

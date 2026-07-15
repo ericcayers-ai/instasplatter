@@ -155,11 +155,151 @@ def load_views(data_dir: Path, device: torch.device, max_side: int = 1280):
     return views, pts, cols
 
 
+def load_gaussian_ply(path: Path):
+    """Load xyz + rgb (and optional scales) from a dense-init / Gaussian PLY."""
+    raw = path.read_bytes()
+    header_end = raw.find(b"end_header")
+    if header_end < 0:
+        raise ValueError("not a PLY")
+    nl = raw.find(b"\n", header_end)
+    header = raw[:nl].decode("ascii", errors="ignore")
+    data = raw[nl + 1 :]
+    props = []
+    vertex_count = 0
+    binary = "binary_little_endian" in header
+    in_vertex = False
+    sizes = {
+        "float": 4,
+        "float32": 4,
+        "double": 8,
+        "float64": 8,
+        "uchar": 1,
+        "uint8": 1,
+        "char": 1,
+        "int8": 1,
+        "ushort": 2,
+        "uint16": 2,
+        "short": 2,
+        "int16": 2,
+        "int": 4,
+        "uint": 4,
+        "int32": 4,
+        "uint32": 4,
+    }
+    offset = 0
+    for line in header.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if parts[0] == "element":
+            in_vertex = parts[1] == "vertex"
+            if in_vertex:
+                vertex_count = int(parts[2])
+            continue
+        if parts[0] == "property" and in_vertex and len(parts) >= 3:
+            typ = parts[1]
+            name = parts[2]
+            props.append((name, offset, sizes.get(typ, 4)))
+            offset += sizes.get(typ, 4)
+    stride = offset
+    if stride == 0 or vertex_count == 0:
+        raise ValueError("empty PLY")
+    find = {n: (o, s) for n, o, s in props}
+
+    def read_f32(base, off):
+        return struct.unpack_from("<f", data, base + off)[0]
+
+    def read_u8(base, off):
+        return data[base + off]
+
+    if not binary:
+        # ASCII fallback: sparse xyzrgb only.
+        lines = data.decode("utf-8", errors="ignore").splitlines()
+        pts, cols = [], []
+        for line in lines[:vertex_count]:
+            p = line.split()
+            if len(p) < 3:
+                continue
+            pts.append([float(p[0]), float(p[1]), float(p[2])])
+            if len(p) >= 6:
+                cols.append([int(float(p[3])), int(float(p[4])), int(float(p[5]))])
+            else:
+                cols.append([180, 180, 180])
+        return (
+            np.asarray(pts, dtype=np.float32),
+            np.asarray(cols, dtype=np.uint8),
+            None,
+            None,
+            None,
+        )
+
+    pts = np.zeros((vertex_count, 3), dtype=np.float32)
+    cols = np.full((vertex_count, 3), 180, dtype=np.uint8)
+    scales = None
+    quats = None
+    opac = None
+    if "scale_0" in find:
+        scales = np.zeros((vertex_count, 3), dtype=np.float32)
+    if "rot_0" in find:
+        quats = np.zeros((vertex_count, 4), dtype=np.float32)
+    if "opacity" in find:
+        opac = np.zeros((vertex_count,), dtype=np.float32)
+
+    for i in range(vertex_count):
+        base = i * stride
+        if base + stride > len(data):
+            pts = pts[:i]
+            cols = cols[:i]
+            if scales is not None:
+                scales = scales[:i]
+            if quats is not None:
+                quats = quats[:i]
+            if opac is not None:
+                opac = opac[:i]
+            break
+        pts[i, 0] = read_f32(base, find["x"][0])
+        pts[i, 1] = read_f32(base, find["y"][0])
+        pts[i, 2] = read_f32(base, find["z"][0])
+        if "red" in find:
+            cols[i, 0] = read_u8(base, find["red"][0])
+            cols[i, 1] = read_u8(base, find["green"][0])
+            cols[i, 2] = read_u8(base, find["blue"][0])
+        elif "f_dc_0" in find:
+            # SH DC → approximate RGB.
+            for c, name in enumerate(("f_dc_0", "f_dc_1", "f_dc_2")):
+                dc = read_f32(base, find[name][0])
+                cols[i, c] = int(np.clip((0.5 + SH_C0 * dc) * 255.0, 0, 255))
+        if scales is not None:
+            scales[i, 0] = read_f32(base, find["scale_0"][0])
+            scales[i, 1] = read_f32(base, find["scale_1"][0])
+            scales[i, 2] = read_f32(base, find["scale_2"][0])
+        if quats is not None:
+            quats[i, 0] = read_f32(base, find["rot_0"][0])
+            quats[i, 1] = read_f32(base, find["rot_1"][0])
+            quats[i, 2] = read_f32(base, find["rot_2"][0])
+            quats[i, 3] = read_f32(base, find["rot_3"][0])
+        if opac is not None:
+            opac[i] = read_f32(base, find["opacity"][0])
+    return pts, cols, scales, quats, opac
+
+
 def init_gaussians(pts, cols, device, init_ply: Path | None, sh_degree: int):
+    scales_log = None
+    quats_np = None
+    opac_logit = None
     if init_ply and init_ply.exists():
-        # Prefer xyz from a densified init; colour grey if needed.
-        # Fall through to simple XYZ reader.
-        pass
+        try:
+            pts_i, cols_i, scales_i, quats_i, opac_i = load_gaussian_ply(init_ply)
+            if pts_i.shape[0] >= 32:
+                pts, cols = pts_i, cols_i
+                scales_log = scales_i
+                quats_np = quats_i
+                opac_logit = opac_i
+                print(f"# init.ply loaded: {pts.shape[0]} gaussians from {init_ply}", flush=True)
+            else:
+                print(f"# init.ply too small ({pts_i.shape[0]}); using COLMAP points", flush=True)
+        except Exception as e:
+            print(f"# init.ply load failed ({e}); using COLMAP points", flush=True)
     if pts.size == 0:
         pts = np.random.randn(10_000, 3).astype(np.float32) * 0.5
         cols = np.full((pts.shape[0], 3), 128, dtype=np.uint8)
@@ -168,9 +308,20 @@ def init_gaussians(pts, cols, device, init_ply: Path | None, sh_degree: int):
     rgb = torch.from_numpy(cols.astype(np.float32) / 255.0).to(device)
     sh0 = ((rgb - 0.5) / SH_C0).unsqueeze(1)
     shN = torch.zeros(n, (sh_degree + 1) ** 2 - 1, 3, device=device)
-    scales = torch.nn.Parameter(torch.full((n, 3), math.log(0.01), device=device))
-    quats = torch.nn.Parameter(torch.tensor([[1, 0, 0, 0]], dtype=torch.float32, device=device).repeat(n, 1))
-    opacities = torch.nn.Parameter(torch.logit(torch.full((n,), 0.1, device=device)))
+    if scales_log is not None:
+        scales = torch.nn.Parameter(torch.from_numpy(scales_log).to(device))
+    else:
+        scales = torch.nn.Parameter(torch.full((n, 3), math.log(0.01), device=device))
+    if quats_np is not None:
+        quats = torch.nn.Parameter(torch.from_numpy(quats_np).to(device))
+    else:
+        quats = torch.nn.Parameter(
+            torch.tensor([[1, 0, 0, 0]], dtype=torch.float32, device=device).repeat(n, 1)
+        )
+    if opac_logit is not None:
+        opacities = torch.nn.Parameter(torch.from_numpy(opac_logit).to(device))
+    else:
+        opacities = torch.nn.Parameter(torch.logit(torch.full((n,), 0.1, device=device)))
     sh0 = torch.nn.Parameter(sh0)
     shN = torch.nn.Parameter(shN)
     params = {

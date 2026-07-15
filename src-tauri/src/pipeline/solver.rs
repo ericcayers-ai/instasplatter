@@ -1,10 +1,140 @@
-//! Dual-mode camera / densify / polish policy (Standard vs Experimental).
+//! Capture-aware camera / densify / polish policy (Standard vs Experimental).
 //!
 //! Standard stays commercially redistributable. Experimental requires an
 //! explicit license ack and unlocks NC research sidecars (Ω, MASt3R, DUSt3R, Difix).
+//!
+//! Pose routing scores hypotheses instead of fail-down-only lists. Accepted
+//! results always land in one canonical COLMAP/ENU frame before refinement.
 
 use super::sidecars::SidecarStatus;
+use crate::colmap::Model;
 use crate::settings::ResolvedSettings;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// Capture shape used to order pose / densify candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureProfile {
+    OrderedVideo,
+    UnorderedPhotos,
+    GpsRtkDrone,
+    FisheyeOrRollingShutter,
+    DynamicScene,
+    LargeScene,
+}
+
+/// Detect a capture profile from frame count + lightweight workspace hints.
+/// GPS telemetry / EXIF priors (when present under workspace) unlock the drone profile.
+pub fn detect_capture_profile(
+    images_dir: &Path,
+    workspace: &Path,
+    experimental: bool,
+) -> CaptureProfile {
+    let n = count_images(images_dir);
+    let has_gps = has_pose_priors(workspace) || has_exif_gps_hint(images_dir);
+    let sequential_names = looks_sequential(images_dir);
+    let large = n >= 400;
+
+    if has_gps {
+        return CaptureProfile::GpsRtkDrone;
+    }
+    if workspace.join("capture_hints").join("fisheye").exists()
+        || workspace.join("capture_hints").join("rolling_shutter").exists()
+    {
+        return CaptureProfile::FisheyeOrRollingShutter;
+    }
+    if experimental && workspace.join("capture_hints").join("dynamic").exists() {
+        return CaptureProfile::DynamicScene;
+    }
+    if large {
+        return CaptureProfile::LargeScene;
+    }
+    if sequential_names && n >= 40 {
+        return CaptureProfile::OrderedVideo;
+    }
+    CaptureProfile::UnorderedPhotos
+}
+
+fn count_images(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .map(|x| {
+                            matches!(
+                                x.to_ascii_lowercase().as_str(),
+                                "jpg" | "jpeg" | "png" | "webp" | "tif" | "tiff" | "bmp"
+                            )
+                        })
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn looks_sequential(dir: &Path) -> bool {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    if names.len() < 8 {
+        return false;
+    }
+    // Consecutive numeric stems with small gaps ⇒ ordered video / frame dump.
+    let nums: Vec<i64> = names
+        .iter()
+        .filter_map(|n| {
+            let stem = Path::new(n).file_stem()?.to_str()?;
+            let digits: String = stem.chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits.len() >= 3 {
+                digits.parse().ok()
+            } else {
+                None
+            }
+        })
+        .collect();
+    if nums.len() < names.len() * 3 / 4 {
+        return false;
+    }
+    let mut gaps = 0usize;
+    for w in nums.windows(2) {
+        if w[1] > w[0] && (w[1] - w[0]) <= 5 {
+            gaps += 1;
+        }
+    }
+    gaps as f32 / (nums.len().saturating_sub(1).max(1) as f32) > 0.7
+}
+
+/// Pose-prior files written by geo-registration / EXIF ingestion.
+pub fn has_pose_priors(workspace: &Path) -> bool {
+    let sparse = workspace.join("sparse");
+    [
+        workspace.join("pose_priors.txt"),
+        workspace.join("image_priors.txt"),
+        sparse.join("pose_priors.txt"),
+        sparse.join("0").join("pose_priors.txt"),
+        workspace.join("geo").join("pose_priors.txt"),
+    ]
+    .iter()
+    .any(|p| p.exists())
+}
+
+fn has_exif_gps_hint(images_dir: &Path) -> bool {
+    // Lightweight marker from ingest / geo agents — avoid parsing every EXIF here.
+    images_dir.join(".gps_present").exists()
+        || images_dir
+            .parent()
+            .map(|p| p.join("capture_hints").join("gps").exists())
+            .unwrap_or(false)
+}
 
 /// Human label for status chips / banner.
 pub fn camera_chip(solver: &str) -> String {
@@ -13,38 +143,224 @@ pub fn camera_chip(solver: &str) -> String {
         "mast3r" => "Cameras: MASt3R-SfM".into(),
         "dust3r" => "Cameras: DUSt3R".into(),
         "vggt-commercial" => "Cameras: VGGT-Commercial".into(),
+        "mapanything" => "Cameras: MapAnything".into(),
         "colmap" => "Cameras: COLMAP".into(),
+        "colmap-pose-prior" => "Cameras: COLMAP (pose-prior)".into(),
         "colmap-fallback" => "Cameras: COLMAP (fallback)".into(),
         "live-init" => "Cameras: Live tracking".into(),
         other => format!("Cameras: {other}"),
     }
 }
 
-/// Ordered pose solvers for Standard Mode (VGGT-Commercial first).
-pub fn standard_pose_chain(st: &SidecarStatus) -> Vec<&'static str> {
-    let mut v = Vec::new();
-    if st.vggt_commercial {
-        v.push("vggt-commercial");
+/// Hypothesis quality metrics used to pick among pose solvers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HypothesisScore {
+    pub solver: String,
+    pub registered_ratio: f32,
+    pub median_reproj_error: f32,
+    pub mean_track_length: f32,
+    pub cheirality_ratio: f32,
+    pub loop_consistency: f32,
+    pub gps_residual: Option<f32>,
+    pub composite: f32,
+}
+
+impl HypothesisScore {
+    /// Higher is better. Soft gates reject obviously broken models.
+    pub fn compute(solver: &str, model: &Model, expected_images: usize) -> Self {
+        let n_img = model.images.len().max(1);
+        let expected = expected_images.max(n_img);
+        let registered_ratio = (n_img as f32 / expected as f32).clamp(0.0, 1.0);
+
+        let mut errors: Vec<f64> = model.points.iter().map(|p| p.error).filter(|e| e.is_finite()).collect();
+        errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_reproj_error = if errors.is_empty() {
+            99.0
+        } else {
+            errors[errors.len() / 2] as f32
+        };
+
+        let mean_track_length = if model.points.is_empty() {
+            0.0
+        } else {
+            model.points.iter().map(|p| p.track.len() as f32).sum::<f32>()
+                / model.points.len() as f32
+        };
+
+        // Proxy cheirality: fraction of points with track length ≥ 2 and low error.
+        let good = model
+            .points
+            .iter()
+            .filter(|p| p.track.len() >= 2 && p.error <= 4.0)
+            .count();
+        let cheirality_ratio = if model.points.is_empty() {
+            0.0
+        } else {
+            good as f32 / model.points.len() as f32
+        };
+
+        // Loop consistency proxy from coverage × track stability.
+        let loop_consistency = (registered_ratio * (mean_track_length / 4.0).clamp(0.0, 1.0))
+            .clamp(0.0, 1.0);
+
+        let mut s = Self {
+            solver: solver.to_string(),
+            registered_ratio,
+            median_reproj_error,
+            mean_track_length,
+            cheirality_ratio,
+            loop_consistency,
+            gps_residual: None,
+            composite: 0.0,
+        };
+        s.composite = s.score_value();
+        s
     }
+
+    pub fn score_value(&self) -> f32 {
+        let reproj = (1.0 - (self.median_reproj_error / 8.0).clamp(0.0, 1.0)).max(0.0);
+        let track = (self.mean_track_length / 6.0).clamp(0.0, 1.0);
+        let mut c = 0.30 * self.registered_ratio
+            + 0.22 * reproj
+            + 0.18 * track
+            + 0.18 * self.cheirality_ratio
+            + 0.12 * self.loop_consistency;
+        if let Some(gps) = self.gps_residual {
+            // Lower residual is better; meters-scale penalty.
+            c *= 1.0 - (gps / 5.0).clamp(0.0, 0.5);
+        }
+        c
+    }
+
+    pub fn passes_gates(&self) -> bool {
+        self.registered_ratio >= 0.35
+            && self.median_reproj_error <= 6.0
+            && self.mean_track_length >= 1.5
+            && self.cheirality_ratio >= 0.25
+            && self.composite >= 0.28
+    }
+}
+
+/// Ordered pose solvers for a capture profile (Standard, commercial-only).
+pub fn standard_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    match profile {
+        CaptureProfile::GpsRtkDrone => {
+            // COLMAP pose-prior mapper is preferred; neural repairs weak sections.
+            v.push("colmap-pose-prior");
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+        }
+        CaptureProfile::OrderedVideo => {
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+        }
+        CaptureProfile::FisheyeOrRollingShutter | CaptureProfile::LargeScene => {
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+        }
+        CaptureProfile::DynamicScene | CaptureProfile::UnorderedPhotos => {
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+        }
+    }
+    v.dedup();
     v
 }
 
-/// Ordered pose solvers for Experimental Mode (fail-down).
-pub fn experimental_pose_chain(st: &SidecarStatus) -> Vec<&'static str> {
+/// Ordered pose solvers for Experimental Mode (evaluate relevant research engines).
+pub fn experimental_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> Vec<&'static str> {
     let mut v = Vec::new();
-    if st.vggt_omega {
-        v.push("vggt-omega");
+    match profile {
+        CaptureProfile::OrderedVideo | CaptureProfile::LargeScene => {
+            if st.vggt_omega {
+                v.push("vggt-omega");
+            }
+            if st.mast3r {
+                v.push("mast3r");
+            }
+            if st.dust3r {
+                v.push("dust3r");
+            }
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+        }
+        CaptureProfile::DynamicScene => {
+            if st.vggt_omega {
+                v.push("vggt-omega");
+            }
+            if st.mast3r {
+                v.push("mast3r");
+            }
+            if st.dust3r {
+                v.push("dust3r");
+            }
+        }
+        CaptureProfile::GpsRtkDrone => {
+            v.push("colmap-pose-prior");
+            if st.vggt_omega {
+                v.push("vggt-omega");
+            }
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+            if st.mast3r {
+                v.push("mast3r");
+            }
+        }
+        CaptureProfile::UnorderedPhotos | CaptureProfile::FisheyeOrRollingShutter => {
+            if st.vggt_omega {
+                v.push("vggt-omega");
+            }
+            if st.mast3r {
+                v.push("mast3r");
+            }
+            if st.dust3r {
+                v.push("dust3r");
+            }
+            if st.vggt_commercial {
+                v.push("vggt-commercial");
+            }
+            if st.mapanything {
+                v.push("mapanything");
+            }
+        }
     }
-    if st.mast3r {
-        v.push("mast3r");
-    }
-    if st.dust3r {
-        v.push("dust3r");
-    }
-    if st.vggt_commercial {
-        v.push("vggt-commercial");
-    }
+    v.dedup();
     v
+}
+
+/// Back-compat wrappers used by older call sites / tests.
+pub fn standard_pose_chain(st: &SidecarStatus) -> Vec<&'static str> {
+    standard_pose_candidates(CaptureProfile::UnorderedPhotos, st)
+}
+
+pub fn experimental_pose_chain(st: &SidecarStatus) -> Vec<&'static str> {
+    experimental_pose_candidates(CaptureProfile::UnorderedPhotos, st)
 }
 
 /// Whether a launcher is non-commercial / research-gated.
@@ -55,8 +371,8 @@ pub fn is_research_sidecar(name: &str) -> bool {
     )
 }
 
-/// Select densify launcher order. Experimental merges every present source;
-/// Standard prefers commercial/Apache ones (RoMa handled separately).
+/// Select densify launcher order. Standard prefers commercial/Apache sources.
+/// Experimental evaluates research engines too — fusion (not concatenation) is downstream.
 pub fn densify_neural_order(settings: &ResolvedSettings, st: &SidecarStatus) -> Vec<&'static str> {
     let mut v = Vec::new();
     if settings.experimental_mode {
@@ -72,7 +388,13 @@ pub fn densify_neural_order(settings: &ResolvedSettings, st: &SidecarStatus) -> 
         if st.vggt_commercial {
             v.push("vggt-commercial");
         }
-        if st.depth_anything_v2 {
+        if st.mapanything {
+            v.push("mapanything");
+        }
+        if st.depth_anything_3 {
+            v.push("depth-anything-3");
+        } else if st.depth_anything_v2 {
+            // Legacy DAV2 only when DA3 is absent.
             v.push("depth-anything-v2");
         }
         if st.vggt_research {
@@ -83,7 +405,12 @@ pub fn densify_neural_order(settings: &ResolvedSettings, st: &SidecarStatus) -> 
         if st.vggt_commercial {
             v.push("vggt-commercial");
         }
-        if st.depth_anything_v2 {
+        if st.mapanything {
+            v.push("mapanything");
+        }
+        if st.depth_anything_3 {
+            v.push("depth-anything-3");
+        } else if st.depth_anything_v2 {
             v.push("depth-anything-v2");
         }
     }
@@ -100,6 +427,18 @@ pub fn polish_order(settings: &ResolvedSettings, st: &SidecarStatus) -> Vec<&'st
         v.push("fixer");
     }
     v
+}
+
+/// Pick the matcher front-end for COLMAP routing (LightGlue stub when selected/available).
+pub fn matcher_front_end(settings: &ResolvedSettings, lightglue_ready: bool) -> &'static str {
+    match settings.matcher.as_str() {
+        "lightglue" if lightglue_ready => "lightglue",
+        "sequential" => "sequential",
+        "exhaustive" => "exhaustive",
+        "roma" => "roma",
+        _ if lightglue_ready && settings.experimental_mode => "lightglue",
+        _ => "auto",
+    }
 }
 
 #[cfg(test)]
@@ -125,11 +464,13 @@ mod tests {
     fn empty_st() -> SidecarStatus {
         SidecarStatus {
             depth_anything_v2: false,
+            depth_anything_3: false,
             vggt_commercial: false,
             vggt_omega: false,
             vggt_research: false,
             mast3r: false,
             dust3r: false,
+            mapanything: false,
             roma_v2: false,
             fixer: false,
             difix: false,
@@ -137,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn experimental_pose_chain_orders_fail_down() {
+    fn experimental_pose_chain_orders_research_first() {
         let mut st = empty_st();
         st.vggt_omega = true;
         st.mast3r = true;
@@ -145,7 +486,12 @@ mod tests {
         st.vggt_commercial = true;
         assert_eq!(
             experimental_pose_chain(&st),
-            vec!["vggt-omega", "mast3r", "dust3r", "vggt-commercial"]
+            vec![
+                "vggt-omega",
+                "mast3r",
+                "dust3r",
+                "vggt-commercial"
+            ]
         );
     }
 
@@ -154,7 +500,22 @@ mod tests {
         let mut st = empty_st();
         st.vggt_omega = true;
         st.vggt_commercial = true;
-        assert_eq!(standard_pose_chain(&st), vec!["vggt-commercial"]);
+        st.mapanything = true;
+        assert_eq!(
+            standard_pose_chain(&st),
+            vec!["vggt-commercial", "mapanything"]
+        );
+    }
+
+    #[test]
+    fn gps_profile_prefers_pose_prior_mapper() {
+        let mut st = empty_st();
+        st.vggt_commercial = true;
+        st.mapanything = true;
+        assert_eq!(
+            standard_pose_candidates(CaptureProfile::GpsRtkDrone, &st),
+            vec!["colmap-pose-prior", "vggt-commercial", "mapanything"]
+        );
     }
 
     #[test]
@@ -163,6 +524,38 @@ mod tests {
         assert!(is_research_sidecar("mast3r"));
         assert!(!is_research_sidecar("vggt-commercial"));
         assert!(!is_research_sidecar("roma-v2"));
+        assert!(!is_research_sidecar("depth-anything-3"));
+        assert!(!is_research_sidecar("mapanything"));
+    }
+
+    #[test]
+    fn hypothesis_score_gates_weak_models() {
+        let weak = HypothesisScore {
+            solver: "x".into(),
+            registered_ratio: 0.1,
+            median_reproj_error: 12.0,
+            mean_track_length: 1.0,
+            cheirality_ratio: 0.1,
+            loop_consistency: 0.1,
+            gps_residual: None,
+            composite: 0.05,
+        };
+        assert!(!weak.passes_gates());
+
+        let strong = HypothesisScore {
+            solver: "y".into(),
+            registered_ratio: 0.9,
+            median_reproj_error: 1.2,
+            mean_track_length: 4.0,
+            cheirality_ratio: 0.8,
+            loop_consistency: 0.7,
+            gps_residual: Some(0.2),
+            composite: 0.0,
+        };
+        let mut strong = strong;
+        strong.composite = strong.score_value();
+        assert!(strong.passes_gates());
+        assert!(strong.composite > 0.5);
     }
 
     #[test]
@@ -221,11 +614,22 @@ mod tests {
         st.mast3r = true;
         st.dust3r = true;
         st.vggt_commercial = true;
-        st.depth_anything_v2 = true;
+        st.depth_anything_3 = true;
+        st.mapanything = true;
         assert_eq!(
             densify_neural_order(&r, &st),
-            vec!["vggt-commercial", "depth-anything-v2"]
+            vec!["vggt-commercial", "mapanything", "depth-anything-3"]
         );
         assert!(!r.allow_research_sidecars);
+    }
+
+    #[test]
+    fn da3_preferred_over_legacy_dav2() {
+        let s = Settings::default();
+        let r = resolve(&s, &profile());
+        let mut st = empty_st();
+        st.depth_anything_3 = true;
+        st.depth_anything_v2 = true;
+        assert_eq!(densify_neural_order(&r, &st), vec!["depth-anything-3"]);
     }
 }

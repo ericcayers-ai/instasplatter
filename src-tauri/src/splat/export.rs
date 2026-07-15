@@ -1,11 +1,10 @@
 //! Splat export formats (ROADMAP-V2 1.6).
 //!
 //! PLY stays the default. `.splat` is the 32-byte-per-Gaussian layout the
-//! common web viewers read, and `.spz` is Niantic's gzip-compressed format
-//! (container version 2).
+//! common web viewers read, and `.spz` is Niantic's compressed format
+//! (container version 4 — ZSTD parallel attribute streams).
 
 use super::{ply, SplatCloud, SH_C0};
-use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,13 +95,14 @@ pub fn encode_splat(cloud: &SplatCloud) -> Vec<u8> {
     out
 }
 
-// ---- .spz ------------------------------------------------------------------
+// ---- .spz (Niantic SPZ v4) -------------------------------------------------
 
 const SPZ_MAGIC: u32 = 0x5053_474e; // "NGSP"
-const SPZ_VERSION: u32 = 2;
+const SPZ_VERSION: u32 = 4;
 const SPZ_FRACTIONAL_BITS: u8 = 12;
 /// Niantic's fixed colour scale for the DC band.
 const SPZ_COLOR_SCALE: f32 = 0.15;
+const SPZ_NUM_STREAMS: u8 = 6;
 
 /// Round `x * 128 + 128` onto a bucket grid, as SPZ does for SH coefficients.
 fn quantize_sh(x: f32, bucket: i32) -> u8 {
@@ -111,82 +111,181 @@ fn quantize_sh(x: f32, bucket: i32) -> u8 {
     q.clamp(0, 255) as u8
 }
 
-/// Encode to SPZ container version 2 (gzip-compressed).
-pub fn encode_spz(cloud: &SplatCloud) -> Result<Vec<u8>, String> {
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
+/// Pack a unit quaternion into SPZ v3/v4 smallest-three 32-bit encoding.
+fn pack_quat_v4(q: [f32; 4]) -> [u8; 4] {
+    // Find largest absolute component; flip so it is non-negative.
+    let mut q = q;
+    let mut largest = 0usize;
+    let mut best = q[0].abs();
+    for i in 1..4 {
+        if q[i].abs() > best {
+            best = q[i].abs();
+            largest = i;
+        }
+    }
+    if q[largest] < 0.0 {
+        for v in &mut q {
+            *v = -*v;
+        }
+    }
+    let rest: [f32; 3] = match largest {
+        0 => [q[1], q[2], q[3]],
+        1 => [q[0], q[2], q[3]],
+        2 => [q[0], q[1], q[3]],
+        _ => [q[0], q[1], q[2]],
+    };
+    // 10-bit signed fixed: value ∈ [-1/√2, 1/√2] → [-511, 511]
+    let scale = std::f32::consts::SQRT_2 * 511.0;
+    let enc = |v: f32| -> u32 {
+        let i = (v * scale).round().clamp(-511.0, 511.0) as i32;
+        (i as u32) & 0x3ff
+    };
+    let packed: u32 = ((largest as u32) << 30)
+        | (enc(rest[0]) << 20)
+        | (enc(rest[1]) << 10)
+        | enc(rest[2]);
+    packed.to_le_bytes()
+}
 
+fn unpack_quat_v4(bytes: &[u8]) -> [f32; 4] {
+    let packed = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let largest = (packed >> 30) as usize;
+    let dec = |shift: u32| -> f32 {
+        let mut bits = ((packed >> shift) & 0x3ff) as i32;
+        if bits >= 512 {
+            bits -= 1024; // sign-extend 10 bits
+        }
+        bits as f32 / (std::f32::consts::SQRT_2 * 511.0)
+    };
+    let a = dec(20);
+    let b = dec(10);
+    let c = dec(0);
+    let mut q = [0.0f32; 4];
+    match largest {
+        0 => {
+            q[1] = a;
+            q[2] = b;
+            q[3] = c;
+        }
+        1 => {
+            q[0] = a;
+            q[2] = b;
+            q[3] = c;
+        }
+        2 => {
+            q[0] = a;
+            q[1] = b;
+            q[3] = c;
+        }
+        _ => {
+            q[0] = a;
+            q[1] = b;
+            q[2] = c;
+        }
+    }
+    let sum = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    q[largest] = (1.0 - sum).max(0.0).sqrt();
+    q
+}
+
+fn zstd_compress(raw: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::encode_all(raw, 3).map_err(|e| format!("SPZ zstd compress: {e}"))
+}
+
+/// Encode to official SPZ container version 4 (ZSTD parallel attribute streams).
+pub fn encode_spz(cloud: &SplatCloud) -> Result<Vec<u8>, String> {
     let n = cloud.len();
     if n > u32::MAX as usize {
         return Err("Too many splats for the SPZ format.".into());
     }
-    let sh_degree = cloud.sh_degree();
+    let sh_degree = cloud.sh_degree() as u8;
     let k = cloud.rest_per_channel;
 
-    let mut raw: Vec<u8> = Vec::with_capacity(16 + n * (9 + 1 + 3 + 3 + 3 + k * 3));
-
-    raw.extend_from_slice(&SPZ_MAGIC.to_le_bytes());
-    raw.extend_from_slice(&SPZ_VERSION.to_le_bytes());
-    raw.extend_from_slice(&(n as u32).to_le_bytes());
-    raw.push(sh_degree as u8);
-    raw.push(SPZ_FRACTIONAL_BITS);
-    raw.push(0); // flags: not antialiased
-    raw.push(0); // reserved
-
-    // Positions: 24-bit little-endian signed fixed point.
-    let scale = (1i32 << SPZ_FRACTIONAL_BITS) as f32;
-    for i in 0..n {
-        for k2 in 0..3 {
-            let fixed = (cloud.positions[i][k2] * scale).round() as i32;
-            raw.push((fixed & 0xff) as u8);
-            raw.push(((fixed >> 8) & 0xff) as u8);
-            raw.push(((fixed >> 16) & 0xff) as u8);
-        }
-    }
-    // Alphas.
-    for i in 0..n {
-        raw.push(to_u8(cloud.opacity(i) * 255.0));
-    }
-    // Colours: the DC band, not the resolved RGB.
+    // ---- attribute streams (uncompressed) ----
+    let mut positions = Vec::with_capacity(n * 9);
+    let scale_fix = (1i32 << SPZ_FRACTIONAL_BITS) as f32;
     for i in 0..n {
         for c in 0..3 {
-            raw.push(to_u8(
+            let fixed = (cloud.positions[i][c] * scale_fix).round() as i32;
+            positions.push((fixed & 0xff) as u8);
+            positions.push(((fixed >> 8) & 0xff) as u8);
+            positions.push(((fixed >> 16) & 0xff) as u8);
+        }
+    }
+
+    let mut alphas = Vec::with_capacity(n);
+    for i in 0..n {
+        alphas.push(to_u8(cloud.opacity(i) * 255.0));
+    }
+
+    let mut colors = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        for c in 0..3 {
+            colors.push(to_u8(
                 cloud.sh_dc[i][c] * (SPZ_COLOR_SCALE * 255.0) + 0.5 * 255.0,
             ));
         }
     }
-    // Scales: log-scale offset by 10 and scaled by 16.
+
+    let mut scales = Vec::with_capacity(n * 3);
     for i in 0..n {
         for c in 0..3 {
-            raw.push(to_u8((cloud.scales_log[i][c] + 10.0) * 16.0));
+            scales.push(to_u8((cloud.scales_log[i][c] + 10.0) * 16.0));
         }
     }
-    // Rotations: xyz only, with the sign fixed so w >= 0.
+
+    let mut rotations = Vec::with_capacity(n * 4);
     for i in 0..n {
-        let q = cloud.unit_rot(i);
-        let s = if q[0] < 0.0 { -1.0 } else { 1.0 };
-        for c in 1..4 {
-            raw.push(to_u8(q[c] * s * 127.5 + 127.5));
-        }
+        rotations.extend_from_slice(&pack_quat_v4(cloud.unit_rot(i)));
     }
-    // Higher-order SH, coefficient-major, with coarser buckets above band 1.
+
+    let mut sh = Vec::new();
     if k > 0 {
+        sh.reserve(n * k * 3);
         for i in 0..n {
             let base = i * k * 3;
             for j in 0..k {
                 for c in 0..3 {
-                    // PLY stores channel-major; SPZ wants coefficient-major.
                     let v = cloud.sh_rest[base + c * k + j];
                     let bucket = if j < 3 { 8 } else { 16 };
-                    raw.push(quantize_sh(v, bucket));
+                    sh.push(quantize_sh(v, bucket));
                 }
             }
         }
     }
 
-    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(&raw).map_err(|e| e.to_string())?;
-    enc.finish().map_err(|e| e.to_string())
+    let streams_raw = [positions, alphas, colors, scales, rotations, sh];
+    let mut compressed: Vec<Vec<u8>> = Vec::with_capacity(6);
+    let mut toc: Vec<(u64, u64)> = Vec::with_capacity(6);
+    for raw in &streams_raw {
+        let c = zstd_compress(raw)?;
+        toc.push((c.len() as u64, raw.len() as u64));
+        compressed.push(c);
+    }
+
+    let toc_byte_offset: u32 = 32; // no extensions
+    let mut out: Vec<u8> = Vec::with_capacity(32 + 6 * 16 + compressed.iter().map(|c| c.len()).sum::<usize>());
+
+    // 32-byte plaintext NgspFileHeader
+    out.extend_from_slice(&SPZ_MAGIC.to_le_bytes());
+    out.extend_from_slice(&SPZ_VERSION.to_le_bytes());
+    out.extend_from_slice(&(n as u32).to_le_bytes());
+    out.push(sh_degree);
+    out.push(SPZ_FRACTIONAL_BITS);
+    out.push(0); // flags
+    out.push(SPZ_NUM_STREAMS);
+    out.extend_from_slice(&toc_byte_offset.to_le_bytes());
+    out.extend_from_slice(&[0u8; 12]); // reserved
+
+    // TOC: N × [compressedSize u64, uncompressedSize u64]
+    for (csize, usize_) in &toc {
+        out.extend_from_slice(&csize.to_le_bytes());
+        out.extend_from_slice(&usize_.to_le_bytes());
+    }
+    for c in &compressed {
+        out.extend_from_slice(c);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -249,57 +348,74 @@ mod tests {
         assert_eq!(b[32 + 31], to_u8(q[3] * 128.0 + 128.0));
     }
 
-    /// Decode an SPZ stream back into the quantized fields, mirroring the
-    /// reference reader, so the encoder is checked against a real layout
-    /// rather than against itself.
-    fn decode_spz(bytes: &[u8]) -> (u32, u8, u8, Vec<[f32; 3]>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
-        use flate2::read::GzDecoder;
-        use std::io::Read;
-        let mut raw = Vec::new();
-        GzDecoder::new(bytes).read_to_end(&mut raw).unwrap();
+    /// Decode an SPZ v4 stream back into uncompressed attribute fields.
+    fn decode_spz(
+        bytes: &[u8],
+    ) -> (
+        u32,
+        u8,
+        u8,
+        Vec<[f32; 3]>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+    ) {
+        assert!(bytes.len() >= 32);
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), SPZ_MAGIC);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), SPZ_VERSION);
+        let n = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        let sh_degree = bytes[12];
+        let frac = bytes[13];
+        assert_eq!(bytes[14], 0); // flags
+        let num_streams = bytes[15];
+        assert_eq!(num_streams, SPZ_NUM_STREAMS);
+        let toc_off = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+        assert_eq!(toc_off, 32);
 
-        assert_eq!(u32::from_le_bytes(raw[0..4].try_into().unwrap()), SPZ_MAGIC);
-        assert_eq!(u32::from_le_bytes(raw[4..8].try_into().unwrap()), SPZ_VERSION);
-        let n = u32::from_le_bytes(raw[8..12].try_into().unwrap());
-        let sh_degree = raw[12];
-        let frac = raw[13];
-        assert_eq!(raw[14], 0);
-        assert_eq!(raw[15], 0);
+        let mut at = toc_off;
+        let mut toc = Vec::new();
+        for _ in 0..num_streams {
+            let csize = u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+            let usize_ = u64::from_le_bytes(bytes[at + 8..at + 16].try_into().unwrap());
+            toc.push((csize as usize, usize_ as usize));
+            at += 16;
+        }
+        let mut streams = Vec::new();
+        for (csize, _) in &toc {
+            let chunk = &bytes[at..at + *csize];
+            let raw = zstd::decode_all(chunk).expect("zstd decode");
+            streams.push(raw);
+            at += *csize;
+        }
+        assert_eq!(at, bytes.len());
+
+        let pos_raw = &streams[0];
+        let alphas = streams[1].clone();
+        let colors = streams[2].clone();
+        let scales = streams[3].clone();
+        let rots = streams[4].clone();
+        let sh = streams[5].clone();
 
         let np = n as usize;
-        let mut at = 16usize;
         let mut positions = Vec::with_capacity(np);
         let inv = 1.0f32 / (1i32 << frac) as f32;
+        let mut p_at = 0usize;
         for _ in 0..np {
             let mut p = [0.0f32; 3];
             for v in p.iter_mut() {
-                let mut fixed =
-                    (raw[at] as i32) | ((raw[at + 1] as i32) << 8) | ((raw[at + 2] as i32) << 16);
+                let mut fixed = (pos_raw[p_at] as i32)
+                    | ((pos_raw[p_at + 1] as i32) << 8)
+                    | ((pos_raw[p_at + 2] as i32) << 16);
                 if fixed & 0x0080_0000 != 0 {
-                    fixed |= -0x0100_0000; // sign-extend 24 bits
+                    fixed |= -0x0100_0000;
                 }
                 *v = fixed as f32 * inv;
-                at += 3;
+                p_at += 3;
             }
             positions.push(p);
         }
-        let take = |at: &mut usize, count: usize| {
-            let s = raw[*at..*at + count].to_vec();
-            *at += count;
-            s
-        };
-        let alphas = take(&mut at, np);
-        let colors = take(&mut at, np * 3);
-        let scales = take(&mut at, np * 3);
-        let rots = take(&mut at, np * 3);
-        let sh_dim = match sh_degree {
-            0 => 0,
-            1 => 3,
-            2 => 8,
-            _ => 15,
-        };
-        let sh = take(&mut at, np * sh_dim * 3);
-        assert_eq!(at, raw.len(), "trailing bytes in SPZ payload");
         (n, sh_degree, frac, positions, alphas, colors, scales, rots, sh)
     }
 
@@ -307,8 +423,8 @@ mod tests {
     fn spz_header_and_payload_match_the_container_layout() {
         let c = cloud(4, 0);
         let bytes = encode_spz(&c).unwrap();
-        // gzip magic
-        assert_eq!(&bytes[0..2], &[0x1f, 0x8b]);
+        // SPZ v4 plaintext magic (not gzip).
+        assert_eq!(&bytes[0..4], b"NGSP");
 
         let (n, deg, frac, pos, alphas, colors, scales, rots, sh) = decode_spz(&bytes);
         assert_eq!(n, 4);
@@ -318,36 +434,38 @@ mod tests {
         assert_eq!(alphas.len(), 4);
         assert_eq!(colors.len(), 12);
         assert_eq!(scales.len(), 12);
-        assert_eq!(rots.len(), 12);
+        assert_eq!(rots.len(), 16); // 4 bytes per splat in v4
 
-        // Positions survive the fixed-point round trip within one LSB, and
-        // the negative coordinate proves the sign extension is right.
         for i in 0..4 {
             for k in 0..3 {
                 let err = (pos[i][k] - c.positions[i][k]).abs();
-                assert!(err < 1.0 / 4096.0, "{i},{k}: {} vs {}", pos[i][k], c.positions[i][k]);
+                assert!(
+                    err < 1.0 / 4096.0,
+                    "{i},{k}: {} vs {}",
+                    pos[i][k],
+                    c.positions[i][k]
+                );
             }
         }
         assert!(pos[1][1] < 0.0, "negative coordinate must decode negative");
     }
 
     #[test]
-    fn spz_rotation_is_stored_xyz_with_a_non_negative_w() {
+    fn spz_rotation_v4_round_trips_with_non_negative_largest() {
         let c = cloud(1, 0);
         let bytes = encode_spz(&c).unwrap();
         let (_, _, _, _, _, _, _, rots, _) = decode_spz(&bytes);
 
-        // Input quaternion has w < 0, so the encoder must flip the sign.
-        let q = c.unit_rot(0);
-        assert!(q[0] < 0.0);
-        let x = (rots[0] as f32 - 127.5) / 127.5;
-        assert!((x - (-q[1])).abs() < 0.01, "{x} vs {}", -q[1]);
-
-        // Recovering w from the stored xyz gives a unit quaternion.
-        let y = (rots[1] as f32 - 127.5) / 127.5;
-        let z = (rots[2] as f32 - 127.5) / 127.5;
-        let w2 = 1.0 - (x * x + y * y + z * z);
-        assert!(w2 > -0.01, "xyz must lie inside the unit ball: {w2}");
+        let q_in = c.unit_rot(0);
+        assert!(q_in[0] < 0.0);
+        let q_out = unpack_quat_v4(&rots[0..4]);
+        // Angular check: absolute dot of unit quaternions ≥ ~0.98 (sign may flip).
+        let dot = (q_in[0] * q_out[0]
+            + q_in[1] * q_out[1]
+            + q_in[2] * q_out[2]
+            + q_in[3] * q_out[3])
+            .abs();
+        assert!(dot > 0.98, "quat round-trip dot={dot}");
     }
 
     #[test]
@@ -369,14 +487,12 @@ mod tests {
         assert_eq!(deg, 1);
         assert_eq!(sh.len(), 9);
 
-        // PLY channel-major -> SPZ coefficient-major: sh[j*3 + ch] == rest[ch*3 + j]
         for j in 0..3usize {
             for ch in 0..3usize {
                 let want = quantize_sh(c.sh_rest[ch * 3 + j], 8);
                 assert_eq!(sh[j * 3 + ch], want, "coeff {j} channel {ch}");
             }
         }
-        // Degree-1 coefficients use the 8-wide bucket grid.
         assert!(sh.iter().all(|v| *v as i32 % 8 == 0 || *v == 255));
     }
 
@@ -387,7 +503,6 @@ mod tests {
         let (_, deg, _, _, _, _, _, _, sh) = decode_spz(&bytes);
         assert_eq!(deg, 3);
         assert_eq!(sh.len(), 45);
-        // Coefficients 3.. are bucketed to a multiple of 16.
         for j in 3..15usize {
             for ch in 0..3usize {
                 let want = quantize_sh(c.sh_rest[ch * 15 + j], 16);

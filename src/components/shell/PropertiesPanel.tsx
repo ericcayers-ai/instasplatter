@@ -290,7 +290,7 @@ export default function PropertiesPanel() {
         </Row>
         <Row
           label="gsplat strategy"
-          hint="MCMC densify (default) or Default+AbsGrad. Only used when training with gsplat."
+          hint="Mutually exclusive densify strategies: MCMC (floater-resistant cap) or Default + AbsGrad (steerable densify). AbsGrad is only active for Default."
         >
           <AutoSelect
             value={settings.gsplatStrategy ?? null}
@@ -298,7 +298,13 @@ export default function PropertiesPanel() {
               { id: "mcmc", label: "MCMC" },
               { id: "default", label: "Default + AbsGrad" },
             ]}
-            onChange={(v) => set({ gsplatStrategy: v })}
+            onChange={(v) =>
+              set({
+                gsplatStrategy: v,
+                // Keep stored absgrad coherent with the chosen strategy.
+                gsplatAbsgrad: v === "default" ? true : false,
+              })
+            }
           />
         </Row>
         <Row label="gsplat antialiased" hint="In-loop mip-style AA (gsplat rasterize_mode). On by default.">
@@ -330,7 +336,7 @@ export default function PropertiesPanel() {
         </Row>
         <Row
           label="Neural densifiers"
-          hint="AND with MVS / RoMa when present (DAV2 / VGGT-Commercial). Experimental merges Ω / MASt3R / DUSt3R too."
+          hint="AND with MVS / RoMa when present (DA3 / MapAnything / VGGT-Commercial). Experimental evaluates Ω / MASt3R / DUSt3R then confidence-fuses."
         >
           <BoolSelect value={settings.useNeuralInit} onChange={(v) => set({ useNeuralInit: v })} />
         </Row>

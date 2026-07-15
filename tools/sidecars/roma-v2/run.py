@@ -22,6 +22,54 @@ from pathlib import Path
 # Lichtfeld-recipe default thresholds (reimplemented; not copied from GPL sources).
 MIN_CERTAINTY = 0.5
 MAX_REPROJ_PX = 2.0
+MAX_SAMPSON = 1e-3
+MIN_PARALLAX_DEG = 1.0
+MAX_PARALLAX_DEG = 35.0
+
+
+def essential_sampson(K1, R1, t1, K2, R2, t2, pt1, pt2) -> float:
+    """Sampson distance for a correspondence given two calibrated poses."""
+    import numpy as np
+
+    # Camera centres and relative pose.
+    C1 = (-R1.T @ t1).ravel()
+    C2 = (-R2.T @ t2).ravel()
+    R_rel = R2 @ R1.T
+    t_rel = R2 @ (C1 - C2)
+    tx = np.array(
+        [
+            [0, -t_rel[2], t_rel[1]],
+            [t_rel[2], 0, -t_rel[0]],
+            [-t_rel[1], t_rel[0], 0],
+        ],
+        dtype=np.float64,
+    )
+    E = tx @ R_rel
+    F = np.linalg.inv(K2).T @ E @ np.linalg.inv(K1)
+    x1 = np.array([pt1[0], pt1[1], 1.0], dtype=np.float64)
+    x2 = np.array([pt2[0], pt2[1], 1.0], dtype=np.float64)
+    Fx1 = F @ x1
+    Ftx2 = F.T @ x2
+    num = float(x2 @ F @ x1) ** 2
+    den = Fx1[0] ** 2 + Fx1[1] ** 2 + Ftx2[0] ** 2 + Ftx2[1] ** 2
+    if den < 1e-12:
+        return 1e6
+    return num / den
+
+
+def parallax_deg(Ra, ta, Rb, tb, p_world) -> float:
+    import numpy as np
+
+    ca = (-Ra.T @ ta).ravel()
+    cb = (-Rb.T @ tb).ravel()
+    va = p_world - ca
+    vb = p_world - cb
+    na = np.linalg.norm(va)
+    nb = np.linalg.norm(vb)
+    if na < 1e-8 or nb < 1e-8:
+        return 0.0
+    c = float(np.clip(np.dot(va, vb) / (na * nb), -1.0, 1.0))
+    return float(np.degrees(np.arccos(c)))
 
 
 def read_request() -> dict:
@@ -174,14 +222,31 @@ def triangulate_matches(sparse: Path, images_dir: Path, match_bags):
             continue
         pts4d = cv2.triangulatePoints(Pa, Pb, pts_a_t, pts_b_t)
         pts = (pts4d[:3] / np.maximum(pts4d[3], 1e-8)).T
-        for p, (u, v), col in zip(pts, pts_a_t.T, colors):
+        for p, (u, v), (ub, vb), col in zip(pts, pts_a_t.T, pts_b_t.T, colors):
             if not np.all(np.isfinite(p)):
+                continue
+            # Cheirality: in front of both cameras.
+            za = (Ra @ p.reshape(3, 1) + ta).ravel()[2]
+            zb = (Rb @ p.reshape(3, 1) + tb).ravel()[2]
+            if za <= 0 or zb <= 0:
                 continue
             ph = Pa @ np.array([p[0], p[1], p[2], 1.0])
             if abs(ph[2]) < 1e-8:
                 continue
             uu, vv = ph[0] / ph[2], ph[1] / ph[2]
             if (uu - u) ** 2 + (vv - v) ** 2 > MAX_REPROJ_PX**2:
+                continue
+            phb = Pb @ np.array([p[0], p[1], p[2], 1.0])
+            if abs(phb[2]) < 1e-8:
+                continue
+            uub, vvb = phb[0] / phb[2], phb[1] / phb[2]
+            if (uub - ub) ** 2 + (vvb - vb) ** 2 > MAX_REPROJ_PX**2:
+                continue
+            samp = essential_sampson(Ka, Ra, ta, Kb, Rb, tb, (u, v), (ub, vb))
+            if samp > MAX_SAMPSON:
+                continue
+            par = parallax_deg(Ra, ta, Rb, tb, p)
+            if par < MIN_PARALLAX_DEG or par > MAX_PARALLAX_DEG:
                 continue
             xyz.append((float(p[0]), float(p[1]), float(p[2])))
             rgb.append(tuple(int(c) for c in col[:3]))

@@ -1,14 +1,17 @@
 //! Optional neural dense-init, pose, and post-polish sidecars.
 //!
-//! Dual-mode policy (v0.5):
-//! - **Standard**: VGGT-Commercial / DAV2 / RoMa v2 / Fixer (commercial-safe).
-//! - **Experimental** (license ack): + Ω / MASt3R / DUSt3R / Difix; merge all densifiers.
+//! Dual-mode policy:
+//! - **Standard**: VGGT-Commercial / DA3 / MapAnything / RoMa v2 / Fixer.
+//! - **Experimental** (license ack): + Ω / MASt3R / DUSt3R / Difix; evaluate
+//!   multiple densifiers then confidence-fuse (never blind concatenate).
+//!
+//! Sidecar schema v2 adds frame/CRS, confidence, provenance, and metrics.
 //!
 //! Do **not** vendor GPL Lichtfeld densify plugin sources — RoMa orchestration is
 //! clean-room (MIT RoMa v2 APIs + our filters).
 
 use super::dense;
-use super::solver;
+use super::solver::{self, HypothesisScore};
 use super::JobCtx;
 use crate::settings::app_data_dir;
 use serde::{Deserialize, Serialize};
@@ -19,7 +22,10 @@ use tokio::io::AsyncWriteExt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SidecarStatus {
+    /// Legacy DAV2 (kept for installed engines; Standard prefers DA3).
     pub depth_anything_v2: bool,
+    /// Depth Anything 3 Small/Base (Apache) — Standard densify candidate.
+    pub depth_anything_3: bool,
     pub vggt_commercial: bool,
     /// Newest VGGT (Ω). Non-commercial weights; Experimental only.
     pub vggt_omega: bool,
@@ -27,12 +33,88 @@ pub struct SidecarStatus {
     pub vggt_research: bool,
     pub mast3r: bool,
     pub dust3r: bool,
+    /// MapAnything Apache pose/depth hypothesis.
+    pub mapanything: bool,
     /// RoMa v2 densify (MIT densifier + user-installed DINOv3 weights).
     pub roma_v2: bool,
     /// NVIDIA Fixer (commercial Open Model License) polish launcher.
     pub fixer: bool,
     /// Difix3D+ research launcher (gated; Experimental only).
     pub difix: bool,
+}
+
+/// Sidecar output schema v2 — written beside densify/pose PLYs when available.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidecarArtifactV2 {
+    pub schema_version: u32,
+    /// Declared reconstruction frame, e.g. "colmap/enu".
+    pub frame: String,
+    /// Optional CRS / vertical datum label (empty when local-only).
+    pub crs: String,
+    pub confidence: f32,
+    pub source: String,
+    pub version: String,
+    pub license: String,
+    /// SHA-256 of weights / launcher when known.
+    pub license_hash: String,
+    pub supporting_views: Vec<u32>,
+    pub residual: Option<f32>,
+    pub has_normals: bool,
+    pub static_probability: f32,
+    /// "metric" | "local" | "unknown"
+    pub scale_status: String,
+    pub metrics: SidecarMetrics,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidecarMetrics {
+    pub point_count: u64,
+    pub registered_images: u32,
+    pub median_reproj_error: Option<f32>,
+    pub mean_track_length: Option<f32>,
+    pub wall_seconds: Option<f32>,
+}
+
+impl SidecarArtifactV2 {
+    pub fn new_local(source: &str, confidence: f32, point_count: usize) -> Self {
+        Self {
+            schema_version: 2,
+            frame: "colmap/enu".into(),
+            crs: String::new(),
+            confidence,
+            source: source.into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            license: license_for(source).into(),
+            license_hash: String::new(),
+            supporting_views: Vec::new(),
+            residual: None,
+            has_normals: false,
+            static_probability: 1.0,
+            scale_status: "unknown".into(),
+            metrics: SidecarMetrics {
+                point_count: point_count as u64,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+fn license_for(source: &str) -> &'static str {
+    match source {
+        "depth-anything-3" | "mapanything" | "roma-v2" | "colmap" | "mvs" => "Apache-2.0",
+        "depth-anything-v2" => "Apache-2.0",
+        "vggt-commercial" => "commercial",
+        "fixer" => "NVIDIA-OML",
+        "vggt-omega" | "mast3r" | "dust3r" | "difix" | "vggt-research" => "NC-research",
+        _ => "unknown",
+    }
+}
+
+pub fn write_artifact_v2(path: &Path, art: &SidecarArtifactV2) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(art).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
 fn sidecars_dir() -> PathBuf {
@@ -82,18 +164,25 @@ fn launcher_ready(name: &str) -> bool {
 pub fn status() -> SidecarStatus {
     let dav2 = launcher_ready("depth-anything-v2")
         || sidecars_dir().join("depth-anything-v2").join("weights.onnx").exists();
+    let da3 = launcher_ready("depth-anything-3")
+        || sidecars_dir().join("depth-anything-3").join("weights.onnx").exists()
+        || sidecars_dir().join("depth-anything-3").join("ACCEPTED").exists();
     let vggt_c = sidecars_dir()
         .join("vggt-commercial")
         .join("ACCEPTED")
         .exists()
         && launcher_ready("vggt-commercial");
+    let mapanything = launcher_ready("mapanything")
+        || sidecars_dir().join("mapanything").join("ACCEPTED").exists();
     SidecarStatus {
         depth_anything_v2: dav2,
+        depth_anything_3: da3,
         vggt_commercial: vggt_c,
         vggt_omega: launcher_ready("vggt-omega"),
         vggt_research: launcher_ready("vggt-research"),
         mast3r: launcher_ready("mast3r"),
         dust3r: launcher_ready("dust3r"),
+        mapanything,
         roma_v2: launcher_ready("roma-v2"),
         fixer: launcher_ready("fixer"),
         difix: launcher_ready("difix"),
@@ -253,23 +342,34 @@ fn sparse_model_usable(workspace: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Run a pose/SfM sidecar that writes a COLMAP sparse model under `workspace/sparse`.
-/// Returns the solver name on success.
+/// Run pose/SfM sidecars, **score** usable hypotheses, keep the best that passes gates.
+/// Returns the winning solver name on success.
 pub async fn try_neural_poses(
     ctx: &JobCtx,
     images_dir: &Path,
     chain: &[&str],
 ) -> Result<Option<String>, String> {
+    let expected = std::fs::read_dir(images_dir)
+        .map(|d| d.count())
+        .unwrap_or(0);
+    let mut best: Option<(HypothesisScore, PathBuf)> = None;
+
     for name in chain {
         ctx.check_cancel()?;
-        // Clear partial sparse so a failed neural write cannot confuse COLMAP.
+        if *name == "colmap-pose-prior" {
+            // Handled by COLMAP path with pose-prior flags — skip neural launcher.
+            continue;
+        }
+        // Isolate each hypothesis in a staging sparse so failures cannot pollute.
         let sparse = ctx.workspace.join("sparse");
+        let stage = ctx.workspace.join(format!("hypothesis_{name}"));
+        let _ = std::fs::remove_dir_all(&stage);
+        let _ = std::fs::create_dir_all(stage.join("sparse").join("0"));
         let _ = std::fs::remove_dir_all(&sparse);
         let _ = std::fs::create_dir_all(sparse.join("0"));
 
         match invoke_launcher(ctx, name, images_dir, None, Some("sfm"), None).await {
             Ok(Some(path)) => {
-                // Accept: printed model dir, printed cameras.txt parent, or "OK" + usable sparse.
                 let looks_ok = if path.to_string_lossy().eq_ignore_ascii_case("ok") {
                     sparse_model_usable(&ctx.workspace)
                 } else if path.is_dir() {
@@ -282,27 +382,74 @@ pub async fn try_neural_poses(
                 {
                     sparse_model_usable(&ctx.workspace)
                 } else if path.extension().and_then(|e| e.to_str()) == Some("ply") {
-                    // Some launchers emit poses + dense points; poses land in sparse/.
                     sparse_model_usable(&ctx.workspace)
                 } else {
                     sparse_model_usable(&ctx.workspace)
                 };
 
-                if looks_ok {
-                    // If the sidecar wrote elsewhere, copy into workspace/sparse/0.
-                    if path.is_dir() && path != sparse.join("0") && path != sparse {
-                        if let Ok(model) = crate::colmap::read_model(&path) {
-                            let dest = sparse.join("0");
-                            let _ = std::fs::create_dir_all(&dest);
-                            let _ = crate::colmap::write_model_txt(&dest, &model);
-                        }
-                    }
-                    if sparse_model_usable(&ctx.workspace) {
-                        ctx.notice(solver::camera_chip(name));
-                        return Ok(Some((*name).to_string()));
+                if !looks_ok {
+                    ctx.log(format!("[{name}] SfM output was not a usable COLMAP model."));
+                    continue;
+                }
+
+                if path.is_dir() && path != sparse.join("0") && path != sparse {
+                    if let Ok(model) = crate::colmap::read_model(&path) {
+                        let dest = sparse.join("0");
+                        let _ = std::fs::create_dir_all(&dest);
+                        let _ = crate::colmap::write_model_txt(&dest, &model);
                     }
                 }
-                ctx.log(format!("[{name}] SfM output was not a usable COLMAP model."));
+                if !sparse_model_usable(&ctx.workspace) {
+                    continue;
+                }
+
+                let model_dir = crate::colmap::find_model_dir(&ctx.workspace).unwrap();
+                let model = crate::colmap::read_model(&model_dir)?;
+                let score = HypothesisScore::compute(name, &model, expected);
+                ctx.log(format!(
+                    "[{name}] hypothesis score={:.3} (reg={:.2} reproj={:.2} track={:.2})",
+                    score.composite,
+                    score.registered_ratio,
+                    score.median_reproj_error,
+                    score.mean_track_length
+                ));
+
+                // Snapshot winning candidacy into stage for restore.
+                let dest = stage.join("sparse").join("0");
+                let _ = std::fs::create_dir_all(&dest);
+                let _ = crate::colmap::write_model_txt(&dest, &model);
+                let art = SidecarArtifactV2 {
+                    schema_version: 2,
+                    frame: "colmap/enu".into(),
+                    crs: String::new(),
+                    confidence: score.composite,
+                    source: (*name).into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    license: license_for(name).into(),
+                    license_hash: String::new(),
+                    supporting_views: model.images.iter().map(|im| im.id).collect(),
+                    residual: Some(score.median_reproj_error),
+                    has_normals: false,
+                    static_probability: score.cheirality_ratio,
+                    scale_status: "unknown".into(),
+                    metrics: SidecarMetrics {
+                        point_count: model.points.len() as u64,
+                        registered_images: model.images.len() as u32,
+                        median_reproj_error: Some(score.median_reproj_error),
+                        mean_track_length: Some(score.mean_track_length),
+                        wall_seconds: None,
+                    },
+                };
+                let _ = write_artifact_v2(&stage.join("artifact.v2.json"), &art);
+
+                if score.passes_gates() {
+                    match &best {
+                        Some((b, _)) if b.composite >= score.composite => {}
+                        _ => best = Some((score, dest)),
+                    }
+                } else {
+                    ctx.log(format!("[{name}] rejected by validation gates."));
+                }
             }
             Ok(None) => continue,
             Err(e) => {
@@ -310,10 +457,26 @@ pub async fn try_neural_poses(
             }
         }
     }
+
+    if let Some((score, model_path)) = best {
+        let sparse = ctx.workspace.join("sparse").join("0");
+        let _ = std::fs::remove_dir_all(ctx.workspace.join("sparse"));
+        let _ = std::fs::create_dir_all(&sparse);
+        if let Ok(model) = crate::colmap::read_model(&model_path) {
+            let _ = crate::colmap::write_model_txt(&sparse, &model);
+        }
+        ctx.notice(solver::camera_chip(&score.solver));
+        ctx.log(format!(
+            "Selected pose hypothesis {} (score={:.3})",
+            score.solver, score.composite
+        ));
+        return Ok(Some(score.solver));
+    }
     Ok(None)
 }
 
-/// Optional light COLMAP triangulation / bundle adjust on an existing sparse model.
+/// Guaranteed COLMAP triangulation + bundle adjustment after neural init when a feature DB exists.
+/// Always attempts BA (plan: guaranteed BA after neural init); falls back gracefully.
 pub async fn maybe_refine_poses_with_colmap(
     ctx: &JobCtx,
     images_dir: &Path,
@@ -323,24 +486,74 @@ pub async fn maybe_refine_poses_with_colmap(
         None => return Ok(()),
     };
     let model = crate::colmap::read_model(&model_dir)?;
-    // Only refine when frame count is high — matches Standard plan A1.
-    if model.images.len() < 80 && !ctx.settings.experimental_mode {
-        return Ok(());
-    }
     let n = model.images.len();
     let img_s = images_dir.to_string_lossy().into_owned();
     let model_s = model_dir.to_string_lossy().into_owned();
     let db = ctx.workspace.join("database.db");
     if !db.exists() {
-        // Without a feature DB, skip BA rather than re-running full SfM.
-        ctx.log("Skipping COLMAP BA refine (no feature database yet).");
-        return Ok(());
+        // Extract features so BA can run — guaranteed path after neural init.
+        ctx.log("Building COLMAP feature DB for post-neural bundle adjustment…");
+        let db_s = db.to_string_lossy().into_owned();
+        let gpu = if ctx.settings.sift_gpu { "1" } else { "0" };
+        if let Err(e) = super::colmap::run_colmap_pub(
+            ctx,
+            (0.62, 0.70),
+            &[
+                "feature_extractor",
+                "--database_path",
+                &db_s,
+                "--image_path",
+                &img_s,
+                "--ImageReader.single_camera",
+                "1",
+                "--ImageReader.camera_model",
+                "OPENCV",
+                "--FeatureExtraction.use_gpu",
+                gpu,
+                "--SiftExtraction.max_num_features",
+                "8192",
+            ],
+            n,
+        )
+        .await
+        {
+            ctx.log(format!("Feature extract for BA skipped: {e}"));
+            return Ok(());
+        }
+        // Light matching so triangulator has pairs.
+        let front = solver::matcher_front_end(&ctx.settings, lightglue_ready());
+        let match_args: Vec<&str> = if front == "sequential" || (front == "auto" && n > 80) {
+            vec![
+                "sequential_matcher",
+                "--database_path",
+                &db_s,
+                "--SequentialMatching.overlap",
+                "15",
+                "--FeatureMatching.use_gpu",
+                gpu,
+            ]
+        } else {
+            vec![
+                "exhaustive_matcher",
+                "--database_path",
+                &db_s,
+                "--FeatureMatching.use_gpu",
+                gpu,
+            ]
+        };
+        // LightGlue routing stub: log intent; COLMAP SIFT matcher runs until a LightGlue engine lands.
+        if front == "lightglue" {
+            ctx.log(
+                "LightGlue matcher selected — routing via COLMAP feature DB until LightGlue engine is installed.",
+            );
+        }
+        let _ = super::colmap::run_colmap_pub(ctx, (0.70, 0.78), &match_args, n).await;
     }
     let db_s = db.to_string_lossy().into_owned();
-    ctx.log("Refining neural poses with limited COLMAP bundle adjustment…");
+    ctx.log("Refining neural poses with COLMAP triangulation + bundle adjustment…");
     match super::colmap::run_colmap_pub(
         ctx,
-        (0.7, 0.82),
+        (0.78, 0.86),
         &[
             "point_triangulator",
             "--database_path",
@@ -357,9 +570,9 @@ pub async fn maybe_refine_poses_with_colmap(
     .await
     {
         Ok(()) => {
-            let _ = super::colmap::run_colmap_pub(
+            if let Err(e) = super::colmap::run_colmap_pub(
                 ctx,
-                (0.82, 0.88),
+                (0.86, 0.92),
                 &[
                     "bundle_adjuster",
                     "--input_path",
@@ -369,7 +582,12 @@ pub async fn maybe_refine_poses_with_colmap(
                 ],
                 n,
             )
-            .await;
+            .await
+            {
+                ctx.log(format!("Bundle adjuster failed: {e}"));
+            } else {
+                ctx.log("Post-neural bundle adjustment complete.");
+            }
         }
         Err(e) => {
             ctx.log(format!("COLMAP refine skipped: {e}"));
@@ -378,8 +596,19 @@ pub async fn maybe_refine_poses_with_colmap(
     Ok(())
 }
 
+fn lightglue_ready() -> bool {
+    launcher_ready("lightglue")
+        || sidecars_dir().join("lightglue").join("ACCEPTED").exists()
+}
+
+/// Public probe for COLMAP matcher routing.
+pub fn lightglue_installed() -> bool {
+    lightglue_ready()
+}
+
 /// Collect points from neural densifiers.
-/// Standard: first usable success. Experimental: merge every available source.
+/// Returns one confidence-fused cloud (Standard: first success, Experimental:
+/// fuse every source via schema-v2 confidence — never raw concatenation).
 pub async fn try_neural_points(
     ctx: &JobCtx,
     images_dir: &Path,
@@ -395,8 +624,7 @@ pub async fn try_neural_points(
     }
 
     let merge_all = ctx.settings.experimental_mode;
-    let mut xyz: Vec<[f32; 3]> = Vec::new();
-    let mut rgb: Vec<[u8; 3]> = Vec::new();
+    let mut clouds: Vec<Vec<dense::EvidencePoint>> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
 
     for name in order {
@@ -404,9 +632,31 @@ pub async fn try_neural_points(
         match invoke_launcher(ctx, name, images_dir, None, Some("densify"), None).await {
             Ok(Some(ply_path)) => match consume_point_ply(&ply_path) {
                 Ok((px, pr)) if px.len() >= 32 => {
+                    let conf = match name {
+                        "depth-anything-3" => 0.72,
+                        "depth-anything-v2" => 0.65,
+                        "mapanything" => 0.70,
+                        "vggt-commercial" => 0.74,
+                        "vggt-omega" | "vggt-research" => 0.68,
+                        "mast3r" | "dust3r" => 0.62,
+                        _ => 0.60,
+                    };
+                    let art = SidecarArtifactV2::new_local(name, conf, px.len());
+                    let meta = ply_path.with_extension("v2.json");
+                    let _ = write_artifact_v2(&meta, &art);
                     if merge_all {
-                        xyz.extend(px);
-                        rgb.extend(pr);
+                        clouds.push(
+                            px.iter()
+                                .zip(pr.iter())
+                                .map(|(xyz, rgb)| dense::EvidencePoint {
+                                    xyz: *xyz,
+                                    rgb: *rgb,
+                                    confidence: conf,
+                                    source: "neural",
+                                    preserve: false,
+                                })
+                                .collect(),
+                        );
                         labels.push(name.to_string());
                     } else {
                         return Ok(Some((px, pr, name.to_string())));
@@ -422,8 +672,12 @@ pub async fn try_neural_points(
         }
     }
 
-    if merge_all && xyz.len() >= 32 {
-        return Ok(Some((xyz, rgb, labels.join("+"))));
+    if merge_all && !clouds.is_empty() {
+        let scale = dense::scene_scale_hint(&clouds);
+        let (xyz, rgb) = dense::fuse_evidence(&clouds, scale, 1_500_000);
+        if xyz.len() >= 32 {
+            return Ok(Some((xyz, rgb, labels.join("+"))));
+        }
     }
     Ok(None)
 }
