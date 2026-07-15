@@ -1,8 +1,7 @@
 //! Geospatial suite core (formats, catalog, DEM, hydro, registration).
 //!
-//! Scientific flood runs live in `hydro` (ANUGA/SWMM). Live WebGPU/CPU preview
-//! lives in `preview` (checkpoint protocol) plus the frontend
-//! `src/geospatial/preview` module; both share `events::SimEvent` / `sim://event`.
+//! Scientific flood runs live in `hydro` (ANUGA/SWMM sidecars). Live WebGPU
+//! preview is owned separately and shares `events::SimEvent` / `sim://event`.
 
 #![allow(dead_code)]
 

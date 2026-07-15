@@ -49,13 +49,32 @@ export interface GeoFloodSnapshot {
   hours: number;
   stageM: number;
   dischargeCms: number;
-  /** Placeholder max depth across domain (m). */
+  /** Max depth across domain (m). */
   maxDepthM: number;
-  /** Placeholder wet fraction 0–1. */
+  /** Wet fraction 0–1. */
   wetFraction: number;
-  /** Placeholder peak hazard class 0–3. */
+  /** Peak hazard class 0–3. */
   hazardClass: number;
   statusLabel: string;
+  /** Present when driven by the live preview engine. */
+  massM3?: number;
+  maxSpeedMs?: number;
+  backend?: "webgpu" | "webgl" | "cpu";
+  validation?: "live" | "comparing" | "validated" | "diverged";
+}
+
+export type GeoPreviewBackend = "webgpu" | "webgl" | "cpu";
+export type GeoPreviewValidation = "live" | "comparing" | "validated" | "diverged";
+
+export interface GeoPreviewRuntime {
+  backend: GeoPreviewBackend;
+  validation: GeoPreviewValidation;
+  maxDepthM: number;
+  wetFraction: number;
+  massM3: number;
+  maxSpeedMs: number;
+  hazardClass: number;
+  cfl: number;
 }
 
 export interface GeoScenarioMeta {
@@ -64,4 +83,15 @@ export interface GeoScenarioMeta {
   durationHours: number;
   engineLabel: string;
   note: string;
+}
+
+/** Scientific / demo flood run feed for the inspector and map. */
+export interface GeoScientificRun {
+  runId: string;
+  state: string;
+  progress: number;
+  detail: string;
+  mode?: string | null;
+  label?: string | null;
+  massBalance?: number | null;
 }

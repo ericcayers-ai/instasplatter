@@ -35,17 +35,35 @@ export function sampleHydrograph(
   return { hours, stageM: last.stageM, dischargeCms: last.dischargeCms };
 }
 
-/** Derive display-only flood stats from the scrub position (no solver). */
-export function floodSnapshotFromTime(t01: number): GeoFloodSnapshot {
+/** Derive flood stats from scrub; merges live-preview engine stats when provided. */
+export function floodSnapshotFromTime(
+  t01: number,
+  preview?: {
+    maxDepthM: number;
+    wetFraction: number;
+    hazardClass: number;
+    massM3?: number;
+    maxSpeedMs?: number;
+    backend?: GeoFloodSnapshot["backend"];
+    validation?: GeoFloodSnapshot["validation"];
+  } | null,
+): GeoFloodSnapshot {
   const { hours, stageM, dischargeCms } = sampleHydrograph(t01);
   const peakStage = Math.max(...PLACEHOLDER_HYDROGRAPH.map((s) => s.stageM));
   const intensity = peakStage > 0 ? Math.min(1, stageM / peakStage) : 0;
-  const maxDepthM = Math.max(0, stageM - 0.3);
-  const wetFraction = Math.min(0.92, 0.08 + intensity * 0.72);
+
+  let maxDepthM = Math.max(0, stageM - 0.3);
+  let wetFraction = Math.min(0.92, 0.08 + intensity * 0.72);
   let hazardClass = 0;
   if (maxDepthM >= 1.6 || dischargeCms >= 70) hazardClass = 3;
   else if (maxDepthM >= 1.0 || dischargeCms >= 45) hazardClass = 2;
   else if (maxDepthM >= 0.4 || dischargeCms >= 20) hazardClass = 1;
+
+  if (preview) {
+    maxDepthM = preview.maxDepthM;
+    wetFraction = preview.wetFraction;
+    hazardClass = preview.hazardClass;
+  }
 
   const statusLabel =
     intensity < 0.15
@@ -66,6 +84,10 @@ export function floodSnapshotFromTime(t01: number): GeoFloodSnapshot {
     wetFraction,
     hazardClass,
     statusLabel,
+    massM3: preview?.massM3,
+    maxSpeedMs: preview?.maxSpeedMs,
+    backend: preview?.backend,
+    validation: preview?.validation,
   };
 }
 
@@ -95,7 +117,8 @@ export function waterStyleLabel(style: GeoWaterStyle): string {
 
 /**
  * Demo flood-extent ring polygons (WGS84) scaled by wet fraction.
- * Outer ring grows as the scrub advances — visual placeholder only.
+ * Used when no scientific checkpoint GeoJSON is mapped to WGS84 yet —
+ * scientific demo still drives wetFraction via the scrubber/time link.
  */
 export function placeholderFloodPolygon(wetFraction: number): GeoJSON.Feature<GeoJSON.Polygon> {
   const [lon0, lat0] = [174.779, -41.2865];

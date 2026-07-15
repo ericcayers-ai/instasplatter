@@ -1,0 +1,4 @@
+# Optional scientific stack — install into a local .venv, never into the app.
+# Pin an explicit ANUGA release after verifying the license (Apache-2.0).
+# numpy>=1.24
+# anuga  # install from GeoscienceAustralia wheels / source pin

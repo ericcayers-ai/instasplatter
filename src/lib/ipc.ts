@@ -218,6 +218,69 @@ export interface GeoCatalogInfo {
   exports: { id: string; label: string }[];
 }
 
+export interface FloodRunStatus {
+  runId: string;
+  scenarioId: string;
+  workspace: string;
+  state: string;
+  progress: number;
+  detail: string;
+  mode?: string | null;
+  engine?: string | null;
+  engineVersion?: string | null;
+  resultPaths: string[];
+  massBalance?: number | null;
+  label?: string | null;
+  createdUnix: number;
+}
+
+export interface FloodEngineStatus {
+  anugaLauncher: string | null;
+  swmmLauncher: string | null;
+  anugaReady: boolean;
+  swmmReady: boolean;
+  cpuLane: string;
+  demoAvailable: boolean;
+}
+
+export type GeoEvent =
+  | { kind: "layerAdded"; workspace: string; layerId: string; name: string }
+  | { kind: "scenarioUpdated"; workspace: string; scenarioId: string }
+  | { kind: "runProgress"; runId: string; progress: number; detail: string }
+  | {
+      kind: "runDone";
+      runId: string;
+      resultPaths: string[];
+      mode?: string;
+      massBalance?: number;
+    }
+  | { kind: "runCancelled"; runId: string }
+  | { kind: "engineMissing"; engine: string; message: string; demoAvailable: boolean }
+  | { kind: "error"; message: string; runId?: string };
+
+export type SimEvent =
+  | {
+      kind: "checkpoint";
+      runId: string;
+      progress: number;
+      simTimeHours: number;
+      checkpointPath?: string | null;
+      detail: string;
+      mode: string;
+      maxDepthM?: number | null;
+      wetFraction?: number | null;
+      massM3?: number | null;
+    }
+  | { kind: "hydrograph"; runId: string; path: string }
+  | {
+      kind: "done";
+      runId: string;
+      mode: string;
+      resultPaths: string[];
+      massBalance?: number | null;
+      label?: string | null;
+    };
+
 export const api = {
   getHardwareProfile: () => invoke<HardwareProfile>("get_hardware_profile"),
   getSettings: () => invoke<Settings>("get_settings"),
@@ -230,6 +293,23 @@ export const api = {
   getSuite: () => invoke<Suite>("get_suite"),
   setSuite: (suite: Suite) => invoke<Suite>("set_suite", { suite }),
   getGeoCatalogInfo: () => invoke<GeoCatalogInfo>("get_geo_catalog_info"),
+
+  getFloodEngineStatus: () => invoke<FloodEngineStatus>("get_flood_engine_status"),
+  startScientificFlood: (
+    workspace: string,
+    scenarioId: string,
+    opts?: { allowDemo?: boolean; demPath?: string | null; enableSwmm?: boolean },
+  ) =>
+    invoke<FloodRunStatus>("start_scientific_flood", {
+      workspace,
+      scenarioId,
+      allowDemo: opts?.allowDemo ?? true,
+      demPath: opts?.demPath ?? null,
+      enableSwmm: opts?.enableSwmm ?? false,
+    }),
+  cancelScientificFlood: (runId: string) => invoke<void>("cancel_scientific_flood", { runId }),
+  listFloodRunStatus: (workspace?: string | null) =>
+    invoke<FloodRunStatus[]>("list_flood_run_status", { workspace: workspace ?? null }),
 
   startJob: (inputPath: string) => invoke<string>("start_job", { inputPath }),
   cancelJob: (jobId: string) => invoke<void>("cancel_job", { jobId }),
@@ -288,4 +368,8 @@ export const api = {
     listen<MeshProgressEvent>("mesh://progress", (e) => cb(e.payload)),
   onQueueSnapshot: (cb: (e: QueueSnapshot) => void): Promise<UnlistenFn> =>
     listen<QueueSnapshot>("queue://snapshot", (e) => cb(e.payload)),
+  onGeoEvent: (cb: (e: GeoEvent) => void): Promise<UnlistenFn> =>
+    listen<GeoEvent>("geo://event", (e) => cb(e.payload)),
+  onSimEvent: (cb: (e: SimEvent) => void): Promise<UnlistenFn> =>
+    listen<SimEvent>("sim://event", (e) => cb(e.payload)),
 };

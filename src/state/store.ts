@@ -3,12 +3,15 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type {
   CameraRegistered,
   EngineStatus,
+  FloodEngineStatus,
+  GeoEvent,
   HardwareProfile,
   JobEvent,
   ProjectSummary,
   QueueItem,
   ResolvedSettings,
   Settings,
+  SimEvent,
   SplatFormat,
   Suite,
 } from "../lib/ipc";
@@ -16,7 +19,9 @@ import { api } from "../lib/ipc";
 import { DEFAULT_GEO_LAYERS, PLACEHOLDER_SCENARIO } from "../geospatial/defaults";
 import type {
   GeoLayer,
+  GeoPreviewRuntime,
   GeoScenarioMeta,
+  GeoScientificRun,
   GeoTool,
   GeoViewMode,
   GeoWaterStyle,
@@ -133,17 +138,37 @@ interface AppStore {
   geoLayers: GeoLayer[];
   /** Normalised scenario time 0–1 (linked to hydrograph). */
   geoFloodTime: number;
+  /** Live preview playhead. */
+  geoFloodPlaying: boolean;
+  /** Prefer coarser grid / no particles. */
+  geoFloodLowPower: boolean;
   geoScenario: GeoScenarioMeta | null;
   geoViewMode: GeoViewMode;
   geoWaterStyle: GeoWaterStyle;
   geoTool: GeoTool;
   geoInspectHint: string | null;
+  /** Latest live-preview runtime stats (null until engine mounts). */
+  geoPreview: GeoPreviewRuntime | null;
+  /** Scientific ANUGA / demo run status (null when idle). */
+  geoScientificRun: GeoScientificRun | null;
+  /** Flood engine discovery (ANUGA/SWMM launchers). */
+  geoFloodEngine: FloodEngineStatus | null;
+  /** Latest scientific checkpoint GeoJSON for the depth layer (WGS84 or local). */
+  geoScientificExtent: GeoJSON.FeatureCollection | null;
 
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
   setGeoLayerVisible: (id: string, visible: boolean) => void;
   setGeoLayerOpacity: (id: string, opacity: number) => void;
   setGeoFloodTime: (t01: number) => void;
+  setGeoFloodPlaying: (playing: boolean) => void;
+  toggleGeoFloodPlaying: () => void;
+  setGeoFloodLowPower: (on: boolean) => void;
+  setGeoPreview: (runtime: GeoPreviewRuntime | null) => void;
+  startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
+  cancelScientificFlood: () => Promise<void>;
+  handleGeoEvent: (e: GeoEvent) => void;
+  handleSimEvent: (e: SimEvent) => void;
   setGeoViewMode: (mode: GeoViewMode) => void;
   setGeoWaterStyle: (style: GeoWaterStyle) => void;
   setGeoTool: (tool: GeoTool) => void;
@@ -232,11 +257,17 @@ export const useStore = create<AppStore>((set, get) => ({
 
   geoLayers: DEFAULT_GEO_LAYERS.map((l) => ({ ...l })),
   geoFloodTime: 0.35,
+  geoFloodPlaying: false,
+  geoFloodLowPower: false,
   geoScenario: PLACEHOLDER_SCENARIO,
   geoViewMode: "2d",
   geoWaterStyle: "depth",
   geoTool: "pan",
   geoInspectHint: null,
+  geoPreview: null,
+  geoScientificRun: null,
+  geoFloodEngine: null,
+  geoScientificExtent: null,
 
   init: async () => {
     // React StrictMode double-invokes effects in dev; init exactly once.
@@ -269,7 +300,10 @@ export const useStore = create<AppStore>((set, get) => ({
     // Engine status can change once install_engines finishes, so events that
     // affect it are not tracked live; a plain re-read on init is enough here.
     set({ engineStatus });
+    void api.getFloodEngineStatus().then((geoFloodEngine) => set({ geoFloodEngine })).catch(() => {});
     await api.onJobEvent((e) => get().handleJobEvent(e));
+    await api.onGeoEvent((e) => get().handleGeoEvent(e));
+    await api.onSimEvent((e) => get().handleSimEvent(e));
     await api.onQueueSnapshot((snap) => {
       set({ queueItems: snap.items, queuePaused: snap.paused });
       const running = snap.items.find((i) => i.state === "running");
@@ -328,6 +362,217 @@ export const useStore = create<AppStore>((set, get) => ({
 
   setGeoFloodTime: (t01) => {
     set({ geoFloodTime: Math.max(0, Math.min(1, t01)) });
+  },
+
+  setGeoFloodPlaying: (playing) => set({ geoFloodPlaying: playing }),
+
+  toggleGeoFloodPlaying: () => {
+    const playing = !get().geoFloodPlaying;
+    // Restart from beginning when play hits the end.
+    if (playing && get().geoFloodTime >= 0.999) {
+      set({ geoFloodPlaying: true, geoFloodTime: 0 });
+      return;
+    }
+    set({ geoFloodPlaying: playing });
+  },
+
+  setGeoFloodLowPower: (on) => set({ geoFloodLowPower: on }),
+
+  setGeoPreview: (runtime) => set({ geoPreview: runtime }),
+
+  startScientificFlood: async (opts) => {
+    let workspace = get().workspace;
+    if (!workspace) {
+      // Prefer an existing geospatial project workspace from the queue.
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? null;
+    }
+    if (!workspace) {
+      set({
+        geoScientificRun: {
+          runId: "",
+          state: "failed",
+          progress: 0,
+          detail: "Open or enqueue a geospatial project first (Add sources).",
+        },
+      });
+      return;
+    }
+    const scenarioId = get().geoScenario?.id ?? PLACEHOLDER_SCENARIO.id;
+    try {
+      const st = await api.startScientificFlood(workspace, scenarioId, {
+        allowDemo: opts?.allowDemo ?? true,
+        enableSwmm: opts?.enableSwmm ?? false,
+      });
+      set({
+        workspace,
+        geoScientificRun: {
+          runId: st.runId,
+          state: st.state,
+          progress: st.progress,
+          detail: st.detail,
+          mode: st.mode,
+          label: st.label,
+          massBalance: st.massBalance,
+        },
+        geoScenario: {
+          ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+          engineLabel: "ANUGA scientific (starting…)",
+          note: "Streaming scientific checkpoints over sim://event.",
+        },
+      });
+    } catch (err) {
+      set({
+        geoScientificRun: {
+          runId: "",
+          state: "failed",
+          progress: 0,
+          detail: String(err),
+        },
+      });
+    }
+  },
+
+  cancelScientificFlood: async () => {
+    const runId = get().geoScientificRun?.runId;
+    if (!runId) return;
+    try {
+      await api.cancelScientificFlood(runId);
+    } catch (err) {
+      set({
+        geoScientificRun: {
+          ...(get().geoScientificRun as GeoScientificRun),
+          detail: String(err),
+        },
+      });
+    }
+  },
+
+  handleGeoEvent: (e) => {
+    switch (e.kind) {
+      case "runProgress":
+        set((s) => ({
+          geoScientificRun: s.geoScientificRun?.runId === e.runId
+            ? { ...s.geoScientificRun, progress: e.progress, detail: e.detail, state: "running" }
+            : s.geoScientificRun ?? {
+                runId: e.runId,
+                state: "running",
+                progress: e.progress,
+                detail: e.detail,
+              },
+        }));
+        break;
+      case "runDone":
+        set((s) => ({
+          geoScientificRun: {
+            runId: e.runId,
+            state: "done",
+            progress: 1,
+            detail: e.mode === "demo" ? "Demo run complete (not authoritative)" : "Scientific run complete",
+            mode: e.mode,
+            massBalance: e.massBalance,
+            label: e.mode === "demo" ? "Demo mode — synthetic extents" : undefined,
+          },
+          geoScenario: {
+            ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
+            engineLabel:
+              e.mode === "demo" ? "Demo (ANUGA missing)" : "ANUGA scientific",
+            note:
+              e.mode === "demo"
+                ? "Engine missing — extents are labelled synthetic for UI continuity."
+                : `Mass balance residual ≈ ${e.massBalance?.toFixed?.(4) ?? "n/a"}`,
+          },
+        }));
+        break;
+      case "runCancelled":
+        set({
+          geoScientificRun: {
+            runId: e.runId,
+            state: "cancelled",
+            progress: 0,
+            detail: "Cancelled",
+          },
+        });
+        break;
+      case "engineMissing":
+        set((s) => ({
+          geoScientificRun: s.geoScientificRun
+            ? { ...s.geoScientificRun, detail: e.message, mode: "demo" }
+            : {
+                runId: "",
+                state: "running",
+                progress: 0,
+                detail: e.message,
+                mode: "demo",
+              },
+          geoScenario: {
+            ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
+            engineLabel: "Demo (ANUGA missing)",
+            note: e.message,
+          },
+        }));
+        break;
+      case "error":
+        set({
+          geoScientificRun: {
+            runId: e.runId ?? get().geoScientificRun?.runId ?? "",
+            state: "failed",
+            progress: 0,
+            detail: e.message,
+          },
+        });
+        break;
+      default:
+        break;
+    }
+  },
+
+  handleSimEvent: (e) => {
+    if (e.kind === "checkpoint") {
+      const duration = get().geoScenario?.durationHours ?? PLACEHOLDER_SCENARIO.durationHours;
+      const t01 = duration > 0 ? Math.min(1, Math.max(0, e.simTimeHours / duration)) : e.progress;
+      set((s) => ({
+        geoFloodTime: t01,
+        geoScientificRun: {
+          runId: e.runId,
+          state: "running",
+          progress: e.progress,
+          detail: e.detail,
+          mode: e.mode,
+        },
+        geoScenario:
+          e.mode === "demo"
+            ? {
+                ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
+                engineLabel: "Demo (ANUGA missing)",
+              }
+            : s.geoScenario,
+      }));
+      // Checkpoint GeoJSON is loaded lazily when path is absolute and readable
+      // from the webview later; progress alone advances the scrubber for now.
+    } else if (e.kind === "done") {
+      set((s) => ({
+        geoScientificRun: {
+          runId: e.runId,
+          state: "done",
+          progress: 1,
+          detail: e.label ?? e.mode,
+          mode: e.mode,
+          label: e.label,
+          massBalance: e.massBalance,
+        },
+        geoScenario: {
+          ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
+          engineLabel: e.mode === "demo" ? "Demo (ANUGA missing)" : "ANUGA scientific",
+          note: e.label ?? (e.mode === "demo" ? "Synthetic extents — not authoritative." : "Scientific run finished."),
+        },
+      }));
+    } else if (e.kind === "hydrograph") {
+      // Path available for future File API load into the scrubber series.
+      void e.path;
+    }
   },
 
   setGeoViewMode: (mode) => set({ geoViewMode: mode }),

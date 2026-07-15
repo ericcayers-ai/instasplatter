@@ -7,6 +7,7 @@ import BatchQueue from "../components/BatchQueue";
 import GeoMap from "./GeoMap";
 import GeoToolbar from "./GeoToolbar";
 import HydrographTimeline from "./HydrographTimeline";
+import { PreviewBadge } from "./PreviewBadge";
 
 /**
  * Geospatial suite viewport: MapLibre map, tools, hydrograph timeline, and import entry.
@@ -15,6 +16,7 @@ export default function GeoViewport() {
   const enqueueJobs = useStore((s) => s.enqueueJobs);
   const queueItems = useStore((s) => s.queueItems);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
+  const preview = useStore((s) => s.geoPreview);
   const geoQueue = queueItems.filter((i) => (i.suite ?? "reconstruction") === "geospatial");
   const [catalog, setCatalog] = useState<GeoCatalogInfo | null>(null);
   const [showImport, setShowImport] = useState(false);
@@ -60,6 +62,12 @@ export default function GeoViewport() {
         <GeoMap />
         <GeoToolbar />
 
+        <div className="pointer-events-none absolute right-3 top-12 z-10">
+          <div className="pointer-events-auto">
+            <PreviewBadge validation={preview?.validation ?? "live"} backend={preview?.backend} />
+          </div>
+        </div>
+
         <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex max-w-sm flex-col gap-2">
           <div className="pointer-events-auto flex flex-wrap gap-1.5">
             <button type="button" className="btn bg-panel/90 text-[11px] backdrop-blur-sm" onClick={() => void browse()}>
@@ -77,8 +85,8 @@ export default function GeoViewport() {
           {showImport && (
             <div className="pointer-events-auto float-in rounded border border-edge bg-panel/95 p-3 text-[11px] shadow-sm backdrop-blur-sm">
               <p className="leading-relaxed text-ink-dim">
-                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Georegistration and flood
-                engines attach in later phases.
+                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Start a scientific flood from
+                the scenario panel (ANUGA or labelled demo when the engine is missing).
               </p>
               {catalog && (
                 <div className="mt-2 space-y-1 text-ink-dim">

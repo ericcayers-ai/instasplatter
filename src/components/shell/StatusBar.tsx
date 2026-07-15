@@ -24,7 +24,11 @@ export default function StatusBar() {
   const floodTime = useStore((s) => s.geoFloodTime);
   const viewMode = useStore((s) => s.geoViewMode);
   const waterStyle = useStore((s) => s.geoWaterStyle);
-  const geoSnap = useMemo(() => floodSnapshotFromTime(floodTime), [floodTime]);
+  const preview = useStore((s) => s.geoPreview);
+  const geoSnap = useMemo(
+    () => floodSnapshotFromTime(floodTime, preview),
+    [floodTime, preview],
+  );
 
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -38,6 +42,10 @@ export default function StatusBar() {
       <div className="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-3 text-[11px] tabular-nums text-ink-dim">
         <div className="flex min-w-0 items-center gap-4 overflow-hidden">
           <span className="text-[var(--color-hydro)]">Geospatial</span>
+          <span className="text-[var(--color-gauge)]">
+            {preview?.validation === "validated" ? "Validated" : "Live preview"}
+            {preview?.backend ? ` · ${preview.backend}` : ""}
+          </span>
           <span>{geoSnap.statusLabel}</span>
           <span>
             t {geoSnap.hours.toFixed(1)} h · depth {geoSnap.maxDepthM.toFixed(2)} m ·{" "}

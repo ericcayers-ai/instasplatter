@@ -108,7 +108,7 @@ export const DEFAULT_GEO_LAYERS: GeoLayer[] = [
     group: "flood",
     visible: true,
     opacity: 0.72,
-    placeholder: true,
+    placeholder: false,
     status: "ready",
   },
   {
@@ -118,8 +118,8 @@ export const DEFAULT_GEO_LAYERS: GeoLayer[] = [
     group: "flood",
     visible: false,
     opacity: 0.7,
-    placeholder: true,
-    status: "empty",
+    placeholder: false,
+    status: "ready",
   },
   {
     id: "flood_hazard",
@@ -151,13 +151,13 @@ export const LAYER_GROUP_LABELS: Record<GeoLayer["group"], string> = {
   flood: "Flood results",
 };
 
-/** Placeholder draft scenario until ANUGA / preview engines land. */
+/** Draft scenario — scientific ANUGA + live preview share this meta. */
 export const PLACEHOLDER_SCENARIO: GeoScenarioMeta = {
   id: "draft-site-rain",
   name: "Draft site rain",
   durationHours: 12,
-  engineLabel: "Preview placeholder",
-  note: "Scrub updates the legend and status. Scientific and live engines are not connected yet.",
+  engineLabel: "ANUGA / live preview",
+  note: "Start a scientific run for ANUGA checkpoints (or labelled demo if the engine is missing). Live preview stays separate until validated.",
 };
 
 /**

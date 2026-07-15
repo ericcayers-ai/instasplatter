@@ -13,8 +13,14 @@ export default function GeoScenarioInspector() {
   const viewMode = useStore((s) => s.geoViewMode);
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
+  const scientific = useStore((s) => s.geoScientificRun);
+  const floodEngine = useStore((s) => s.geoFloodEngine);
+  const startScientificFlood = useStore((s) => s.startScientificFlood);
+  const cancelScientificFlood = useStore((s) => s.cancelScientificFlood);
   const snap = useMemo(() => floodSnapshotFromTime(floodTime), [floodTime]);
   const meta = scenario ?? PLACEHOLDER_SCENARIO;
+  const running = scientific?.state === "running";
+  const demoMode = scientific?.mode === "demo" || meta.engineLabel.includes("Demo");
 
   return (
     <div className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-edge bg-panel">
@@ -34,6 +40,60 @@ export default function GeoScenarioInspector() {
         <div className="font-display text-sm font-semibold tracking-tight text-ink">{meta.name}</div>
         <div className="mt-1 text-[11px] text-ink-dim">{meta.engineLabel}</div>
         <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">{meta.note}</p>
+        {demoMode && (
+          <p className="mt-2 rounded border border-[var(--color-gauge)]/40 bg-[var(--color-gauge)]/10 px-2 py-1.5 text-[10px] leading-snug text-[var(--color-gauge)]">
+            Demo mode — extents are synthetic. Not scientifically authoritative.
+          </p>
+        )}
+      </div>
+
+      <div className="border-b border-edge px-3 py-3">
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+          Scientific run
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            className="btn btn-primary px-2 py-1 text-[11px]"
+            disabled={running}
+            onClick={() => void startScientificFlood({ allowDemo: true })}
+          >
+            {running ? "Running…" : "Start flood"}
+          </button>
+          <button
+            type="button"
+            className="btn px-2 py-1 text-[11px]"
+            disabled={!running}
+            onClick={() => void cancelScientificFlood()}
+          >
+            Cancel
+          </button>
+        </div>
+        {floodEngine && (
+          <div className="mt-2 font-mono text-[10px] text-ink-dim">
+            ANUGA {floodEngine.anugaReady ? "launcher found" : "not installed"} · SWMM{" "}
+            {floodEngine.swmmReady ? "scaffold ready" : "scaffold"}
+          </div>
+        )}
+        {scientific && (
+          <div className="mt-2 space-y-1 text-[11px]">
+            <div className="flex justify-between gap-2">
+              <span className="text-ink-dim">State</span>
+              <span className="tabular-nums">{scientific.state}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-ink-dim">Progress</span>
+              <span className="tabular-nums">{Math.round(scientific.progress * 100)}%</span>
+            </div>
+            <p className="text-[10px] leading-snug text-ink-dim">{scientific.detail}</p>
+            {scientific.massBalance != null && (
+              <div className="flex justify-between gap-2">
+                <span className="text-ink-dim">Mass bal.</span>
+                <span className="tabular-nums">{scientific.massBalance.toFixed(4)}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="border-b border-edge px-3 py-3">
@@ -106,8 +166,8 @@ export default function GeoScenarioInspector() {
       </div>
 
       <div className="px-3 py-3 text-[11px] leading-relaxed text-ink-dim">
-        Compare scientific ANUGA runs with the live preview once engines are connected. This panel
-        stays linked to the hydrograph scrubber.
+        Scientific ANUGA runs stream on the CPU lane via <span className="font-mono">sim://event</span>.
+        Live preview remains a separate labelled path until validation tolerances pass.
       </div>
     </div>
   );

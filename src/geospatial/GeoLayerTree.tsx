@@ -19,7 +19,11 @@ export default function GeoLayerTree() {
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const setWaterStyle = useStore((s) => s.setGeoWaterStyle);
   const floodTime = useStore((s) => s.geoFloodTime);
-  const snap = useMemo(() => floodSnapshotFromTime(floodTime), [floodTime]);
+  const preview = useStore((s) => s.geoPreview);
+  const snap = useMemo(
+    () => floodSnapshotFromTime(floodTime, preview),
+    [floodTime, preview],
+  );
 
   const grouped = useMemo(() => {
     return GROUP_ORDER.map((g) => ({

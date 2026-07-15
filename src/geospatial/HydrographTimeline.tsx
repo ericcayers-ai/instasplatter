@@ -4,14 +4,22 @@ import { PLACEHOLDER_HYDROGRAPH, PLACEHOLDER_SCENARIO } from "./defaults";
 import { floodSnapshotFromTime, hazardClassLabel } from "./floodPreview";
 
 /**
- * Signature hydrograph timeline: scrub the graph and flood legend/status update as one instrument.
+ * Signature hydrograph timeline: scrub / play drives the live flood preview.
  */
 export default function HydrographTimeline() {
   const floodTime = useStore((s) => s.geoFloodTime);
   const setFloodTime = useStore((s) => s.setGeoFloodTime);
+  const playing = useStore((s) => s.geoFloodPlaying);
+  const togglePlaying = useStore((s) => s.toggleGeoFloodPlaying);
+  const lowPower = useStore((s) => s.geoFloodLowPower);
+  const setLowPower = useStore((s) => s.setGeoFloodLowPower);
   const scenario = useStore((s) => s.geoScenario);
   const waterStyle = useStore((s) => s.geoWaterStyle);
-  const snap = useMemo(() => floodSnapshotFromTime(floodTime), [floodTime]);
+  const preview = useStore((s) => s.geoPreview);
+  const snap = useMemo(
+    () => floodSnapshotFromTime(floodTime, preview),
+    [floodTime, preview],
+  );
   const trackRef = useRef<SVGSVGElement>(null);
 
   const series = PLACEHOLDER_HYDROGRAPH;
@@ -34,6 +42,7 @@ export default function HydrographTimeline() {
   const onPointer = (clientX: number) => {
     const svg = trackRef.current;
     if (!svg) return;
+    if (playing) togglePlaying();
     const rect = svg.getBoundingClientRect();
     const x = clientX - rect.left;
     const t = (x - padX * (rect.width / w)) / ((w - padX * 2) * (rect.width / w));
@@ -43,12 +52,32 @@ export default function HydrographTimeline() {
   return (
     <div className="geo-hydrograph flex h-[7.25rem] shrink-0 flex-col border-t border-edge bg-[var(--color-basin)]/90">
       <div className="flex items-center justify-between gap-3 px-3 pt-1.5">
-        <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-hydro)]">
-            Hydrograph
-          </div>
-          <div className="truncate text-[11px] text-ink-dim">
-            {scenario?.name ?? PLACEHOLDER_SCENARIO.name} · {snap.statusLabel}
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            type="button"
+            className={`btn px-2 py-0.5 text-[10px] ${playing ? "btn-active" : ""}`}
+            onClick={() => togglePlaying()}
+            aria-pressed={playing}
+            title={playing ? "Pause preview" : "Play preview along hydrograph"}
+          >
+            {playing ? "Pause" : "Play"}
+          </button>
+          <button
+            type="button"
+            className={`btn px-2 py-0.5 text-[10px] ${lowPower ? "btn-active" : ""}`}
+            onClick={() => setLowPower(!lowPower)}
+            aria-pressed={lowPower}
+            title="Low-power: coarser grid, fewer particles"
+          >
+            Low power
+          </button>
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-hydro)]">
+              Hydrograph
+            </div>
+            <div className="truncate text-[11px] text-ink-dim">
+              {scenario?.name ?? PLACEHOLDER_SCENARIO.name} · {snap.statusLabel}
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5 font-mono text-[10px] tabular-nums text-ink-dim">
@@ -96,7 +125,10 @@ export default function HydrographTimeline() {
           }}
           onKeyDown={(e) => {
             const step = e.shiftKey ? 0.05 : 0.02;
-            if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+            if (e.key === " ") {
+              e.preventDefault();
+              togglePlaying();
+            } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
               e.preventDefault();
               setFloodTime(floodTime - step);
             } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
@@ -154,7 +186,7 @@ export default function HydrographTimeline() {
           <div className="text-[9px] font-semibold uppercase tracking-wide text-ink-dim">Legend</div>
           <div className="geo-legend__swatch" data-mode={waterStyle} />
           <div className="text-[10px] leading-tight text-ink-dim">
-            {waterStyle === "depth" && "Depth absorption"}
+            {waterStyle === "depth" && "Depth colormap"}
             {waterStyle === "hazard" && "H0–H3 pattern"}
             {waterStyle === "contour" && "Shoreline contours"}
           </div>
