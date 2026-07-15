@@ -5,6 +5,7 @@
 //! adapter-facing names (`HydroEngineId`, …) so callers that landed during
 //! parallel staging keep compiling without a second copy of the types.
 
+#[allow(unused_imports)] // public façade for external/experimental callers
 pub use crate::geospatial::hydro::{
     engine_descriptor, engine_registry, external_plugin_protocol, refuse_gpl_bundle,
     try_promote_to_standard, ExternalHydroInstallProtocol, HydroEngine as HydroEngineId,
