@@ -1,7 +1,8 @@
-//! Geospatial suite core (formats, catalog, DEM/hydro stubs, registration).
+//! Geospatial suite core (formats, catalog, DEM, hydro, registration).
 //!
-//! Phase 1 scaffolds compileable modules. Drone georegistration, flood solvers,
-//! and MapLibre viewport land in later phases.
+//! Scientific flood runs live in `hydro` (ANUGA/SWMM). Live WebGPU/CPU preview
+//! lives in `preview` (checkpoint protocol) plus the frontend
+//! `src/geospatial/preview` module; both share `events::SimEvent` / `sim://event`.
 
 #![allow(dead_code)]
 
@@ -11,7 +12,9 @@ pub mod dem;
 pub mod events;
 pub mod exports;
 pub mod hydro;
+pub mod preview;
 pub mod registration;
+pub mod transforms;
 
 use std::path::Path;
 

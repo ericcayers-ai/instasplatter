@@ -345,6 +345,110 @@ fn get_geo_catalog_info() -> serde_json::Value {
     })
 }
 
+/// Import flight / survey telemetry into a project and write pose priors.
+#[tauri::command]
+fn import_geo_telemetry(
+    workspace: String,
+    paths: Vec<String>,
+) -> Result<geospatial::registration::RegistrationResult, String> {
+    let ws = PathBuf::from(&workspace);
+    let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    geospatial::registration::import_telemetry_into_project(&ws, &path_bufs)
+}
+
+/// Set / refine ground control points on a project. When `refine` is true and
+/// enough local picks exist, run robust Sim(3) and update geo residuals.
+#[tauri::command]
+fn set_geo_gcps(
+    workspace: String,
+    gcps: Vec<geospatial::registration::GcpPoint>,
+    refine: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let ws = PathBuf::from(&workspace);
+    let (geo, report) =
+        geospatial::registration::set_project_gcps(&ws, gcps, refine.unwrap_or(false))?;
+    Ok(serde_json::json!({
+        "geoReference": geo,
+        "residualReport": report,
+    }))
+}
+
+/// Recompute ENU/ECEF GeoReference (optional origin override) and pose priors.
+#[tauri::command]
+fn compute_geo_reference(
+    workspace: String,
+    origin_lon_lat_h: Option<[f64; 3]>,
+) -> Result<geospatial::registration::RegistrationResult, String> {
+    geospatial::registration::compute_geo_reference(&PathBuf::from(workspace), origin_lon_lat_h)
+}
+
+/// Adaptive CRS / tile / mesh / preview resolution plan from scene bounds.
+#[tauri::command]
+fn plan_geo_extent(
+    input: geospatial::registration::ExtentPlanInput,
+) -> geospatial::registration::ExtentPlan {
+    geospatial::registration::plan_extent(&input)
+}
+
+/// Load current GeoReference from a project (if any).
+#[tauri::command]
+fn get_geo_reference(workspace: String) -> Result<Option<project::GeoReference>, String> {
+    let proj = Project::load(&PathBuf::from(workspace))?;
+    Ok(proj.geo_reference)
+}
+
+/// Start an ANUGA scientific flood (CPU lane). Falls back to labelled demo when
+/// the engine is missing and `allow_demo` is true (default).
+#[tauri::command]
+fn start_scientific_flood(
+    app: tauri::AppHandle,
+    workspace: String,
+    scenario_id: String,
+    allow_demo: Option<bool>,
+    dem_path: Option<String>,
+    enable_swmm: Option<bool>,
+) -> Result<geospatial::hydro::FloodRunStatus, String> {
+    let spec = geospatial::hydro::HydroJobSpec {
+        workspace,
+        scenario_id,
+        engine: Some(geospatial::hydro::HydroEngine::Anuga),
+        preview: false,
+        allow_demo: allow_demo.unwrap_or(true),
+        dem_path,
+        extent: None,
+        ensemble: None,
+        enable_swmm: enable_swmm.unwrap_or(false),
+    };
+    geospatial::hydro::start_scientific_flood(app, spec)
+}
+
+/// Cancel an in-flight scientific flood run.
+#[tauri::command]
+fn cancel_scientific_flood(run_id: String) -> Result<(), String> {
+    geospatial::hydro::cancel_run(&run_id)
+}
+
+/// List active + persisted flood run statuses (optional workspace filter).
+#[tauri::command]
+fn list_flood_run_status(workspace: Option<String>) -> Vec<geospatial::hydro::FloodRunStatus> {
+    geospatial::hydro::list_run_status(workspace.as_deref())
+}
+
+/// Whether the ANUGA sidecar launcher is discoverable (app engines or repo tools).
+#[tauri::command]
+fn get_flood_engine_status() -> serde_json::Value {
+    let anuga = geospatial::hydro::resolve_geo_sidecar("anuga");
+    let swmm = geospatial::hydro::resolve_geo_sidecar("swmm");
+    serde_json::json!({
+        "anugaLauncher": anuga.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "swmmLauncher": swmm.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "anugaReady": anuga.is_some(),
+        "swmmReady": swmm.is_some(),
+        "cpuLane": "scientific flood / ANUGA",
+        "demoAvailable": true,
+    })
+}
+
 #[tauri::command]
 fn list_queue() -> serde_json::Value {
     let q = queue::global();
@@ -724,12 +828,14 @@ fn export_diagnostics(
     out.push_str("## Engines\n");
     let st = engines::status();
     out.push_str(&format!(
-        "colmap: {}, brush: {}{}, ffmpeg: {}, dav2: {}, vggt-commercial: {}, vggt-omega: {}, fixer: {}, gsplat: {}\n\n",
+        "colmap: {}, brush: {}{}, ffmpeg: {}, da3: {}, dav2: {}, mapanything: {}, vggt-commercial: {}, vggt-omega: {}, fixer: {}, gsplat: {}\n\n",
         st.colmap,
         st.brush,
         if st.brush_custom { " (custom)" } else { "" },
         st.ffmpeg,
+        st.depth_anything_3,
         st.depth_anything_v2,
+        st.mapanything,
         st.vggt_commercial,
         st.vggt_omega,
         st.fixer,
@@ -806,6 +912,15 @@ pub fn run() {
             get_suite,
             set_suite,
             get_geo_catalog_info,
+            import_geo_telemetry,
+            set_geo_gcps,
+            compute_geo_reference,
+            plan_geo_extent,
+            get_geo_reference,
+            start_scientific_flood,
+            cancel_scientific_flood,
+            list_flood_run_status,
+            get_flood_engine_status,
             resume_project,
             list_projects,
             delete_project,

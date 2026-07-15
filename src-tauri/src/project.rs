@@ -51,8 +51,7 @@ impl Suite {
     }
 }
 
-/// Metric frame tying the local scene to a geodetic CRS (placeholders until
-/// drone-georeg fills them in).
+/// Metric frame tying the local scene to a geodetic CRS.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GeoReference {
@@ -62,16 +61,26 @@ pub struct GeoReference {
     pub vertical_datum: Option<String>,
     /// Linear units of the working frame ("m", "ft", …).
     pub units: Option<String>,
-    /// 4×4 row-major ECEF → local ENU (or identity stub).
+    /// Working projected / ENU CRS label (e.g. "local-ENU-m").
+    pub working_crs: Option<String>,
+    /// 4×4 row-major ECEF → local ENU.
     pub ecef_to_enu: Option<[f64; 16]>,
-    /// Lon/lat/height or ECEF origin used for ENU.
+    /// 4×4 row-major local ENU → ECEF (inverse of `ecef_to_enu`).
+    pub enu_to_ecef: Option<[f64; 16]>,
+    /// Lon/lat/ellipsoidal height (degrees, degrees, metres) for the ENU origin.
     pub local_origin: Option<[f64; 3]>,
+    /// ECEF metres of the ENU origin.
+    pub local_origin_ecef: Option<[f64; 3]>,
     /// Typical horizontal uncertainty in metres when known.
     pub uncertainty_m: Option<f64>,
-    /// Mean / max GCP residual (metres) after a Sim(3) solve.
+    /// Mean GCP residual (metres) after a Sim(3) solve.
     pub gcp_residual_m: Option<f64>,
+    /// Max GCP residual (metres) after a Sim(3) solve.
+    pub gcp_residual_max_m: Option<f64>,
     /// Free-form provenance (telemetry source, GPS quality, etc.).
     pub provenance: Option<String>,
+    /// `"metric"` | `"unscaled"` | `"approx"` — flood science requires metric.
+    pub scale_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -159,6 +168,10 @@ pub struct SimulationRun {
     pub hardware: Option<String>,
     pub reproducibility_hash: Option<String>,
     pub created_unix: u64,
+    /// `"queued"` | `"running"` | `"done"` | `"failed"` | `"cancelled"`.
+    pub status: Option<String>,
+    /// `"anuga"` | `"demo"` | `"preview"` | … — demo is not scientifically authoritative.
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
