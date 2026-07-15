@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../../state/store";
+import { floodSnapshotFromTime, hazardClassLabel } from "../../geospatial/floodPreview";
 
 export default function StatusBar() {
+  const suite = useStore((s) => s.suite);
   const screen = useStore((s) => s.screen);
   const stages = useStore((s) => s.stages);
   const splatCount = useStore((s) => s.splatCount);
@@ -19,6 +21,10 @@ export default function StatusBar() {
   const logConsoleOpen = useStore((s) => s.logConsoleOpen);
   const setLogConsoleOpen = useStore((s) => s.setLogConsoleOpen);
   const exportDiagnosticsAction = useStore((s) => s.exportDiagnosticsAction);
+  const floodTime = useStore((s) => s.geoFloodTime);
+  const viewMode = useStore((s) => s.geoViewMode);
+  const waterStyle = useStore((s) => s.geoWaterStyle);
+  const geoSnap = useMemo(() => floodSnapshotFromTime(floodTime), [floodTime]);
 
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -26,6 +32,32 @@ export default function StatusBar() {
     return () => clearInterval(t);
   }, []);
   void tick;
+
+  if (suite === "geospatial") {
+    return (
+      <div className="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-3 text-[11px] tabular-nums text-ink-dim">
+        <div className="flex min-w-0 items-center gap-4 overflow-hidden">
+          <span className="text-[var(--color-hydro)]">Geospatial</span>
+          <span>{geoSnap.statusLabel}</span>
+          <span>
+            t {geoSnap.hours.toFixed(1)} h · depth {geoSnap.maxDepthM.toFixed(2)} m ·{" "}
+            {hazardClassLabel(geoSnap.hazardClass)}
+          </span>
+          <span className="uppercase">
+            {viewMode} · {waterStyle}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={() => void exportDiagnosticsAction()} className="hover:text-ink">
+            Export diagnostics
+          </button>
+          <button onClick={() => setLogConsoleOpen(!logConsoleOpen)} className="hover:text-ink">
+            {logConsoleOpen ? "Hide log" : "Log"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (screen !== "processing") {
     return (

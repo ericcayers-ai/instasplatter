@@ -269,3 +269,116 @@ select:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
+
+/* ——— Geospatial viewport / flood graphics hooks ——— */
+.geo-viewport {
+  --geo-wet: 0.3;
+  --geo-depth: 0.5;
+}
+.geo-map {
+  background: var(--color-basin);
+}
+.geo-map .maplibregl-ctrl-group {
+  background: color-mix(in srgb, var(--color-survey) 92%, transparent);
+  border: 1px solid var(--color-contour);
+  box-shadow: none;
+}
+.geo-map .maplibregl-ctrl button {
+  background-color: transparent;
+}
+.geo-map .maplibregl-ctrl-attrib {
+  background: color-mix(in srgb, var(--color-basin) 80%, transparent);
+  color: var(--color-ink-dim);
+  font-size: 10px;
+}
+.geo-map .maplibregl-canvas:focus-visible {
+  outline: 2px solid var(--color-hydro);
+  outline-offset: 2px;
+}
+
+.geo-hydrograph__chart:focus-visible {
+  outline: 2px solid var(--color-hydro);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Depth / hazard / contour legend swatches (color-blind-safe patterns on hazard). */
+.geo-legend__swatch {
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--color-edge);
+}
+.geo-legend__swatch[data-mode="depth"] {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-hydro) 15%, transparent),
+    var(--color-hydro)
+  );
+}
+.geo-legend__swatch[data-mode="hazard"] {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--color-gauge) 55%, transparent),
+    color-mix(in srgb, var(--color-gauge) 55%, transparent) 3px,
+    color-mix(in srgb, var(--color-critical) 70%, transparent) 3px,
+    color-mix(in srgb, var(--color-critical) 70%, transparent) 6px
+  );
+}
+.geo-legend__swatch[data-mode="contour"] {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    var(--color-gauge) 3px,
+    var(--color-gauge) 4px
+  );
+  background-color: color-mix(in srgb, var(--color-hydro) 18%, transparent);
+}
+
+/* Water surface styling hooks driven by data-water-style / scrub CSS vars. */
+.geo-viewport[data-water-style="depth"] .geo-map::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: calc(var(--geo-wet) * 0.12);
+  background: radial-gradient(
+    ellipse 70% 55% at 50% 55%,
+    color-mix(in srgb, var(--color-hydro) 35%, transparent),
+    transparent 70%
+  );
+  mix-blend-mode: soft-light;
+}
+.geo-viewport[data-water-style="hazard"] .geo-map::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0.08;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 8px,
+    color-mix(in srgb, var(--color-critical) 40%, transparent) 8px,
+    color-mix(in srgb, var(--color-critical) 40%, transparent) 9px
+  );
+}
+.geo-viewport[data-water-style="contour"] .geo-map::after {
+  content: none;
+}
+
+.geo-map {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .geo-viewport[data-water-style="depth"] .geo-map::after,
+  .geo-viewport[data-water-style="hazard"] .geo-map::after {
+    opacity: 0.04;
+  }
+  .geo-hydrograph__scrub {
+    transition: none;
+  }
+}

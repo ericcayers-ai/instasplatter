@@ -1,4 +1,5 @@
 import { useStore } from "../../state/store";
+import GeoLayerTree from "../../geospatial/GeoLayerTree";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -86,6 +87,7 @@ function CameraList() {
 }
 
 export default function SceneTree() {
+  const suite = useStore((s) => s.suite);
   const screen = useStore((s) => s.screen);
   const leftPanelOpen = useStore((s) => s.leftPanelOpen);
   const inputPath = useStore((s) => s.inputPath);
@@ -97,6 +99,20 @@ export default function SceneTree() {
   const resultPath = useStore((s) => s.resultPath);
 
   if (!leftPanelOpen) return null;
+
+  if (suite === "geospatial") {
+    return (
+      <div className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">
+        <div className="border-b border-edge px-3 py-2.5">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-hydro)]">
+            Layers
+          </div>
+          <div className="mt-0.5 text-[11px] text-ink-dim">Basemap, terrain, flood</div>
+        </div>
+        <GeoLayerTree />
+      </div>
+    );
+  }
 
   return (
     <div className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">

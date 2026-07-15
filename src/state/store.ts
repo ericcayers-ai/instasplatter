@@ -13,6 +13,14 @@ import type {
   Suite,
 } from "../lib/ipc";
 import { api } from "../lib/ipc";
+import { DEFAULT_GEO_LAYERS, PLACEHOLDER_SCENARIO } from "../geospatial/defaults";
+import type {
+  GeoLayer,
+  GeoScenarioMeta,
+  GeoTool,
+  GeoViewMode,
+  GeoWaterStyle,
+} from "../geospatial/types";
 
 export type Screen = "home" | "processing";
 export type ThemePreference = "system" | "light" | "dark";
@@ -121,8 +129,25 @@ interface AppStore {
   /** First-enable Experimental Mode license modal. */
   experimentalModalOpen: boolean;
 
+  /** Geospatial suite: layer tree, flood scrub, view tools. */
+  geoLayers: GeoLayer[];
+  /** Normalised scenario time 0–1 (linked to hydrograph). */
+  geoFloodTime: number;
+  geoScenario: GeoScenarioMeta | null;
+  geoViewMode: GeoViewMode;
+  geoWaterStyle: GeoWaterStyle;
+  geoTool: GeoTool;
+  geoInspectHint: string | null;
+
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
+  setGeoLayerVisible: (id: string, visible: boolean) => void;
+  setGeoLayerOpacity: (id: string, opacity: number) => void;
+  setGeoFloodTime: (t01: number) => void;
+  setGeoViewMode: (mode: GeoViewMode) => void;
+  setGeoWaterStyle: (style: GeoWaterStyle) => void;
+  setGeoTool: (tool: GeoTool) => void;
+  setGeoInspectHint: (hint: string | null) => void;
   setThemePreference: (p: ThemePreference) => void;
   setLeftPanelOpen: (open: boolean) => void;
   setRightPanelOpen: (open: boolean) => void;
@@ -205,6 +230,14 @@ export const useStore = create<AppStore>((set, get) => ({
   meshStatus: null,
   experimentalModalOpen: false,
 
+  geoLayers: DEFAULT_GEO_LAYERS.map((l) => ({ ...l })),
+  geoFloodTime: 0.35,
+  geoScenario: PLACEHOLDER_SCENARIO,
+  geoViewMode: "2d",
+  geoWaterStyle: "depth",
+  geoTool: "pan",
+  geoInspectHint: null,
+
   init: async () => {
     // React StrictMode double-invokes effects in dev; init exactly once.
     if (initStarted) return;
@@ -272,8 +305,58 @@ export const useStore = create<AppStore>((set, get) => ({
   setSuite: async (suite) => {
     const next = await api.setSuite(suite);
     document.documentElement.dataset.suite = next;
-    set({ suite: next, settings: { ...get().settings, defaultSuite: next } });
+    set({
+      suite: next,
+      settings: { ...get().settings, defaultSuite: next },
+      geoInspectHint: null,
+      geoTool: "pan",
+    });
   },
+
+  setGeoLayerVisible: (id, visible) => {
+    set({
+      geoLayers: get().geoLayers.map((l) => (l.id === id ? { ...l, visible } : l)),
+    });
+  },
+
+  setGeoLayerOpacity: (id, opacity) => {
+    const o = Math.max(0, Math.min(1, opacity));
+    set({
+      geoLayers: get().geoLayers.map((l) => (l.id === id ? { ...l, opacity: o } : l)),
+    });
+  },
+
+  setGeoFloodTime: (t01) => {
+    set({ geoFloodTime: Math.max(0, Math.min(1, t01)) });
+  },
+
+  setGeoViewMode: (mode) => set({ geoViewMode: mode }),
+
+  setGeoWaterStyle: (style) => {
+    const layers = get().geoLayers.map((l) => {
+      if (style === "hazard" && l.id === "flood_hazard") return { ...l, visible: true };
+      if (style === "depth" && l.id === "flood_depth") return { ...l, visible: true };
+      if (style === "contour" && l.id === "flood_depth") return { ...l, visible: true };
+      return l;
+    });
+    set({ geoWaterStyle: style, geoLayers: layers });
+  },
+
+  setGeoTool: (tool) => {
+    set({
+      geoTool: tool,
+      geoInspectHint:
+        tool === "pan"
+          ? null
+          : tool === "inspect"
+            ? "Inspect: click the map for coordinates"
+            : tool === "measure"
+              ? "Measure: click the map (stub)"
+              : "Profile: click the map (stub)",
+    });
+  },
+
+  setGeoInspectHint: (hint) => set({ geoInspectHint: hint }),
 
   setThemePreference: (p) => {
     localStorage.setItem(THEME_KEY, p);

@@ -1,0 +1,185 @@
+import type { GeoLayer, GeoScenarioMeta, HydrographSample } from "./types";
+
+export const DEFAULT_GEO_LAYERS: GeoLayer[] = [
+  {
+    id: "basemap",
+    label: "Basemap",
+    kind: "basemap",
+    group: "basemap",
+    visible: true,
+    opacity: 1,
+    placeholder: false,
+    status: "ready",
+  },
+  {
+    id: "imagery",
+    label: "Imagery",
+    kind: "imagery",
+    group: "terrain",
+    visible: false,
+    opacity: 0.85,
+    placeholder: true,
+    status: "empty",
+  },
+  {
+    id: "dtm",
+    label: "DTM",
+    kind: "dtm",
+    group: "terrain",
+    visible: false,
+    opacity: 0.9,
+    placeholder: true,
+    status: "empty",
+  },
+  {
+    id: "dsm",
+    label: "DSM",
+    kind: "dsm",
+    group: "terrain",
+    visible: false,
+    opacity: 0.75,
+    placeholder: true,
+    status: "empty",
+  },
+  {
+    id: "splat",
+    label: "Gaussian splat",
+    kind: "splat",
+    group: "survey",
+    visible: false,
+    opacity: 1,
+    placeholder: true,
+    status: "hook",
+  },
+  {
+    id: "mesh",
+    label: "Mesh",
+    kind: "mesh",
+    group: "survey",
+    visible: false,
+    opacity: 1,
+    placeholder: true,
+    status: "hook",
+  },
+  {
+    id: "buildings",
+    label: "Buildings",
+    kind: "buildings",
+    group: "network",
+    visible: false,
+    opacity: 0.8,
+    placeholder: true,
+    status: "empty",
+  },
+  {
+    id: "waterways",
+    label: "Waterways / drains",
+    kind: "waterways",
+    group: "network",
+    visible: true,
+    opacity: 0.9,
+    placeholder: true,
+    status: "ready",
+  },
+  {
+    id: "gauges",
+    label: "Gauges",
+    kind: "gauges",
+    group: "network",
+    visible: true,
+    opacity: 1,
+    placeholder: true,
+    status: "ready",
+  },
+  {
+    id: "forcing",
+    label: "Rain / forcing",
+    kind: "forcing",
+    group: "flood",
+    visible: false,
+    opacity: 0.6,
+    placeholder: true,
+    status: "empty",
+  },
+  {
+    id: "flood_depth",
+    label: "Flood depth",
+    kind: "flood_depth",
+    group: "flood",
+    visible: true,
+    opacity: 0.72,
+    placeholder: true,
+    status: "ready",
+  },
+  {
+    id: "flood_velocity",
+    label: "Flood velocity",
+    kind: "flood_velocity",
+    group: "flood",
+    visible: false,
+    opacity: 0.7,
+    placeholder: true,
+    status: "empty",
+  },
+  {
+    id: "flood_hazard",
+    label: "Flood hazard",
+    kind: "flood_hazard",
+    group: "flood",
+    visible: false,
+    opacity: 0.75,
+    placeholder: true,
+    status: "ready",
+  },
+  {
+    id: "flood_uncertainty",
+    label: "Uncertainty",
+    kind: "flood_uncertainty",
+    group: "flood",
+    visible: false,
+    opacity: 0.5,
+    placeholder: true,
+    status: "empty",
+  },
+];
+
+export const LAYER_GROUP_LABELS: Record<GeoLayer["group"], string> = {
+  basemap: "Basemap",
+  terrain: "Terrain",
+  survey: "Survey products",
+  network: "Network",
+  flood: "Flood results",
+};
+
+/** Placeholder draft scenario until ANUGA / preview engines land. */
+export const PLACEHOLDER_SCENARIO: GeoScenarioMeta = {
+  id: "draft-site-rain",
+  name: "Draft site rain",
+  durationHours: 12,
+  engineLabel: "Preview placeholder",
+  note: "Scrub updates the legend and status. Scientific and live engines are not connected yet.",
+};
+
+/**
+ * Synthetic hydrograph for the timeline shell.
+ * Peak around hour 4–5, then recession — enough to scrub meaningfully.
+ */
+export const PLACEHOLDER_HYDROGRAPH: HydrographSample[] = [
+  { hours: 0, stageM: 0.35, dischargeCms: 4 },
+  { hours: 1, stageM: 0.55, dischargeCms: 12 },
+  { hours: 2, stageM: 0.95, dischargeCms: 28 },
+  { hours: 3, stageM: 1.55, dischargeCms: 52 },
+  { hours: 4, stageM: 2.15, dischargeCms: 78 },
+  { hours: 5, stageM: 2.35, dischargeCms: 85 },
+  { hours: 6, stageM: 2.05, dischargeCms: 68 },
+  { hours: 7, stageM: 1.55, dischargeCms: 44 },
+  { hours: 8, stageM: 1.15, dischargeCms: 30 },
+  { hours: 9, stageM: 0.85, dischargeCms: 20 },
+  { hours: 10, stageM: 0.65, dischargeCms: 14 },
+  { hours: 11, stageM: 0.5, dischargeCms: 10 },
+  { hours: 12, stageM: 0.42, dischargeCms: 7 },
+];
+
+/** Demo site center (Wellington waterfront — NZ user timezone). */
+export const GEO_MAP_CENTER: [number, number] = [174.779, -41.2865];
+export const GEO_MAP_ZOOM = 13.2;

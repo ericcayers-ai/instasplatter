@@ -1,5 +1,6 @@
 import { useStore } from "../../state/store";
 import type { Settings } from "../../lib/ipc";
+import GeoScenarioInspector from "../../geospatial/GeoScenarioInspector";
 
 const PRESETS = [
   { id: null, label: "Auto" },
@@ -121,6 +122,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function PropertiesPanel() {
   const open = useStore((s) => s.rightPanelOpen);
+  const suite = useStore((s) => s.suite);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const settings = useStore((s) => s.settings);
   const resolved = useStore((s) => s.resolved);
@@ -131,6 +133,8 @@ export default function PropertiesPanel() {
   const updateSettings = useStore((s) => s.updateSettings);
 
   if (!open) return null;
+  if (suite === "geospatial") return <GeoScenarioInspector />;
+
   const set = (patch: Partial<Settings>) => void updateSettings(patch);
 
   const running = screen === "processing" && !resultPath && !jobError;

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import DropZone from "./components/DropZone";
 import Processing from "./components/Processing";
-import GeoHome from "./geospatial/GeoHome";
+import GeoViewport from "./geospatial/GeoViewport";
 import TitleBar from "./components/shell/TitleBar";
 import ExperimentalBanner from "./components/shell/ExperimentalBanner";
 import ExperimentalLicenseModal from "./components/shell/ExperimentalLicenseModal";
@@ -22,7 +22,7 @@ export default function App() {
 
   const main =
     suite === "geospatial" ? (
-      <GeoHome />
+      <GeoViewport />
     ) : screen === "home" ? (
       <DropZone />
     ) : (
