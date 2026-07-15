@@ -17,6 +17,7 @@ export default function GeoScenarioInspector() {
   const floodEngine = useStore((s) => s.geoFloodEngine);
   const startScientificFlood = useStore((s) => s.startScientificFlood);
   const cancelScientificFlood = useStore((s) => s.cancelScientificFlood);
+  const exportFloodProducts = useStore((s) => s.exportFloodProducts);
   const snap = useMemo(() => floodSnapshotFromTime(floodTime), [floodTime]);
   const meta = scenario ?? PLACEHOLDER_SCENARIO;
   const running = scientific?.state === "running";
@@ -67,6 +68,15 @@ export default function GeoScenarioInspector() {
             onClick={() => void cancelScientificFlood()}
           >
             Cancel
+          </button>
+          <button
+            type="button"
+            className="btn px-2 py-1 text-[11px]"
+            disabled={running}
+            title="Write COG/GeoTIFF, GeoJSON, time series, SPZ, and scenario manifest under geo/exports"
+            onClick={() => void exportFloodProducts()}
+          >
+            Export products
           </button>
         </div>
         {floodEngine && (

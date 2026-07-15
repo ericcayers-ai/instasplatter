@@ -215,7 +215,7 @@ export interface QueueSnapshot {
 export interface GeoCatalogInfo {
   connectors: string[];
   formats: { id: string; label: string }[];
-  exports: { id: string; label: string }[];
+  exports: { id: string; label: string; worksOffline?: boolean }[];
 }
 
 export interface FloodRunStatus {
@@ -241,6 +241,37 @@ export interface FloodEngineStatus {
   swmmReady: boolean;
   cpuLane: string;
   demoAvailable: boolean;
+}
+
+export interface FloodExportArtifact {
+  kind: string;
+  path: string;
+  format: string;
+  writer: string;
+  notes: string[];
+}
+
+export interface FloodExportResult {
+  exportDir: string;
+  runId: string;
+  mode?: string | null;
+  authoritative: boolean;
+  gdal: {
+    available: boolean;
+    gdalTranslate?: string | null;
+    ogr2ogr?: string | null;
+    pythonOsgeo: boolean;
+    notes: string[];
+  };
+  artifacts: FloodExportArtifact[];
+  manifestPath: string;
+}
+
+export interface LayerExportResult {
+  kind: string;
+  path: string;
+  writer: string;
+  notes: string[];
 }
 
 export type GeoEvent =
@@ -310,6 +341,24 @@ export const api = {
   cancelScientificFlood: (runId: string) => invoke<void>("cancel_scientific_flood", { runId }),
   listFloodRunStatus: (workspace?: string | null) =>
     invoke<FloodRunStatus[]>("list_flood_run_status", { workspace: workspace ?? null }),
+
+  exportFloodProducts: (workspace: string, runId?: string | null) =>
+    invoke<FloodExportResult>("export_flood_products", {
+      workspace,
+      runId: runId ?? null,
+    }),
+
+  exportGeoLayer: (
+    workspace: string,
+    kind: string,
+    opts?: { runId?: string | null; destPath?: string | null },
+  ) =>
+    invoke<LayerExportResult>("export_geo_layer", {
+      workspace,
+      kind,
+      runId: opts?.runId ?? null,
+      destPath: opts?.destPath ?? null,
+    }),
 
   startJob: (inputPath: string) => invoke<string>("start_job", { inputPath }),
   cancelJob: (jobId: string) => invoke<void>("cancel_job", { jobId }),

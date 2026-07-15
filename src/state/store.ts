@@ -167,6 +167,7 @@ interface AppStore {
   setGeoPreview: (runtime: GeoPreviewRuntime | null) => void;
   startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
   cancelScientificFlood: () => Promise<void>;
+  exportFloodProducts: () => Promise<void>;
   handleGeoEvent: (e: GeoEvent) => void;
   handleSimEvent: (e: SimEvent) => void;
   setGeoViewMode: (mode: GeoViewMode) => void;
@@ -445,6 +446,62 @@ export const useStore = create<AppStore>((set, get) => ({
         geoScientificRun: {
           ...(get().geoScientificRun as GeoScientificRun),
           detail: String(err),
+        },
+      });
+    }
+  },
+
+  exportFloodProducts: async () => {
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? null;
+    }
+    if (!workspace) {
+      set({
+        geoScientificRun: {
+          runId: get().geoScientificRun?.runId ?? "",
+          state: get().geoScientificRun?.state ?? "failed",
+          progress: get().geoScientificRun?.progress ?? 0,
+          detail: "Open or enqueue a geospatial project before exporting.",
+          mode: get().geoScientificRun?.mode,
+          label: get().geoScientificRun?.label,
+          massBalance: get().geoScientificRun?.massBalance,
+        },
+      });
+      return;
+    }
+    const runId = get().geoScientificRun?.runId || null;
+    try {
+      const result = await api.exportFloodProducts(workspace, runId);
+      const n = result.artifacts.length;
+      const auth = result.authoritative
+        ? "calibrated scientific"
+        : "non-authoritative (demo/preview/uncalibrated)";
+      set({
+        workspace,
+        geoScientificRun: {
+          runId: result.runId,
+          state: get().geoScientificRun?.state ?? "done",
+          progress: get().geoScientificRun?.progress ?? 1,
+          detail: `Exported ${n} products → ${result.exportDir} (${auth})`,
+          mode: result.mode ?? get().geoScientificRun?.mode,
+          label: get().geoScientificRun?.label,
+          massBalance: get().geoScientificRun?.massBalance,
+        },
+      });
+    } catch (err) {
+      set({
+        geoScientificRun: {
+          runId: get().geoScientificRun?.runId ?? "",
+          state: get().geoScientificRun?.state ?? "failed",
+          progress: get().geoScientificRun?.progress ?? 0,
+          detail: `Export failed: ${String(err)}`,
+          mode: get().geoScientificRun?.mode,
+          label: get().geoScientificRun?.label,
+          massBalance: get().geoScientificRun?.massBalance,
         },
       });
     }

@@ -335,6 +335,7 @@ fn get_geo_catalog_info() -> serde_json::Value {
             serde_json::json!({
                 "id": k.id(),
                 "label": k.label(),
+                "worksOffline": k.works_offline(),
             })
         })
         .collect();
@@ -447,6 +448,31 @@ fn get_flood_engine_status() -> serde_json::Value {
         "cpuLane": "scientific flood / ANUGA",
         "demoAvailable": true,
     })
+}
+
+/// Export flood rasters/vectors/time series/3D stubs + scenario manifest.
+#[tauri::command]
+fn export_flood_products(
+    workspace: String,
+    run_id: Option<String>,
+) -> Result<geospatial::exports::FloodExportResult, String> {
+    let ws = PathBuf::from(&workspace);
+    geospatial::exports::export_flood_products(&ws, run_id.as_deref())
+}
+
+/// Export a single geospatial product kind (optionally copy to `destPath`).
+#[tauri::command]
+fn export_geo_layer(
+    workspace: String,
+    kind: String,
+    run_id: Option<String>,
+    dest_path: Option<String>,
+) -> Result<geospatial::exports::LayerExportResult, String> {
+    let parsed = geospatial::exports::GeoExportKind::parse(&kind)
+        .ok_or_else(|| format!("Unknown export kind '{kind}'"))?;
+    let ws = PathBuf::from(&workspace);
+    let dest = dest_path.as_ref().map(PathBuf::from);
+    geospatial::exports::export_geo_layer(&ws, parsed, run_id.as_deref(), dest.as_deref())
 }
 
 #[tauri::command]
@@ -921,6 +947,8 @@ pub fn run() {
             cancel_scientific_flood,
             list_flood_run_status,
             get_flood_engine_status,
+            export_flood_products,
+            export_geo_layer,
             resume_project,
             list_projects,
             delete_project,
