@@ -19,6 +19,15 @@ pub use ingest::{
 #[allow(unused_imports)]
 pub use ingest::TelemetryFormat;
 
+/// Soft outlier gate: residual > `median ×` this factor.
+pub const GCP_OUTLIER_MEDIAN_FACTOR: f64 = 3.0;
+/// Soft outlier floor (metres) so tiny medians do not flag noise.
+pub const GCP_OUTLIER_FLOOR_M: f64 = 0.15;
+/// Well-conditioned survey GCP mean residual target for release gates (metres).
+pub const GCP_SURVEY_PASS_MEAN_M: f64 = 0.05;
+/// Near-identity / synthetic GCP residual target (metres).
+pub const GCP_IDENTITY_PASS_MEAN_M: f64 = 1e-4;
+
 /// Result of a registration / ingest attempt.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -981,11 +990,13 @@ pub fn solve_gcp_sim3(
     let mean = residuals.iter().sum::<f64>() / residuals.len() as f64;
     let max = residuals.iter().cloned().fold(0.0_f64, f64::max);
     let rms = (residuals.iter().map(|r| r * r).sum::<f64>() / residuals.len() as f64).sqrt();
-    // Soft outlier: > 3× median or > 0.5 m absolute when mean is small.
+    // Soft outlier: > k× median, floored, or elevated vs mean.
     let mut sorted = residuals.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = sorted[sorted.len() / 2];
-    let thresh = (median * 3.0).max(0.15).max(mean * 2.5);
+    let thresh = (median * GCP_OUTLIER_MEDIAN_FACTOR)
+        .max(GCP_OUTLIER_FLOOR_M)
+        .max(mean * 2.5);
 
     let mut inliers = Vec::new();
     let mut outliers = Vec::new();
@@ -1210,7 +1221,7 @@ mod tests {
         }
         let report = solve_gcp_sim3(&gcps, &geo).unwrap();
         assert!((report.scale - 1.0).abs() < 1e-5);
-        assert!(report.mean_residual_m < 1e-4);
+        assert!(report.mean_residual_m < GCP_IDENTITY_PASS_MEAN_M);
         assert!(report.outlier_ids.is_empty());
     }
 
@@ -1262,6 +1273,14 @@ mod tests {
         ];
         let report = solve_gcp_sim3(&gcps, &geo).unwrap();
         assert!((report.scale - 1.0).abs() < 1e-3);
-        assert!(report.mean_residual_m < 0.05);
+        assert!(report.mean_residual_m < GCP_SURVEY_PASS_MEAN_M);
+    }
+
+    #[test]
+    fn residual_thresholds_are_documented_for_release_gates() {
+        assert!(GCP_OUTLIER_MEDIAN_FACTOR >= 2.0);
+        assert!(GCP_OUTLIER_FLOOR_M > 0.0);
+        assert!(GCP_SURVEY_PASS_MEAN_M <= GCP_OUTLIER_FLOOR_M);
+        assert!(GCP_IDENTITY_PASS_MEAN_M < GCP_SURVEY_PASS_MEAN_M);
     }
 }

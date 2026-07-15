@@ -141,6 +141,43 @@ export function computeStats(state: GridState, dtS: number, cfl: number): Previe
   };
 }
 
+/** Relative mass error for preview soft-solver conservation checks. */
+export function massRelError(aM3: number, bM3: number): number {
+  const denom = Math.max(Math.abs(bM3), 1e-6);
+  return Math.abs(aM3 - bM3) / denom;
+}
+
+/**
+ * Lake-at-rest smoke: flat bed, still water, no forcing — mass and peak depth
+ * should stay within soft tolerances after `steps` (non-authoritative preview).
+ */
+export function lakeAtRestMassOk(
+  cols = 32,
+  rows = 24,
+  depthM = 0.5,
+  steps = 40,
+  massTol = 0.05,
+  depthTolM = 0.02,
+): boolean {
+  const dx = 10;
+  const state = createEmptyState(cols, rows, dx);
+  state.z.fill(0);
+  state.h.fill(depthM);
+  const forcing: PreviewForcing = {
+    rainfallMmHr: 0,
+    infiltrationMmHr: 0,
+    manningN: 0.03,
+    inflowCms: 0,
+  };
+  const t0 = computeStats(state, 0, 0);
+  for (let i = 0; i < steps; i++) softStep(state, forcing, 0.45, 1.0);
+  const t1 = computeStats(state, 0, 0);
+  return (
+    massRelError(t1.massM3, t0.massM3) <= massTol &&
+    Math.abs(t1.maxDepthM - depthM) <= depthTolM
+  );
+}
+
 /**
  * One CFL-aware shallow-sheet step (diffusive / Manning flux continuity).
  * Stable enough for live graphics; not a scientific SWE substitute.

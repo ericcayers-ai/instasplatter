@@ -1,37 +1,44 @@
-# Research stack (v0.6+) — dual mode
+# Research stack (v0.8+) — dual suite + dual mode
 
 Evidence-first inventory: **[PAPER-SWEEP-2024+.md](./PAPER-SWEEP-2024+.md)**.
 
-InstaSplatter runs as **two stacks** behind one Experimental Mode toggle.
+InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Experimental** policy.
+
+| Suite | Default job |
+|---|---|
+| **Reconstruction** | Capture → scored cameras → confidence-fused dense → live splat |
+| **Geospatial** | Georegister → DEM/layers → ANUGA/SWMM + live preview → exports |
 
 | | **Standard Mode** (default) | **Experimental Mode** (license ack) |
 |---|---|---|
 | Intent | Best quality that stays commercially redistributable | Absolute max quality; personal/research; NC OK after ack |
-| Cameras | **VGGT-1B-Commercial first** → light COLMAP BA/fallback | **Capture-profile routing** (not blind merge): static Ω/MASt3R/DUSt3R/Pi3X; long video StreamVGGT/VGGT-Long/MASt3R-SLAM/SLAM3R; dynamic Ω/MonST3R/Easi3R (+ separate 4D); large aerial CityGaussian/Urban-GS/Horizon |
-| Dense init | **RoMa v2 densify** ∧ DA3 ∧ COLMAP MVS ∧ sparse/VGGT | Profile-matched research densifiers, then **confidence-fuse** (schema v2 + gates) |
+| Cameras | Capture-aware commercial chain (VGGT-C, MapAnything, COLMAP priors) | Profile routing: static Ω/MASt3R/DUSt3R/Pi3X; long video StreamVGGT/VGGT-Long/MASt3R-SLAM/SLAM3R; dynamic Ω/MonST3R/Easi3R (+ separate 4D); large aerial CityGaussian/Urban-GS/Horizon |
+| Dense init | **RoMa v2 densify** ∧ DA3 ∧ COLMAP MVS ∧ sparse | Profile-matched densifiers, then **confidence-fuse** (schema v2 + gates) — never raw concatenate |
 | Surface / 4D | Stock mesh path | Separate adapters (`gs-2d`, GOF/PGSR/…, MonST3R/Easi3R) |
 | Polish | NVIDIA Fixer when installed | **Difix then Fixer** |
 | Trainer | gsplat Auto on CUDA else Brush | Force gsplat Max + strategies; Brush Max if no gsplat |
-| Caps | Balanced→High floors when neural stack present | Force Max-tier frames/res/steps/splats |
+| Flood | **ANUGA** scientific (+ **SWMM** network); demo fallback labelled non-authoritative | TRITON / Wflow / GeoClaw external permissive; SFINCS/HiPIMS/BG_Flood/Itzï **GPL plugin only** |
+| Preview | WebGPU/CPU soft solver — always “Live preview” until compare gates pass | Same; promotion blocked without `HydroPromotionGates` |
 | UI | Quiet chrome | TitleBar Experimental ON + NC banner + solver chips |
 
 Weights / PyTorch sidecars stay **user-installed** under
-`%LOCALAPPDATA%/InstaSplatter/engines/sidecars/`. Base NSIS installer stays lean
+`%LOCALAPPDATA%/InstaSplatter/engines/sidecars/`. Hydro plugins:
+`%LOCALAPPDATA%/InstaSplatter/engines/hydro/`. Base NSIS installer stays lean
 (COLMAP + Brush only).
 
-## Standard Mode pipeline
+## Standard Mode pipeline (reconstruction)
 
 ```
 Video → frame gate
-  → VGGT-Commercial poses (if ACCEPTED) → optional COLMAP BA
+  → capture-aware commercial poses → optional COLMAP BA
       else COLMAP SfM (or live-init → COLMAP)
   → RoMa v2 densify ∧ DA3/VGGT-C ∧ COLMAP MVS ∧ sparse → init.ply
   → gsplat (CUDA) or Brush: progressive ∧ mip ∧ AbsGS opac/scale ∧ MCMC
   → Fixer polish when installed
-  → Live PLY lerp viewport → Mesh export
+  → Live PLY lerp viewport → Mesh / SPZ v4 export
 ```
 
-## Experimental Mode pipeline
+## Experimental Mode pipeline (reconstruction)
 
 ```
 Video → frame gate → detect CaptureProfile
@@ -41,10 +48,23 @@ Video → frame gate → detect CaptureProfile
   → optional 4D / large-scene / surface adapters on separate paths
   → Difix then Fixer
   → gsplat Max (MCMC+AbsGrad+AA+appearance+bilagrid) or Brush Max
-  → Live PLY lerp viewport → Mesh export
+  → Live PLY lerp viewport → Mesh / SPZ v4 export
 ```
 
 Routing table lives in `src-tauri/src/pipeline/experimental.rs`.
+
+## Geospatial flood path
+
+```
+Telemetry / GCP / EXIF → ENU/ECEF + GeoReference
+  → adaptive extent plan (CRS, DEM LOD, mesh/preview resolution)
+  → Scientific: ANUGA (+ optional SWMM) → sim:// checkpoints → SimulationRun
+      else labelled demo extents (never authoritative)
+  → Preview: WebGPU or CPU soft solver → display-rate interp
+      compare vs ANUGA tolerances → keep “Live preview” badge until within gate
+  → Exports: COG / GeoPackage / Zarr-meta / residual report + manifest
+      authoritative=true only for calibrated ANUGA scientific products
+```
 
 ## License map (hard constraints)
 
@@ -62,6 +82,9 @@ Routing table lives in `src-tauri/src/pipeline/experimental.rs`.
 | Difix3D+ | Research/gated | Off | Preferred polish (then Fixer) |
 | NVIDIA Fixer | NVIDIA Open Model | ON when installed | ON when installed |
 | COLMAP / DA3 / gsplat / Brush | BSD / Apache / Apache | ON | ON |
+| ANUGA | Apache-2.0 | Scientific flood | Scientific flood |
+| EPA SWMM | Public domain | Network exchange | Network exchange |
+| WebGPU/CPU preview | Apache-2.0 | Preview only | Preview only |
 | TRITON / Wflow / GeoClaw | permissive (verify) | Never | External hydro install |
 | SFINCS / HiPIMS / BG_Flood / Itzï | **GPL** | Never | External plugin only |
 
@@ -69,8 +92,33 @@ Routing table lives in `src-tauri/src/pipeline/experimental.rs`.
 
 See `tools/sidecars/README.md` and `tools/sidecars/research/README.md`.
 
-## Hydro experimental adapters
+## Hydro adapters + promotion
 
-Registry + GPL external-plugin protocol: `src-tauri/src/geospatial/hydro.rs`,
-docs in `tools/sidecars/hydro-plugins/README.md`. ANUGA/SWMM/WebGPU remain
-separate Standard/preview todos — not implemented here.
+Registry + GPL external-plugin protocol: `src-tauri/src/geospatial/hydro.rs`
+(façade: `hydro_adapters.rs`). Docs: `tools/sidecars/hydro-plugins/README.md`,
+`tools/sidecars/anuga/README.md`, `tools/sidecars/swmm/README.md`.
+
+`HydroPromotionGates` (lake-at-rest, wet/dry, dam-break, mass conservation,
+ANUGA cross-compare, license clearance, …) must all clear before any
+experimental hydro engine can be considered for Standard. GPL engines
+**cannot** promote into the Apache installer. Preview soft-solver exposes
+`lakeAtRestMassOk` / `massRelError` hooks for graphics continuity — they do
+**not** count as scientific validation.
+
+## Automated gates that pass in-repo (v0.8)
+
+- Fusion / Sim(3) dense fusion unit tests
+- ENU/ECEF CRS round-trips (`geospatial::transforms`)
+- Project v1→v2 migration + geospatial workspace dirs
+- Hydro promotion / GPL refuse-bundle tests
+- Export manifest `authoritative` flags (demo false; calibrated ANUGA only)
+- GCP residual threshold constants + survey/identity residual tests
+- Preview scientific-compare tolerances (mass / depth / wet fraction)
+
+## Honest gaps toward v1.0
+
+- Full ANUGA analytical suite on real solver (lake-at-rest, dam-break, rainfall-on-slope) against published benchmarks
+- Three drone datasets with RTK/GCP survey truth
+- Site / city / regional performance benchmarks
+- Windows installer upgrade + accessibility audit pass
+- Uncertainty ensembles and large-scene 3D Tiles at production scale

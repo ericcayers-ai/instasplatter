@@ -24,4 +24,7 @@ These are **not** reconstruction sidecars. Hydro workers live under
    reproducibility, CPU/GPU tolerance, license clearance). GPL engines
    **cannot** promote into the Apache Standard installer.
 
-ANUGA + SWMM (Standard) and WebGPU preview are separate todos — not here.
+ANUGA + SWMM (Standard scientific path) and WebGPU/CPU live preview are
+implemented in `geospatial/hydro.rs` and `src/geospatial/preview/`. Demo
+fallback and preview remain explicitly **non-authoritative** until calibrated.
+
