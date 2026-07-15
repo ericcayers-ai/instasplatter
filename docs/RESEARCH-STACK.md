@@ -47,7 +47,7 @@ Video → frame gate → detect CaptureProfile
   → confidence-fuse densifiers (schema v2) — never raw concatenate
   → optional 4D / large-scene / surface adapters on separate paths
   → Difix then Fixer
-  → gsplat Max (MCMC+AbsGrad+AA+appearance+bilagrid) or Brush Max
+  → gsplat Max (MCMC **or** AbsGrad, exclusive; +AA+appearance+bilagrid) or Brush Max
   → Live PLY lerp viewport → Mesh / SPZ v4 export
 ```
 

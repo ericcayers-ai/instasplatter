@@ -10,3 +10,8 @@ graphify-out/
 release-out/
 .graphify_hook_installed
 .graphifyignore
+tools/brush-fork/src/
+
+__pycache__/
+*.pyc
+

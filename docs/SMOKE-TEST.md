@@ -1,10 +1,13 @@
-# v0.3.0 draft smoke notes (not committed)
+# v0.8.1 smoke notes
 
 Local e2e targets (outputs stay under `%LOCALAPPDATA%/InstaSplatter/jobs` — never commit):
 
 1. `DJI_20250623163523_0013_D.MP4`
 2. `20250820_212300.mp4`
 3. `VID_20220123_205403.MP4`
+
+Automated local gate: `.\tools\smoke-local.ps1`  
+Full path doc: [E2E-VERIFICATION.md](./E2E-VERIFICATION.md) · [HW-MATRIX.md](../tools/HW-MATRIX.md)
 
 ## Headless batch (agent / CI)
 
@@ -13,8 +16,7 @@ With `INSTASPLATTER_DEV=1`, write one path per line to
 launch `instasplatter.exe`. Rust `setup` enqueues the batch and starts the first
 GPU job without waiting on the WebView.
 
-Suggested smoke settings for a fast gate (write to settings.json **without a UTF-8 BOM**,
-or let the app save them; BOM used to make load fall back to Auto/High):
+Suggested smoke settings for a fast gate (write to settings.json **without a UTF-8 BOM**):
 
 ```json
 {

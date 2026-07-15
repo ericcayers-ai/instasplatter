@@ -873,6 +873,63 @@ mod tests {
     }
 
     #[test]
+    fn parse_dji_srt_sample() {
+        let dir = std::env::temp_dir().join(format!("is_srt_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("flight.SRT");
+        let mut f = fs::File::create(&p).unwrap();
+        write!(
+            f,
+            "1\n00:00:00,000 --> 00:00:00,033\n\
+             <font size=\"28\">FrameCnt: 1, DiffTime: 33ms\n\
+             2024-06-01 12:00:00.000\n\
+             [latitude: -36.848460] [longitude: 174.763332] [rel_alt: 42.1 abs_alt: 58.4] [gb_yaw: 12.5]\n\
+             </font>\n\n\
+             2\n00:00:00,033 --> 00:00:00,066\n\
+             <font size=\"28\">FrameCnt: 2\n\
+             2024-06-01 12:00:00.033\n\
+             [latitude: -36.848500] [longitude: 174.763400] [rel_alt: 42.2 abs_alt: 58.5] [gb_yaw: 13.0] RTK\n\
+             </font>\n"
+        )
+        .unwrap();
+        let pts = parse_dji_srt(&p).unwrap();
+        assert_eq!(pts.len(), 2);
+        assert!((pts[0].lat_deg + 36.84846).abs() < 1e-5);
+        assert!((pts[0].lon_deg - 174.763332).abs() < 1e-5);
+        assert!((pts[0].height_m - 58.4).abs() < 1e-3);
+        assert_eq!(pts[0].source, "dji-srt");
+        assert!(pts[1].covariance_m[0] < 0.1); // RTK tighter
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_dji_mrk_sample() {
+        let dir = std::env::temp_dir().join(format!("is_mrk_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("markers.MRK");
+        let mut f = fs::File::create(&p).unwrap();
+        writeln!(
+            f,
+            "1\t12:00:00.000\t-36.848460\t174.763332\t58.400\t0.040\t0.050\t0.080"
+        )
+        .unwrap();
+        writeln!(
+            f,
+            "2\t12:00:01.000\t-36.848500\t174.763400\t58.500\t0.041\t0.051\t0.081"
+        )
+        .unwrap();
+        let pts = parse_dji_mrk(&p).unwrap();
+        assert_eq!(pts.len(), 2);
+        assert!((pts[0].lat_deg + 36.84846).abs() < 1e-5);
+        assert!((pts[0].lon_deg - 174.763332).abs() < 1e-5);
+        assert!((pts[0].height_m - 58.4).abs() < 1e-3);
+        assert_eq!(pts[0].source, "dji-mrk");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn civil_unix_known_epoch() {
         let t = civil_to_unix(1970, 1, 1, 0, 0, 0.0).unwrap();
         assert!((t - 0.0).abs() < 1.0);

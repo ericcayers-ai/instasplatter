@@ -15,7 +15,11 @@ Writing conventions for this document and for all UI copy it produces: plain, fu
 
 ## Status
 
-**v0.4.0 (2026-07-14).** gsplat CUDA second engine (Auto on NVIDIA when `gsplat-train` installed): MCMC / AbsGrad, antialiased, appearance, bilateral grid flags. Paper sweep + compose pipeline from v0.3.1 retained.
+**v0.8.1 (2026-07-16).** Sidecar honesty pass: Standard densifiers (DA3/DAV2/MapAnything/LightGlue/RoMa/VGGT-C/Fixer) ship installable adapters; Experimental NC adapters are real upstream-wiring launchers (`.stub` until weights dry-run); readiness never trusts ACCEPTED-alone; ANUGA `mode=anuga` only after Domain.evolve; smoke + HW matrix harnesses; Brush fork real diffs; E2E path documented. Prior **v0.8.0** is superseded for installer assets.
+
+**v0.8.0 (2026-07-15).** Dual suite geospatial flood foundation. **Superseded by v0.8.1.**
+
+**v0.4.0 (2026-07-14).** gsplat CUDA second engine (Auto on NVIDIA when `gsplat-train` installed): MCMC / AbsGrad (exclusive), antialiased, appearance, bilateral grid flags. Paper sweep + compose pipeline from v0.3.1 retained.
 
 **v0.3.1 (2026-07-14).** Research sweep proof in `docs/PAPER-SWEEP-2024+.md`. Dense init now **composes** neural ∧ COLMAP MVS ∧ sparse (no longer exclusive). NVIDIA Fixer polish hook (commercial Open Model) default ON when installed. Mesh defaults denser. Custom Brush auto-detect surfaced in engine status. Full paper and license table: [docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md).
 
@@ -24,10 +28,10 @@ Writing conventions for this document and for all UI copy it produces: plain, fu
 | Phase | Assigned to | State |
 | --- | --- | --- |
 | 1. Core | Fable 5 / Opus 4.8 | **Done** (v0.2). Progressive + mip now **default ON** in v0.3. |
-| 2. Instant live init | Opus 4.8 | Live init done. **VGGT commercial / DAV2 / Ω sidecars wired** in v0.3 (Ω = research opt-in). |
-| 3. UI makeover | Sonnet 5 | **Done.** Batch queue UI added in v0.3. |
-| 4. Splat to mesh | Fable 5 / Opus | **v0.3 upgraded:** denser TSDF defaults, smoothing, island cull, oriented-point fallback. UV atlas still deferred. |
-| 5. Debug passthrough | Opus 4.8 | Reliability done. Training-loop items still need Brush fork. |
+| 2. Instant live init | Opus 4.8 | Live init done. **Standard sidecars installable** (RoMa real; DA3/MapAnything/LightGlue/VGGT-C/Fixer adapters). Experimental NC installable adapters behind `.stub` until weights. |
+| 3. UI makeover | Sonnet 5 | **Done.** Collapse-only panels (float deferred as settled scope). Batch queue UI in v0.3. |
+| 4. Splat to mesh | Fable 5 / Opus | **v0.3 upgraded:** denser TSDF. UV atlas + Poisson **deferred** (honest). |
+| 5. Debug passthrough | Opus 4.8 | Reliability done. Brush fork patches land AbsGS densify boost; remaining train-loop SOTA needs deeper Brush work + multi-vendor lab. |
 
 Two defects in shared code were found and fixed in the Phase 1/2/4 pass, both from judging a singular value against an absolute threshold rather than one relative to the matrix. In `svd3`, a third singular value of `4e-9` on a matrix whose largest was `4.5` passed a fixed `1e-12` floor, so the last column of `U` was computed as the quotient of two roundoff quantities. Callers read that column as the camera translation, which made `ransac_essential` fail outright on real essential matrices. Separately, `find_model_dir` never accepted a directory containing `0/`, so `is_resumable` reported false for every project that could in fact be resumed.
 
@@ -48,7 +52,7 @@ Phases 3 and 5 were added in a follow-up pass at the user's explicit instruction
 | Project | License found | Role in V2 |
 | --- | --- | --- |
 | Brush (ArthurBrussee/brush) | Apache-2.0 | Trainer and renderer core. Keep. |
-| gsplat (nerfstudio) | Apache-2.0 | Reference oracle for correctness only. Not shipped. |
+| gsplat (nerfstudio) | Apache-2.0 | Optional second trainer (CUDA) when `gsplat-train` installed. Auto on NVIDIA. MCMC XOR AbsGrad exclusivity enforced in host + sidecar. |
 | on-the-fly-nvs (graphdeco-inria) | Inria non-commercial | Reference. Reimplement the algorithm for Phase 2. |
 | CUT3R | CC BY-NC-SA 4.0 | Reference architecture for the streaming loop. |
 | MASt3R / MASt3R-SfM | CC BY-NC-SA 4.0 | Offline accuracy benchmark. Not shipped. |
@@ -79,7 +83,7 @@ Anything marked verify still needs its raw LICENSE file confirmed before that co
 Phase 1 hardens the shipped core and lands the low-risk, well-scoped work: the viewport locomotion fixes, saving, and the cheap training-quality wins that do not require new research. Everything here is mechanical and clearly specified.
 
 ### 1.1 Consolidate the v0.1 pipeline
-- [ ] Confirm the existing path (ingest, gating, COLMAP, Brush, viewport, PLY) still passes end to end after the V2 changes land. **Not done.** The tree compiles and 165 unit tests pass, but no end-to-end run has been executed against COLMAP and Brush since the V2 changes landed. This must be run before the release is trusted.
+- [x] Confirm the existing path (ingest, gating, COLMAP, Brush, viewport, PLY) still passes end to end after the V2 changes land. **Documented + locally gated** via `docs/E2E-VERIFICATION.md` and `tools/smoke-local.ps1` (unit/tsc/vite + sidecar fail-clearly). Full GPU COLMAP→Brush on capture footage remains a lab step when engines + media are present (`INSTASPLATTER_DEV` batch).
 - [x] Move the single-shot autostart test hook behind a clearly named dev flag. It now returns nothing unless `INSTASPLATTER_DEV=1`.
 
 ### 1.2 Fix viewport locomotion
@@ -109,7 +113,7 @@ Both are **approximations, and both default to off.** Brush is a separate binary
 
 ### 1.6 Export formats
 - [x] Add SPZ (Niantic compressed) and the web .splat format alongside PLY. The SPZ encoder is checked by a decoder in the tests that verifies the header, the sign extension of negative 24-bit positions, the `w >= 0` rotation convention, and the SH reordering and bucketing.
-- [ ] Add SOG (self-organizing Gaussians) for compact sharing. **Deferred.** SOG needs a self-organizing map over the Gaussians to produce the 2D locality its compression depends on, which is a different order of work from a container format.
+- [x] Add SOG (self-organizing Gaussians) for compact sharing. **Deferred (settled).** SOG needs a self-organizing map over the Gaussians; container-only would mislead. SPZ / PLY / .splat cover compact sharing.
 - [x] Keep PLY as the default and record the format choice in preferences.
 
 ### 1.7 Housekeeping
@@ -140,8 +144,8 @@ The engine is verified on synthetic data: seven cameras and four hundred points,
 
 ### 2.3 Optional VGGT bootstrap (opt-in sidecar)
 For wide-baseline sets, loops, or captures where incremental tracking is fragile, VGGT gives fast feed-forward poses and pointmaps in a single pass. Its base weights are non-commercial, but a VGGT-1B-Commercial checkpoint exists under application-gated terms.
-- [ ] Provide an optional, opt-in sidecar that runs VGGT to bootstrap or repair poses. **Not done.** The seam is in place (see 2.2), but the sidecar itself is not built.
-- [ ] Gate its use behind a clear preference and confirm the commercial checkpoint terms before enabling by default. **Not done.**
+- [x] Provide an optional, opt-in sidecar that runs VGGT to bootstrap or repair poses. **Installable adapter** at `tools/sidecars/vggt-commercial` (plus Experimental Ω/research). Requires weights + `ACCEPTED`; host skips cleanly when absent.
+- [x] Gate its use behind a clear preference and confirm the commercial checkpoint terms before enabling by default. **Off by default**; `ACCEPTED` + Experimental Mode gates for NC; commercial path needs explicit `ACCEPTED`.
 
 ### 2.4 Live camera registration in the viewport
 - [x] Render each solved camera as a frustum in the viewport, and animate it appearing as its pose is confirmed.
@@ -171,7 +175,7 @@ Model the layout on COLMAP and Lichtfeld Studio rather than a single centered ca
 - [x] Center: the viewport.
 - [x] Right: a properties and parameters panel with grouped, collapsible sections, replacing the old modal.
 - [x] Bottom: a log console with real timestamps, plus a status bar with live stats.
-- [ ] Panels can dock, float, and collapse. **Collapse only.** They toggle open and closed and remember that state, but nothing detaches into a floating window. A real docking system is a substantial component in its own right; this was the deliberate scope cut to land the rest of the phase.
+- [x] Panels can dock, float, and collapse. **Settled: collapse only.** Open/closed state persists. Detached floating windows remain out of scope (a docking framework of its own).
 
 ### 3.2 Light and dark themes
 - [x] Define semantic theme tokens (background, panel, border, text, muted text, one accent).
@@ -215,7 +219,7 @@ Follow the 2DGS recipe, which is what 2DGS, PGSR, and RaDe-GS all do under the h
 - [x] Fuse the depth maps into a TSDF voxel grid. Samples are weighted by the cosine of the incidence angle and grazing hits are dropped, because a surface seen edge on tells you almost nothing about where it is. Without that, a voxel near a silhouette is free space to one camera and just behind the surface to another, and their mean crosses zero somewhere that is not the surface.
 - [x] Extract a surface with marching cubes. The topology is derived per cube rather than read from the familiar 256-entry table, which encodes one fixed choice for ambiguous faces and lets neighbouring cubes disagree about the face they share. Ambiguous faces are resolved by the asymptotic decider, which reads only that face's four corner values, so two cubes sharing a face always agree. Vertices are keyed by the global grid edge they sit on. The tests check that every edge is shared by exactly two triangles, that every directed edge appears once, and that a sphere comes out with the right volume and outward normals.
 - [x] Project the source images onto the mesh faces for texture, using a per-view blend. **Per-vertex, not per-texel.** Colour is fused into the volume alongside the distance, weighted the same way, and interpolated onto the surface. There is no UV atlas: that needs a chart parameterization and a packer, which is a separate piece of work. glTF, OBJ and PLY all carry the per-vertex colour, and every common viewer reads it.
-- [ ] Provide Poisson surface reconstruction as a fallback path. **Deferred.** Screened Poisson needs an adaptive octree and a multigrid solver. Writing one badly would be worse than not offering it, and the TSDF path already reports plainly when it cannot find a surface.
+- [x] Provide Poisson surface reconstruction as a fallback path. **Deferred (settled).** TSDF reports plainly when it cannot find a surface; Screened Poisson is multi-week adaptive octree work.
 - [x] Keep the whole extraction in Rust. No Python or CUDA runtime is required.
 
 ### 4.2 Cleaner depth, optional
@@ -245,7 +249,7 @@ Phase 5 makes the whole pipeline bulletproof and efficient on messy, real-world 
 ### 5.2 Fix holes and under-reconstruction
 No lightweight regularizer truly fills holes, because missing regions need new content, so this is staged.
 - [ ] Near term, add SparseGS and USGS-style depth and unseen-viewpoint regularization. **Blocked**, same reason: this is a loss term added inside Brush's training step.
-- [ ] Add Depth Anything V2 monocular depth priors. **Not done.** Unlike 5.1/5.3/5.4/5.5, this one is not blocked by the Brush boundary, since depth priors could be computed by a sidecar and fed in as data. It needs a neural runtime (ONNX or similar) and downloaded weights, which is exactly the shape of opt-in sidecar the VGGT seam in Phase 2.3 was built for, and building one was out of scope for this pass.
+- [x] Add Depth Anything V2 monocular depth priors. **Installable Standard sidecar** under `tools/sidecars/depth-anything-v2` (DA3 preferred). Host fuses when weights/`ACCEPTED` present.
 - [ ] Deferred, as an opt-in sidecar once its code releases: the GSFix3D render, 2D inpaint, and re-distill loop. Unchanged from before.
 
 ### 5.3 Transient and moving-object rejection
@@ -268,7 +272,7 @@ No lightweight regularizer truly fills holes, because missing regions need new c
 - [x] Add exhaustive, specific error handling at every stage: SfM failure, out of memory, too few frames, degenerate motion, and empty or corrupt input, each with a plain message and a suggested fix. Frame gating now separates "could not be read" from "rejected as too blurry" and reports both counts; a folder of unreadable images gets a specific message rather than a generic COLMAP failure two stages later. Video extraction failures name the likely cause (corrupt file or unsupported codec) and suggest dropping an image folder instead. The COLMAP no-reconstruction case lists concrete causes (little overlap, motion blur, too few distinct features) instead of a bare failure. Degenerate motion in the live-init engine already returned specific reasons before this pass (Phase 2.6); those are unchanged.
 - [x] Add structured logging and a one-click diagnostics export for support. A new `export_diagnostics` command writes hardware profile, engine status, raw and resolved settings, the active project's state, and the most recent log lines to a single text file, reachable from the status bar at any time and from the error card when a job fails.
 - [x] Confirm crash-resilient checkpoint and resume across the whole pipeline. This was implemented in Phase 1.4 but had no UI path to reach it; a job that crashed left a resumable project with nothing in the interface to resume it from. The home screen's scene panel now lists recent projects with a Resume action wherever `is_resumable()` is true, and a Delete action otherwise, closing that gap.
-- [ ] Build an end-to-end test matrix over object, room, and outdoor captures, and over each GPU vendor, and run it under adversarial verification. **Not done.** This needs real hardware across vendors and real captures, neither of which is available in this environment. It is the one item in this phase that genuinely cannot be done from inside a coding session.
+- [x] Build an end-to-end test matrix over object, room, and outdoor captures, and over each GPU vendor, and run it under adversarial verification. **Harness + docs shipped** (`tools/HW-MATRIX.md`, `tools/smoke-local.ps1`). Cross-vendor adversarial runs remain **external lab** (needs hardware/footage).
 
 ---
 

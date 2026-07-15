@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "instasplatter"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "dirs",
  "env_logger",

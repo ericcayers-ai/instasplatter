@@ -165,62 +165,89 @@ fn sidecars_dir() -> PathBuf {
     app_data_dir().join("engines").join("sidecars")
 }
 
-fn launcher(name: &str) -> PathBuf {
-    let dir = sidecars_dir().join(name);
+/// Engines first, then repo `tools/sidecars` (dev / unpackaged installs).
+fn sidecar_search_dirs(name: &str) -> Vec<PathBuf> {
+    vec![
+        sidecars_dir().join(name),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tools")
+            .join("sidecars")
+            .join(name),
+    ]
+}
+
+fn launcher_in_dir(dir: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        let bat = dir.join("run.bat");
-        if bat.exists() {
-            return bat;
-        }
-        let exe = dir.join("run.exe");
-        if exe.exists() {
-            return exe;
-        }
-        let py = dir.join("run.py");
-        if py.exists() {
-            return py;
+        for name in ["run.bat", "run.exe", "run.py"] {
+            let p = dir.join(name);
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
     #[cfg(not(windows))]
     {
-        let sh = dir.join("run.sh");
-        if sh.exists() {
-            return sh;
-        }
-        let py = dir.join("run.py");
-        if py.exists() {
-            return py;
+        for name in ["run.sh", "run.py", "run"] {
+            let p = dir.join(name);
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
-    dir.join("run")
+    None
+}
+
+fn launcher(name: &str) -> PathBuf {
+    for dir in sidecar_search_dirs(name) {
+        if let Some(p) = launcher_in_dir(&dir) {
+            return p;
+        }
+    }
+    sidecars_dir().join(name).join("run")
 }
 
 /// Template stubs ship a `.stub` marker so we never report them as "ready".
 fn is_stub_sidecar(name: &str) -> bool {
-    sidecars_dir().join(name).join(".stub").exists()
+    sidecar_search_dirs(name)
+        .iter()
+        .any(|d| d.join(".stub").exists())
 }
 
 fn launcher_ready(name: &str) -> bool {
     launcher(name).exists() && !is_stub_sidecar(name)
 }
 
+/// True when the user dropped weights / ACCEPTED / an upstream checkout.
+fn install_marker_ready(name: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "ACCEPTED",
+        "weights.onnx",
+        "weights.pt",
+        "weights.pth",
+        "checkpoint.pt",
+        "checkpoint.pth",
+        "model.pt",
+        "model.onnx",
+        "upstream",
+        "repo",
+    ];
+    sidecar_search_dirs(name).iter().any(|d| MARKERS.iter().any(|m| d.join(m).exists()))
+}
+
+fn neural_ready(name: &str) -> bool {
+    launcher_ready(name) && install_marker_ready(name)
+}
+
+/// Ready = real launcher present AND not `.stub`.
+/// Weight-gated Standard densifiers also require ACCEPTED/weights/upstream.
+/// Never treat ACCEPTED alone (without a launcher) as ready.
 pub fn status() -> SidecarStatus {
-    let dav2 = launcher_ready("depth-anything-v2")
-        || sidecars_dir().join("depth-anything-v2").join("weights.onnx").exists();
-    let da3 = launcher_ready("depth-anything-3")
-        || sidecars_dir().join("depth-anything-3").join("weights.onnx").exists()
-        || sidecars_dir().join("depth-anything-3").join("ACCEPTED").exists();
-    let vggt_c = sidecars_dir()
-        .join("vggt-commercial")
-        .join("ACCEPTED")
-        .exists()
-        && launcher_ready("vggt-commercial");
-    let mapanything = launcher_ready("mapanything")
-        || sidecars_dir().join("mapanything").join("ACCEPTED").exists();
+    let vggt_c = neural_ready("vggt-commercial");
     SidecarStatus {
-        depth_anything_v2: dav2,
-        depth_anything_3: da3,
+        depth_anything_v2: neural_ready("depth-anything-v2"),
+        depth_anything_3: neural_ready("depth-anything-3"),
         vggt_commercial: vggt_c,
         vggt_omega: launcher_ready("vggt-omega"),
         vggt_research: launcher_ready("vggt-research"),
@@ -242,9 +269,10 @@ pub fn status() -> SidecarStatus {
         rade_gs: launcher_ready("rade-gs"),
         sugar: launcher_ready("sugar"),
         milo: launcher_ready("milo"),
-        mapanything,
+        mapanything: neural_ready("mapanything"),
+        // RoMa fails cleanly at runtime if the pip package is absent.
         roma_v2: launcher_ready("roma-v2"),
-        fixer: launcher_ready("fixer"),
+        fixer: neural_ready("fixer"),
         difix: launcher_ready("difix"),
     }
 }
@@ -670,8 +698,7 @@ pub async fn maybe_refine_poses_with_colmap(
 }
 
 fn lightglue_ready() -> bool {
-    launcher_ready("lightglue")
-        || sidecars_dir().join("lightglue").join("ACCEPTED").exists()
+    neural_ready("lightglue")
 }
 
 /// Public probe for COLMAP matcher routing.

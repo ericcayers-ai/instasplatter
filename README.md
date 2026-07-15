@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.8.0-green)
+![Status](https://img.shields.io/badge/status-v0.8.1-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -17,7 +17,7 @@
 
 ---
 
-> **v0.8.0** ships the **Reconstruction** and **Geospatial** suites side by side. Reconstruction keeps **Standard** (commercially redistributable) vs **Experimental** (NC ack) routing with scored pose fusion, sidecar schema v2, and SPZ v4. Geospatial adds MapLibre viewport, drone georegistration (ENU/ECEF), dual flood engines (ANUGA/SWMM scientific + WebGPU/CPU live preview), offline exports with explicit authority flags, and experimental hydro adapters behind promotion gates. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.8.1** ships the **Reconstruction** and **Geospatial** suites side by side. Reconstruction keeps **Standard** (commercially redistributable) vs **Experimental** (NC ack) routing with scored pose fusion, sidecar schema v2, and SPZ v4. Standard densifiers (RoMa, DA3/DAV2, MapAnything, LightGlue, VGGT-Commercial, Fixer) are **installable adapters** that fail clearly without weights — not pretend-ready stubs. Geospatial adds MapLibre viewport, drone georegistration (ENU/ECEF), dual flood engines (ANUGA Domain.evolve when DEM/mesh allow, else labelled demo/scaffold — never authoritative until evolve + calibration), offline exports with explicit authority flags, and experimental hydro adapters behind promotion gates. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 
@@ -44,7 +44,7 @@ Applies inside both suites where engines are gated:
 |---|---|---|
 | Reconstruction cameras | Capture-aware commercial chain (VGGT-C, MapAnything, COLMAP) | Profile-matched NC research hypotheses, scored then fused |
 | Dense / polish | RoMa v2 ∧ DA3 ∧ MVS; Fixer | Confidence-fuse densifiers; Difix then Fixer |
-| Flood | ANUGA (+ SWMM network) scientific; labelled demo if missing | TRITON / Wflow / GeoClaw external; GPL engines plugin-only |
+| Flood | ANUGA Domain.evolve when installed+DEM (+ SWMM network); labelled demo/scaffold otherwise | TRITON / Wflow / GeoClaw external; GPL engines plugin-only |
 | Preview | WebGPU/CPU soft solver labelled **non-authoritative** | Same preview path; never promoted without gates |
 | License | Commercial-safe defaults | NC research after one-time ack; GPL never bundled |
 

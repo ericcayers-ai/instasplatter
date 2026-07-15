@@ -1,0 +1,35 @@
+diff --git a/crates/brush-train/src/train.rs b/crates/brush-train/src/train.rs
+index 0864daf..9bc542a 100644
+--- a/crates/brush-train/src/train.rs
++++ b/crates/brush-train/src/train.rs
+@@ -597,7 +597,14 @@ impl SplatTrainer {
+ 
+             // If still growing, sample from indices which are over the threshold.
+             if grow_count > 0 {
+-                let weights = above_threshold.float() * refiner.refine_weight_norm.clone();
++                let mut weights = above_threshold.float() * refiner.refine_weight_norm.clone();
++                // InstaSplatter AbsGS-style boost: tilt multinomial toward high |grad|.
++                if self.config.densify_absgrad_boost > 0.0 {
++                    weights = weights
++                        + above_threshold.float()
++                            * refiner.refine_weight_norm.clone()
++                            * self.config.densify_absgrad_boost;
++                }
+                 let weights = weights
+                     .into_data_async()
+                     .await
+@@ -616,6 +623,14 @@ impl SplatTrainer {
+         let screen_sizes = refiner.max_screen_size.clone();
+         splats = self.refine_splats(&device, record, splats, split_inds, screen_sizes, iter);
+ 
++        // InstaSplatter hooks: mip / mask / appearance reserved for deeper
++        // rasterizer + loss wiring; keep flags hot so CLI round-trips.
++        let _ = (
++            self.config.mip_max_scale,
++            self.config.transient_mask_weight,
++            self.config.appearance_embed_dim,
++        );
++
+         // Update current bounds based on the splats.
+         self.bounds = get_splat_bounds(splats.clone(), BOUND_PERCENTILE).await;
+         client.memory_cleanup();

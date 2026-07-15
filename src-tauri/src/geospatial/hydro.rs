@@ -793,7 +793,7 @@ fn invoke_anuga_sidecar(
     let reader = BufReader::new(stdout);
     let mut result_paths = Vec::new();
     let mut mass_balance = 0.0_f64;
-    let mut mode = "anuga".to_string();
+    let mut mode = "scaffold".to_string();
     let mut engine_version: Option<String> = None;
     let mut label: Option<String> = None;
     let mut done = false;
@@ -831,7 +831,7 @@ fn invoke_anuga_sidecar(
                 let m = msg
                     .get("mode")
                     .and_then(|m| m.as_str())
-                    .unwrap_or("anuga")
+                    .unwrap_or("scaffold")
                     .to_string();
                 mode = m.clone();
                 update_active(run_id, |s| {

@@ -1,0 +1,28 @@
+diff --git a/crates/brush-train/src/config.rs b/crates/brush-train/src/config.rs
+index 83fefb3..f7129b3 100644
+--- a/crates/brush-train/src/config.rs
++++ b/crates/brush-train/src/config.rs
+@@ -129,6 +129,23 @@ pub struct TrainConfig {
+     /// estimated from the camera spacing (with a 1m minimum).
+     #[arg(long, help_heading = "Training options")]
+     pub random_init_scene_scale: Option<f32>,
++
++    /// InstaSplatter: boost densify sampling by absolute view-space gradient
++    /// (AbsGS / budgeted densify ideas). 0 = upstream default weights only.
++    #[arg(long, help_heading = "InstaSplatter options", default_value = "0.0")]
++    pub densify_absgrad_boost: f32,
++
++    /// InstaSplatter: soft max scale clamp each refine (mip-style). 0 disables.
++    #[arg(long, help_heading = "InstaSplatter options", default_value = "0.0")]
++    pub mip_max_scale: f32,
++
++    /// InstaSplatter: reserved weight for transient mask loss (needs mask maps).
++    #[arg(long, help_heading = "InstaSplatter options", default_value = "0.0")]
++    pub transient_mask_weight: f32,
++
++    /// InstaSplatter: reserved appearance embedding dim (0 = off).
++    #[arg(long, help_heading = "InstaSplatter options", default_value = "0")]
++    pub appearance_embed_dim: u32,
+ }
+ 
+ impl Default for TrainConfig {
