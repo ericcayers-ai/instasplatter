@@ -119,7 +119,8 @@ See also **[ROADMAP-V2.md](ROADMAP-V2.md)** and **[ROADMAP.md](ROADMAP.md)**.
 
 ## Contributing
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for build setup, testing, and PR expectations. By participating, you agree to follow the **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for suite overview, build setup, testing (`cargo test` / `tsc`), and PR expectations. By participating, you agree to follow the **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**.
+Report bugs and features with the [GitHub issue forms](https://github.com/ericcayers-ai/instasplatter/issues/new/choose).
 
 ## License
 

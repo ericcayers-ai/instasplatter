@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please check [ROADMAP-V2.md](https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP-V2.md) and [ROADMAP.md](https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP.md) before requesting large features.
+        Please check [ROADMAP-V2.md](https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP-V2.md), [ROADMAP.md](https://github.com/ericcayers-ai/instasplatter/blob/main/ROADMAP.md), and [docs/RESEARCH-STACK.md](https://github.com/ericcayers-ai/instasplatter/blob/main/docs/RESEARCH-STACK.md) before requesting large features.
   - type: textarea
     id: problem
     attributes:
@@ -29,15 +29,28 @@ body:
     validations:
       required: false
   - type: dropdown
+    id: suite
+    attributes:
+      label: Suite
+      options:
+        - Reconstruction
+        - Geospatial
+        - Both suites / shared shell
+        - Unsure
+    validations:
+      required: true
+  - type: dropdown
     id: area
     attributes:
       label: Area
       options:
         - UI / UX
         - Reconstruction quality (SfM / dense init / training)
+        - Geospatial (georeg / MapLibre / layers)
+        - Flood (ANUGA / SWMM / preview / exports)
         - Performance / hardware presets
         - Export / formats
-        - Engines / sidecars
+        - Engines / sidecars / Standard–Experimental gates
         - Docs / packaging
         - Other
     validations:
@@ -47,7 +60,7 @@ body:
     attributes:
       label: License / dependency notes
       options:
-        - label: Any new dependency or paper recipe I have in mind is Apache/MIT/BSD-friendly (or I am asking as research-only)
+        - label: Any new dependency or paper recipe I have in mind is Apache/MIT/BSD-friendly (or I am asking as research-only / Experimental)
           required: false
         - label: I searched existing issues and the roadmap for overlap
           required: true
