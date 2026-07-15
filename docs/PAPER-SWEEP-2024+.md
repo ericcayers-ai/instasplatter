@@ -46,7 +46,7 @@ Columns: **Status** ∈ {integrated, wired-default-ON, opt-in, deferred, rejecte
 | 6 | VGGT-1B-Commercial | Jul 2025 | HF `facebook/VGGT-1B-Commercial` | SfM/init | Meta AUP | wired-default-ON | **Standard primary poses** + densify when `ACCEPTED` | `try_neural_poses`, `vggt_commercial` |
 | 7 | VGGT-Ω | CVPR 2026 Oral | [vggt-omega](https://github.com/facebookresearch/vggt-omega) arXiv:2605.15195 | SfM/init | CC BY-NC-4.0 | opt-in | **Experimental** preferred pose chain head | `vggt_omega`, `experimental_mode` |
 | 8 | MASt3R / DUSt3R | 2024 | naver dust3r/mast3r | SfM/init | CC BY-NC-SA | opt-in | **Experimental** pose + dense merge (not Standard) | `mast3r`, `dust3r`, `solver.rs` |
-| 9 | π³ / Pi3 | 2025 | [yyfz/Pi3](https://github.com/yyfz/Pi3) | SfM/init | CC BY-NC weights | rejected | Same | sidecars header comment |
+| 9 | π³ / Pi3 / Pi3X | 2025 | [yyfz/Pi3](https://github.com/yyfz/Pi3) | SfM/init | CC BY-NC weights | opt-in | **Experimental** static unordered stub `pi3x` | `pi3x`, `experimental.rs` |
 | 10 | GlueMap / feed-forward SfM glue | 2025–26 | [colmap/gluemap](https://github.com/colmap/gluemap) | SfM/init | mixed | deferred | Would wrap Pi3/VGGT; NC backbones | docs only |
 | 11 | InstantSplat | 2024 | InstantSplat repos | SfM/init | often NC/GS | deferred | Pose-free idea → VGGT sidecar instead | ROADMAP Phase 3 |
 | 12 | AnySplat | 2025 | feed-forward GS | densify/train | verify | deferred | Out of scope (feed-forward NVS product) | — |
@@ -83,7 +83,7 @@ Columns: **Status** ∈ {integrated, wired-default-ON, opt-in, deferred, rejecte
 | 40 | Live PLY lerp viewport | our | — | post-process / UX | — | integrated | Web worker lerp | `src/splat/worker.ts` `lerpCloud` |
 | 41 | SparseSplat / LGTM / VG²GT | 2025–26 | arXiv feed-forward | densify/train | research | deferred | Feed-forward product path | awesome list 2026 |
 | 42 | Dense-SfM / Fast3R | 2025 | various | SfM/init | verify | deferred | Classical+COLMAP sufficient for now | — |
-| 43 | CityGaussian / FlashSplat | 2024 | — | wrong task / NC | NC | rejected | LOD / segmentation | ROADMAP-V2 |
+| 43 | CityGaussian / Urban-GS / Horizon | 2024+ | — | large scene / NC | NC | opt-in | **Experimental** partition/LOD stubs | `city-gaussian`, `urban-gs`, `horizon-gs` |
 | 44 | Frame blur gate | our | — | robustness | — | integrated | Video ingest | `ingest.rs`, `blur_reject_fraction` |
 | 45 | Batch queue | our | — | UX | — | integrated | Serialize GPU jobs | queue modules / UI |
 
@@ -144,15 +144,17 @@ Video → frame gate
 **Experimental (after license ack):**
 
 ```
-Video → frame gate
-  → Ω → MASt3R → DUSt3R → VGGT-C → COLMAP
-  → Merge ALL densifiers (incl. RoMa precise)
+Video → frame gate → CaptureProfile
+  → profile-matched research hypotheses (Ω/MASt3R/DUSt3R/Pi3X | StreamVGGT/SLAM | MonST3R…)
+  → score + canonical COLMAP/ENU + validation gates
+  → confidence-fuse densify (schema v2) — never blind concatenate
+  → optional separate 4D / large-scene / surface adapters
   → Difix → Fixer
   → gsplat Max (all strategies) or Brush Max
   → Live PLY lerp → Mesh
 ```
 
-Standard AND features default ON where license allows (`experimental_mode` stays OFF).
+See `pipeline/experimental.rs` for the routing table; hydro adapters in `geospatial/hydro.rs`.
 
 ---
 

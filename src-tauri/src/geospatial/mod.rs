@@ -12,6 +12,7 @@ pub mod dem;
 pub mod events;
 pub mod exports;
 pub mod hydro;
+pub mod hydro_adapters;
 pub mod preview;
 pub mod registration;
 pub mod transforms;

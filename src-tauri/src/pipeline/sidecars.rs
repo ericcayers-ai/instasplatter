@@ -2,8 +2,10 @@
 //!
 //! Dual-mode policy:
 //! - **Standard**: VGGT-Commercial / DA3 / MapAnything / RoMa v2 / Fixer.
-//! - **Experimental** (license ack): + Ω / MASt3R / DUSt3R / Difix; evaluate
-//!   multiple densifiers then confidence-fuse (never blind concatenate).
+//! - **Experimental** (license ack): capture-profile research adapters
+//!   (Ω/MASt3R/DUSt3R/Pi3X, StreamVGGT/SLAM, MonST3R/Easi3R 4D, CityGaussian
+//!   family, surface/mesh) + Difix; evaluate then confidence-fuse (never blind
+//!   concatenate). Surface/4D adapters stay on separate product paths.
 //!
 //! Sidecar schema v2 adds frame/CRS, confidence, provenance, and metrics.
 //!
@@ -19,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SidecarStatus {
     /// Legacy DAV2 (kept for installed engines; Standard prefers DA3).
     pub depth_anything_v2: bool,
@@ -33,6 +35,27 @@ pub struct SidecarStatus {
     pub vggt_research: bool,
     pub mast3r: bool,
     pub dust3r: bool,
+    /// Pi3X static unordered research pose.
+    pub pi3x: bool,
+    /// Long-video / streaming research adapters.
+    pub stream_vggt: bool,
+    pub vggt_long: bool,
+    pub mast3r_slam: bool,
+    pub slam3r: bool,
+    /// Dynamic / 4D adapters (separate path from static fusion).
+    pub monst3r: bool,
+    pub easi3r: bool,
+    /// Large aerial / urban partition adapters.
+    pub city_gaussian: bool,
+    pub urban_gs: bool,
+    pub horizon_gs: bool,
+    /// Surface / mesh experimental adapters.
+    pub gs_2d: bool,
+    pub gof: bool,
+    pub pgsr: bool,
+    pub rade_gs: bool,
+    pub sugar: bool,
+    pub milo: bool,
     /// MapAnything Apache pose/depth hypothesis.
     pub mapanything: bool,
     /// RoMa v2 densify (MIT densifier + user-installed DINOv3 weights).
@@ -103,11 +126,32 @@ impl SidecarArtifactV2 {
 
 fn license_for(source: &str) -> &'static str {
     match source {
-        "depth-anything-3" | "mapanything" | "roma-v2" | "colmap" | "mvs" => "Apache-2.0",
+        "depth-anything-3" | "mapanything" | "roma-v2" | "colmap" | "mvs" | "gs-2d" => {
+            "Apache-2.0"
+        }
         "depth-anything-v2" => "Apache-2.0",
         "vggt-commercial" => "commercial",
         "fixer" => "NVIDIA-OML",
-        "vggt-omega" | "mast3r" | "dust3r" | "difix" | "vggt-research" => "NC-research",
+        "vggt-omega"
+        | "mast3r"
+        | "dust3r"
+        | "difix"
+        | "vggt-research"
+        | "pi3x"
+        | "stream-vggt"
+        | "vggt-long"
+        | "mast3r-slam"
+        | "slam3r"
+        | "monst3r"
+        | "easi3r"
+        | "city-gaussian"
+        | "urban-gs"
+        | "horizon-gs"
+        | "gof"
+        | "pgsr"
+        | "rade-gs"
+        | "sugar"
+        | "milo" => "NC-research",
         _ => "unknown",
     }
 }
@@ -182,6 +226,22 @@ pub fn status() -> SidecarStatus {
         vggt_research: launcher_ready("vggt-research"),
         mast3r: launcher_ready("mast3r"),
         dust3r: launcher_ready("dust3r"),
+        pi3x: launcher_ready("pi3x"),
+        stream_vggt: launcher_ready("stream-vggt"),
+        vggt_long: launcher_ready("vggt-long"),
+        mast3r_slam: launcher_ready("mast3r-slam"),
+        slam3r: launcher_ready("slam3r"),
+        monst3r: launcher_ready("monst3r"),
+        easi3r: launcher_ready("easi3r"),
+        city_gaussian: launcher_ready("city-gaussian"),
+        urban_gs: launcher_ready("urban-gs"),
+        horizon_gs: launcher_ready("horizon-gs"),
+        gs_2d: launcher_ready("gs-2d"),
+        gof: launcher_ready("gof"),
+        pgsr: launcher_ready("pgsr"),
+        rade_gs: launcher_ready("rade-gs"),
+        sugar: launcher_ready("sugar"),
+        milo: launcher_ready("milo"),
         mapanything,
         roma_v2: launcher_ready("roma-v2"),
         fixer: launcher_ready("fixer"),
@@ -442,13 +502,26 @@ pub async fn try_neural_poses(
                 };
                 let _ = write_artifact_v2(&stage.join("artifact.v2.json"), &art);
 
-                if score.passes_gates() {
+                let gate = super::experimental::ExperimentalValidationGate::for_fusion_candidate(
+                    true, // launcher already refused NC outside Experimental
+                    score.passes_gates(),
+                    true,
+                    art.frame == "colmap/enu",
+                    !art.scale_status.is_empty(),
+                );
+                if gate.all_clear() {
                     match &best {
                         Some((b, _)) if b.composite >= score.composite => {}
                         _ => best = Some((score, dest)),
                     }
                 } else {
-                    ctx.log(format!("[{name}] rejected by validation gates."));
+                    ctx.log(format!(
+                        "[{name}] rejected by validation gates (canonical={}/hyp={}/v2={}/exp={}).",
+                        gate.canonical_frame_aligned,
+                        gate.hypothesis_gates_passed,
+                        gate.schema_v2_artifact,
+                        gate.license_acknowledged
+                    ));
                 }
             }
             Ok(None) => continue,
@@ -618,9 +691,38 @@ pub async fn try_neural_points(
     }
 
     let st = status();
-    let order = solver::densify_neural_order(&ctx.settings, &st);
+    let profile = solver::detect_capture_profile(
+        images_dir,
+        &ctx.workspace,
+        ctx.settings.experimental_mode,
+    );
+    let order = solver::densify_neural_order(&ctx.settings, &st, profile);
     if order.is_empty() {
         return Ok(None);
+    }
+
+    // Dynamic 4D adapters never enter static fusion — log availability only.
+    if matches!(profile, solver::CaptureProfile::DynamicScene)
+        && ctx.settings.experimental_mode
+    {
+        let four = super::experimental::experimental_four_d_candidates(&st);
+        if !four.is_empty() {
+            ctx.log(format!(
+                "4D adapters available (separate path, not fused into init.ply): {}",
+                four.join(", ")
+            ));
+        }
+    }
+    if matches!(profile, solver::CaptureProfile::LargeScene)
+        && ctx.settings.experimental_mode
+    {
+        let large = super::experimental::experimental_large_scene_candidates(&st);
+        if !large.is_empty() {
+            ctx.log(format!(
+                "Large-scene partition adapters (engine-specific outputs): {}",
+                large.join(", ")
+            ));
+        }
     }
 
     let merge_all = ctx.settings.experimental_mode;
@@ -637,13 +739,26 @@ pub async fn try_neural_points(
                         "depth-anything-v2" => 0.65,
                         "mapanything" => 0.70,
                         "vggt-commercial" => 0.74,
-                        "vggt-omega" | "vggt-research" => 0.68,
+                        "vggt-omega" | "vggt-research" | "pi3x" => 0.68,
+                        "stream-vggt" | "vggt-long" | "mast3r-slam" | "slam3r" => 0.66,
                         "mast3r" | "dust3r" => 0.62,
                         _ => 0.60,
                     };
                     let art = SidecarArtifactV2::new_local(name, conf, px.len());
                     let meta = ply_path.with_extension("v2.json");
-                    let _ = write_artifact_v2(&meta, &art);
+                    let gate = super::experimental::ExperimentalValidationGate::for_fusion_candidate(
+                        true, // launcher already refused NC outside Experimental
+                        true,
+                        write_artifact_v2(&meta, &art).is_ok(),
+                        art.frame == "colmap/enu",
+                        !art.scale_status.is_empty(),
+                    );
+                    if !gate.all_clear() {
+                        ctx.log(format!(
+                            "[{name}] densify rejected by fusion validation gates."
+                        ));
+                        continue;
+                    }
                     if merge_all {
                         clouds.push(
                             px.iter()

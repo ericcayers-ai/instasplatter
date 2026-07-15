@@ -1,13 +1,16 @@
 //! Pipeline orchestrator: ingestion, frame gating, camera solving, live
 //! Gaussian training, export. Progress is streamed to the UI as it happens.
 //!
-//! Dual-mode (v0.5):
-//! - **Standard**: VGGT-Commercial primary poses → COLMAP BA/fallback; RoMa∧DAV2∧MVS.
-//! - **Experimental**: Ω→MASt3R→DUSt3R→VGGT-C→COLMAP; merge-all densify; Difix+Fixer.
+//! Dual-mode (v0.5+):
+//! - **Standard**: VGGT-Commercial primary poses → COLMAP BA/fallback; RoMa∧DA3∧MVS.
+//! - **Experimental**: capture-profile research routing (Ω/MASt3R/DUSt3R/Pi3X,
+//!   StreamVGGT/SLAM, MonST3R 4D, CityGaussian family, surface adapters) →
+//!   confidence-fuse densify; Difix+Fixer.
 
 pub mod brush;
 pub mod colmap;
 pub mod dense;
+pub mod experimental;
 pub mod gating;
 pub mod gsplat;
 pub mod ingest;

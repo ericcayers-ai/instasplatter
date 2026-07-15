@@ -1,11 +1,13 @@
 //! Capture-aware camera / densify / polish policy (Standard vs Experimental).
 //!
 //! Standard stays commercially redistributable. Experimental requires an
-//! explicit license ack and unlocks NC research sidecars (Ω, MASt3R, DUSt3R, Difix).
+//! explicit license ack and unlocks NC research sidecars via capture-profile
+//! routing (see `experimental.rs`) — never a blind merge of all engines.
 //!
 //! Pose routing scores hypotheses instead of fail-down-only lists. Accepted
 //! results always land in one canonical COLMAP/ENU frame before refinement.
 
+use super::experimental;
 use super::sidecars::SidecarStatus;
 use crate::colmap::Model;
 use crate::settings::ResolvedSettings;
@@ -17,10 +19,13 @@ use std::path::Path;
 #[serde(rename_all = "camelCase")]
 pub enum CaptureProfile {
     OrderedVideo,
+    /// Long sequential capture — streaming / SLAM research adapters.
+    LongVideo,
     UnorderedPhotos,
     GpsRtkDrone,
     FisheyeOrRollingShutter,
     DynamicScene,
+    /// Large aerial / urban — partition/LOD adapters + neural pose repairs.
     LargeScene,
 }
 
@@ -35,6 +40,8 @@ pub fn detect_capture_profile(
     let has_gps = has_pose_priors(workspace) || has_exif_gps_hint(images_dir);
     let sequential_names = looks_sequential(images_dir);
     let large = n >= 400;
+    let aerial_hint = workspace.join("capture_hints").join("aerial").exists()
+        || workspace.join("capture_hints").join("urban").exists();
 
     if has_gps {
         return CaptureProfile::GpsRtkDrone;
@@ -46,6 +53,13 @@ pub fn detect_capture_profile(
     }
     if experimental && workspace.join("capture_hints").join("dynamic").exists() {
         return CaptureProfile::DynamicScene;
+    }
+    // Large aerial/urban before generic "lots of frames".
+    if large && (has_gps || aerial_hint || !sequential_names) {
+        return CaptureProfile::LargeScene;
+    }
+    if sequential_names && n >= 120 {
+        return CaptureProfile::LongVideo;
     }
     if large {
         return CaptureProfile::LargeScene;
@@ -142,6 +156,13 @@ pub fn camera_chip(solver: &str) -> String {
         "vggt-omega" => "Cameras: VGGT-Ω".into(),
         "mast3r" => "Cameras: MASt3R-SfM".into(),
         "dust3r" => "Cameras: DUSt3R".into(),
+        "pi3x" => "Cameras: Pi3X".into(),
+        "stream-vggt" => "Cameras: StreamVGGT".into(),
+        "vggt-long" => "Cameras: VGGT-Long".into(),
+        "mast3r-slam" => "Cameras: MASt3R-SLAM".into(),
+        "slam3r" => "Cameras: SLAM3R".into(),
+        "monst3r" => "Cameras: MonST3R".into(),
+        "easi3r" => "Cameras: Easi3R".into(),
         "vggt-commercial" => "Cameras: VGGT-Commercial".into(),
         "mapanything" => "Cameras: MapAnything".into(),
         "colmap" => "Cameras: COLMAP".into(),
@@ -256,7 +277,7 @@ pub fn standard_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> 
                 v.push("mapanything");
             }
         }
-        CaptureProfile::OrderedVideo => {
+        CaptureProfile::OrderedVideo | CaptureProfile::LongVideo => {
             if st.vggt_commercial {
                 v.push("vggt-commercial");
             }
@@ -285,73 +306,9 @@ pub fn standard_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> 
     v
 }
 
-/// Ordered pose solvers for Experimental Mode (evaluate relevant research engines).
+/// Ordered pose solvers for Experimental Mode (capture-aware; not blind merge).
 pub fn experimental_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> Vec<&'static str> {
-    let mut v = Vec::new();
-    match profile {
-        CaptureProfile::OrderedVideo | CaptureProfile::LargeScene => {
-            if st.vggt_omega {
-                v.push("vggt-omega");
-            }
-            if st.mast3r {
-                v.push("mast3r");
-            }
-            if st.dust3r {
-                v.push("dust3r");
-            }
-            if st.vggt_commercial {
-                v.push("vggt-commercial");
-            }
-            if st.mapanything {
-                v.push("mapanything");
-            }
-        }
-        CaptureProfile::DynamicScene => {
-            if st.vggt_omega {
-                v.push("vggt-omega");
-            }
-            if st.mast3r {
-                v.push("mast3r");
-            }
-            if st.dust3r {
-                v.push("dust3r");
-            }
-        }
-        CaptureProfile::GpsRtkDrone => {
-            v.push("colmap-pose-prior");
-            if st.vggt_omega {
-                v.push("vggt-omega");
-            }
-            if st.vggt_commercial {
-                v.push("vggt-commercial");
-            }
-            if st.mapanything {
-                v.push("mapanything");
-            }
-            if st.mast3r {
-                v.push("mast3r");
-            }
-        }
-        CaptureProfile::UnorderedPhotos | CaptureProfile::FisheyeOrRollingShutter => {
-            if st.vggt_omega {
-                v.push("vggt-omega");
-            }
-            if st.mast3r {
-                v.push("mast3r");
-            }
-            if st.dust3r {
-                v.push("dust3r");
-            }
-            if st.vggt_commercial {
-                v.push("vggt-commercial");
-            }
-            if st.mapanything {
-                v.push("mapanything");
-            }
-        }
-    }
-    v.dedup();
-    v
+    experimental::experimental_pose_for_profile(profile, st)
 }
 
 /// Back-compat wrappers used by older call sites / tests.
@@ -367,52 +324,52 @@ pub fn experimental_pose_chain(st: &SidecarStatus) -> Vec<&'static str> {
 pub fn is_research_sidecar(name: &str) -> bool {
     matches!(
         name,
-        "vggt-omega" | "vggt-research" | "mast3r" | "dust3r" | "difix"
+        "vggt-omega"
+            | "vggt-research"
+            | "mast3r"
+            | "dust3r"
+            | "difix"
+            | "pi3x"
+            | "stream-vggt"
+            | "vggt-long"
+            | "mast3r-slam"
+            | "slam3r"
+            | "monst3r"
+            | "easi3r"
+            | "city-gaussian"
+            | "urban-gs"
+            | "horizon-gs"
+            | "gof"
+            | "pgsr"
+            | "rade-gs"
+            | "sugar"
+            | "milo"
     )
 }
 
 /// Select densify launcher order. Standard prefers commercial/Apache sources.
-/// Experimental evaluates research engines too — fusion (not concatenation) is downstream.
-pub fn densify_neural_order(settings: &ResolvedSettings, st: &SidecarStatus) -> Vec<&'static str> {
-    let mut v = Vec::new();
+/// Experimental evaluates research engines for the capture profile — fusion
+/// (not concatenation) is downstream; 4D / surface adapters stay separate.
+pub fn densify_neural_order(
+    settings: &ResolvedSettings,
+    st: &SidecarStatus,
+    profile: CaptureProfile,
+) -> Vec<&'static str> {
     if settings.experimental_mode {
-        if st.vggt_omega {
-            v.push("vggt-omega");
-        }
-        if st.mast3r {
-            v.push("mast3r");
-        }
-        if st.dust3r {
-            v.push("dust3r");
-        }
-        if st.vggt_commercial {
-            v.push("vggt-commercial");
-        }
-        if st.mapanything {
-            v.push("mapanything");
-        }
-        if st.depth_anything_3 {
-            v.push("depth-anything-3");
-        } else if st.depth_anything_v2 {
-            // Legacy DAV2 only when DA3 is absent.
-            v.push("depth-anything-v2");
-        }
-        if st.vggt_research {
-            v.push("vggt-research");
-        }
-    } else {
-        // Standard: commercial + Apache densifiers only (RoMa is separate).
-        if st.vggt_commercial {
-            v.push("vggt-commercial");
-        }
-        if st.mapanything {
-            v.push("mapanything");
-        }
-        if st.depth_anything_3 {
-            v.push("depth-anything-3");
-        } else if st.depth_anything_v2 {
-            v.push("depth-anything-v2");
-        }
+        return experimental::experimental_densify_for_profile(profile, st);
+    }
+    let mut v = Vec::new();
+    // Standard: commercial + Apache densifiers only (RoMa is separate).
+    if st.vggt_commercial {
+        v.push("vggt-commercial");
+    }
+    if st.mapanything {
+        v.push("mapanything");
+    }
+    if st.depth_anything_3 {
+        v.push("depth-anything-3");
+    } else if st.depth_anything_v2 {
+        v.push("depth-anything-v2");
     }
     v
 }
@@ -462,19 +419,7 @@ mod tests {
     }
 
     fn empty_st() -> SidecarStatus {
-        SidecarStatus {
-            depth_anything_v2: false,
-            depth_anything_3: false,
-            vggt_commercial: false,
-            vggt_omega: false,
-            vggt_research: false,
-            mast3r: false,
-            dust3r: false,
-            mapanything: false,
-            roma_v2: false,
-            fixer: false,
-            difix: false,
-        }
+        SidecarStatus::default()
     }
 
     #[test]
@@ -483,6 +428,7 @@ mod tests {
         st.vggt_omega = true;
         st.mast3r = true;
         st.dust3r = true;
+        st.pi3x = true;
         st.vggt_commercial = true;
         assert_eq!(
             experimental_pose_chain(&st),
@@ -490,8 +436,47 @@ mod tests {
                 "vggt-omega",
                 "mast3r",
                 "dust3r",
+                "pi3x",
                 "vggt-commercial"
             ]
+        );
+    }
+
+    #[test]
+    fn experimental_long_video_profile_routing() {
+        let mut st = empty_st();
+        st.stream_vggt = true;
+        st.vggt_long = true;
+        st.mast3r_slam = true;
+        st.slam3r = true;
+        st.vggt_omega = true;
+        assert_eq!(
+            experimental_pose_candidates(CaptureProfile::LongVideo, &st),
+            vec![
+                "stream-vggt",
+                "vggt-long",
+                "mast3r-slam",
+                "slam3r",
+                "vggt-omega"
+            ]
+        );
+    }
+
+    #[test]
+    fn experimental_dynamic_does_not_pull_static_pi3x() {
+        let mut st = empty_st();
+        st.vggt_omega = true;
+        st.monst3r = true;
+        st.easi3r = true;
+        st.pi3x = true;
+        st.dust3r = true;
+        let pose = experimental_pose_candidates(CaptureProfile::DynamicScene, &st);
+        assert!(!pose.contains(&"pi3x"));
+        assert!(!pose.contains(&"dust3r"));
+        assert!(pose.contains(&"monst3r"));
+        assert_eq!(
+            experimental::experimental_four_d_candidates(&st),
+            vec!["monst3r", "easi3r"]
         );
     }
 
@@ -522,10 +507,15 @@ mod tests {
     fn research_gate_idents() {
         assert!(is_research_sidecar("vggt-omega"));
         assert!(is_research_sidecar("mast3r"));
+        assert!(is_research_sidecar("pi3x"));
+        assert!(is_research_sidecar("stream-vggt"));
+        assert!(is_research_sidecar("monst3r"));
+        assert!(is_research_sidecar("city-gaussian"));
         assert!(!is_research_sidecar("vggt-commercial"));
         assert!(!is_research_sidecar("roma-v2"));
         assert!(!is_research_sidecar("depth-anything-3"));
         assert!(!is_research_sidecar("mapanything"));
+        assert!(!is_research_sidecar("gs-2d")); // Apache surface adapter
     }
 
     #[test]
@@ -613,11 +603,12 @@ mod tests {
         st.vggt_omega = true;
         st.mast3r = true;
         st.dust3r = true;
+        st.pi3x = true;
         st.vggt_commercial = true;
         st.depth_anything_3 = true;
         st.mapanything = true;
         assert_eq!(
-            densify_neural_order(&r, &st),
+            densify_neural_order(&r, &st, CaptureProfile::UnorderedPhotos),
             vec!["vggt-commercial", "mapanything", "depth-anything-3"]
         );
         assert!(!r.allow_research_sidecars);
@@ -630,6 +621,20 @@ mod tests {
         let mut st = empty_st();
         st.depth_anything_3 = true;
         st.depth_anything_v2 = true;
-        assert_eq!(densify_neural_order(&r, &st), vec!["depth-anything-3"]);
+        assert_eq!(
+            densify_neural_order(&r, &st, CaptureProfile::UnorderedPhotos),
+            vec!["depth-anything-3"]
+        );
+    }
+
+    #[test]
+    fn standard_mode_ignores_long_video_research_chain() {
+        let mut st = empty_st();
+        st.stream_vggt = true;
+        st.vggt_commercial = true;
+        assert_eq!(
+            standard_pose_candidates(CaptureProfile::LongVideo, &st),
+            vec!["vggt-commercial"]
+        );
     }
 }
