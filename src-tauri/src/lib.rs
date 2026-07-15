@@ -397,6 +397,58 @@ fn get_geo_reference(workspace: String) -> Result<Option<project::GeoReference>,
     Ok(proj.geo_reference)
 }
 
+/// Start an ANUGA scientific flood (CPU lane). Falls back to labelled demo when
+/// the engine is missing and `allow_demo` is true (default).
+#[tauri::command]
+fn start_scientific_flood(
+    app: tauri::AppHandle,
+    workspace: String,
+    scenario_id: String,
+    allow_demo: Option<bool>,
+    dem_path: Option<String>,
+    enable_swmm: Option<bool>,
+) -> Result<geospatial::hydro::FloodRunStatus, String> {
+    let spec = geospatial::hydro::HydroJobSpec {
+        workspace,
+        scenario_id,
+        engine: Some(geospatial::hydro::HydroEngine::Anuga),
+        preview: false,
+        allow_demo: allow_demo.unwrap_or(true),
+        dem_path,
+        extent: None,
+        ensemble: None,
+        enable_swmm: enable_swmm.unwrap_or(false),
+    };
+    geospatial::hydro::start_scientific_flood(app, spec)
+}
+
+/// Cancel an in-flight scientific flood run.
+#[tauri::command]
+fn cancel_scientific_flood(run_id: String) -> Result<(), String> {
+    geospatial::hydro::cancel_run(&run_id)
+}
+
+/// List active + persisted flood run statuses (optional workspace filter).
+#[tauri::command]
+fn list_flood_run_status(workspace: Option<String>) -> Vec<geospatial::hydro::FloodRunStatus> {
+    geospatial::hydro::list_run_status(workspace.as_deref())
+}
+
+/// Whether the ANUGA sidecar launcher is discoverable (app engines or repo tools).
+#[tauri::command]
+fn get_flood_engine_status() -> serde_json::Value {
+    let anuga = geospatial::hydro::resolve_geo_sidecar("anuga");
+    let swmm = geospatial::hydro::resolve_geo_sidecar("swmm");
+    serde_json::json!({
+        "anugaLauncher": anuga.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "swmmLauncher": swmm.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "anugaReady": anuga.is_some(),
+        "swmmReady": swmm.is_some(),
+        "cpuLane": "scientific flood / ANUGA",
+        "demoAvailable": true,
+    })
+}
+
 #[tauri::command]
 fn list_queue() -> serde_json::Value {
     let q = queue::global();
