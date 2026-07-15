@@ -15,6 +15,9 @@ export interface HardwareProfile {
 
 export type PresetName = "draft" | "eco" | "balanced" | "high" | "max";
 
+/** Top-level product suite (reconstruction splat workflow vs geospatial flood suite). */
+export type Suite = "reconstruction" | "geospatial";
+
 /** A splat file format the exporter can write. */
 export type SplatFormat = "ply" | "splat" | "spz";
 
@@ -62,6 +65,8 @@ export interface Settings {
   gsplatAppearance?: boolean | null;
   gsplatBilateralGrid?: boolean | null;
   exportFormat?: string | null;
+  /** Preferred shell suite. */
+  defaultSuite?: Suite | null;
 }
 
 export interface ResolvedSettings {
@@ -104,10 +109,12 @@ export interface EngineStatus {
   brushCustom: boolean;
   ffmpeg: boolean;
   depthAnythingV2: boolean;
+  depthAnything3: boolean;
   vggtCommercial: boolean;
   vggtOmega: boolean;
   mast3r: boolean;
   dust3r: boolean;
+  mapanything: boolean;
   romaV2: boolean;
   fixer: boolean;
   difix: boolean;
@@ -167,6 +174,7 @@ export interface ProjectSummary {
   latestIter: number;
   totalSteps: number;
   resultPath: string | null;
+  suite?: Suite;
 }
 
 export interface GroundPlane {
@@ -195,11 +203,19 @@ export interface QueueItem {
   error: string | null;
   progress: number;
   detail: string;
+  suite?: Suite;
+  lane?: "gpu" | "cpu";
 }
 
 export interface QueueSnapshot {
   items: QueueItem[];
   paused: boolean;
+}
+
+export interface GeoCatalogInfo {
+  connectors: string[];
+  formats: { id: string; label: string }[];
+  exports: { id: string; label: string }[];
 }
 
 export const api = {
@@ -211,9 +227,14 @@ export const api = {
   installEngines: () => invoke<EngineStatus>("install_engines"),
   getAutostart: () => invoke<string | null>("get_autostart"),
 
+  getSuite: () => invoke<Suite>("get_suite"),
+  setSuite: (suite: Suite) => invoke<Suite>("set_suite", { suite }),
+  getGeoCatalogInfo: () => invoke<GeoCatalogInfo>("get_geo_catalog_info"),
+
   startJob: (inputPath: string) => invoke<string>("start_job", { inputPath }),
   cancelJob: (jobId: string) => invoke<void>("cancel_job", { jobId }),
-  enqueueJobs: (paths: string[]) => invoke<string[]>("enqueue_jobs", { paths }),
+  enqueueJobs: (paths: string[], suite?: Suite) =>
+    invoke<string[]>("enqueue_jobs", { paths, suite: suite ?? null }),
   listQueue: () => invoke<QueueSnapshot>("list_queue"),
   pauseQueue: (paused: boolean) => invoke<void>("pause_queue", { paused }),
   resumeQueue: () => invoke<void>("resume_queue"),

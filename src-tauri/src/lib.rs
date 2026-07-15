@@ -1,5 +1,6 @@
 mod colmap;
 mod engines;
+mod geospatial;
 mod math;
 mod mesh;
 mod pipeline;
@@ -12,7 +13,7 @@ mod splat;
 
 use pipeline::{JobCtx, JobEvent, JobHandle};
 use profiler::HardwareProfile;
-use project::{Project, ProjectSummary};
+use project::{Project, ProjectSummary, Suite};
 use settings::{ResolvedSettings, Settings};
 use splat::{export, ply, transform};
 use std::collections::HashMap;
@@ -271,15 +272,77 @@ fn enqueue_jobs(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     paths: Vec<String>,
+    suite: Option<String>,
 ) -> Result<Vec<String>, String> {
     if paths.is_empty() {
         return Err("No inputs to enqueue.".into());
     }
+    let suite = suite
+        .as_deref()
+        .and_then(Suite::parse)
+        .unwrap_or_else(|| Settings::load().default_suite());
     let q = queue::global();
-    let ids = q.enqueue(paths);
+    let ids = q.enqueue(paths, suite);
     q.try_start_next(&app, Arc::clone(&state.jobs));
     queue::emit_now(&app);
     Ok(ids)
+}
+
+/// Active product suite for the shell (reconstruction | geospatial).
+#[tauri::command]
+fn get_suite() -> String {
+    Settings::load().default_suite().as_str().to_string()
+}
+
+#[tauri::command]
+fn set_suite(suite: String) -> Result<String, String> {
+    let parsed = Suite::parse(&suite).ok_or_else(|| {
+        format!("{suite} is not a suite. Use reconstruction or geospatial.")
+    })?;
+    let mut s = Settings::load();
+    s.default_suite = Some(parsed.as_str().to_string());
+    s.save()?;
+    Ok(parsed.as_str().to_string())
+}
+
+/// Formats and data connectors advertised by the geospatial suite.
+#[tauri::command]
+fn get_geo_catalog_info() -> serde_json::Value {
+    let formats: Vec<_> = [
+        geospatial::data::GeoFormat::GeoTiff,
+        geospatial::data::GeoFormat::Cog,
+        geospatial::data::GeoFormat::GeoPackage,
+        geospatial::data::GeoFormat::GeoJson,
+        geospatial::data::GeoFormat::FlatGeobuf,
+        geospatial::data::GeoFormat::Las,
+        geospatial::data::GeoFormat::Laz,
+        geospatial::data::GeoFormat::Copc,
+        geospatial::data::GeoFormat::Zarr,
+        geospatial::data::GeoFormat::NetCdf,
+        geospatial::data::GeoFormat::PmTiles,
+    ]
+    .iter()
+    .map(|f| {
+        serde_json::json!({
+            "id": f.id(),
+            "label": f.label(),
+        })
+    })
+    .collect();
+    let exports: Vec<_> = geospatial::exports::list_export_kinds()
+        .into_iter()
+        .map(|k| {
+            serde_json::json!({
+                "id": k.id(),
+                "label": k.label(),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "connectors": geospatial::catalog::connector_names(),
+        "formats": formats,
+        "exports": exports,
+    })
 }
 
 #[tauri::command]
@@ -430,7 +493,7 @@ fn maybe_start_dev_batch(app: &tauri::AppHandle, state: &AppState) {
     }
     log::info!("dev batch: enqueueing {} input(s)", paths.len());
     let q = queue::global();
-    let _ids = q.enqueue(paths);
+    let _ids = q.enqueue(paths, Suite::Reconstruction);
     q.try_start_next(app, Arc::clone(&state.jobs));
     queue::emit_now(app);
 }
@@ -740,6 +803,9 @@ pub fn run() {
             resume_queue,
             cancel_queue_item,
             clear_finished_queue,
+            get_suite,
+            set_suite,
+            get_geo_catalog_info,
             resume_project,
             list_projects,
             delete_project,

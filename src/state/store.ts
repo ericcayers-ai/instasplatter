@@ -10,12 +10,14 @@ import type {
   ResolvedSettings,
   Settings,
   SplatFormat,
+  Suite,
 } from "../lib/ipc";
 import { api } from "../lib/ipc";
 
 export type Screen = "home" | "processing";
 export type ThemePreference = "system" | "light" | "dark";
 export type Theme = "light" | "dark";
+export type { Suite };
 
 export interface StageInfo {
   id: string;
@@ -67,6 +69,7 @@ function applyTheme(theme: Theme) {
 
 interface AppStore {
   screen: Screen;
+  suite: Suite;
   profile: HardwareProfile | null;
   engineStatus: EngineStatus | null;
   settings: Settings;
@@ -119,6 +122,7 @@ interface AppStore {
   experimentalModalOpen: boolean;
 
   init: () => Promise<void>;
+  setSuite: (suite: Suite) => Promise<void>;
   setThemePreference: (p: ThemePreference) => void;
   setLeftPanelOpen: (open: boolean) => void;
   setRightPanelOpen: (open: boolean) => void;
@@ -132,7 +136,7 @@ interface AppStore {
   resumeProject: (workspace: string) => Promise<void>;
   deleteProjectEntry: (workspace: string) => Promise<void>;
   startJob: (path: string) => Promise<void>;
-  enqueueJobs: (paths: string[]) => Promise<void>;
+  enqueueJobs: (paths: string[], suite?: Suite) => Promise<void>;
   pauseQueue: () => Promise<void>;
   resumeQueue: () => Promise<void>;
   cancelQueueItem: (id: string) => Promise<void>;
@@ -161,6 +165,7 @@ let initStarted = false;
 
 export const useStore = create<AppStore>((set, get) => ({
   screen: "home",
+  suite: "reconstruction",
   profile: null,
   engineStatus: null,
   settings: {},
@@ -218,13 +223,15 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     });
 
-    const [profile, settings, resolved, engineStatus] = await Promise.all([
+    const [profile, settings, resolved, engineStatus, suite] = await Promise.all([
       api.getHardwareProfile(),
       api.getSettings(),
       api.getResolvedSettings(),
       api.getEngineStatus(),
+      api.getSuite().catch(() => "reconstruction" as Suite),
     ]);
-    set({ profile, settings, resolved });
+    document.documentElement.dataset.suite = suite;
+    set({ profile, settings, resolved, suite });
     void get().refreshProjects();
     // Engine status can change once install_engines finishes, so events that
     // affect it are not tracked live; a plain re-read on init is enough here.
@@ -233,7 +240,12 @@ export const useStore = create<AppStore>((set, get) => ({
     await api.onQueueSnapshot((snap) => {
       set({ queueItems: snap.items, queuePaused: snap.paused });
       const running = snap.items.find((i) => i.state === "running");
-      if (running?.jobId && get().jobId !== running.jobId && get().screen === "home") {
+      if (
+        running?.jobId &&
+        get().jobId !== running.jobId &&
+        get().screen === "home" &&
+        (running.suite ?? "reconstruction") === "reconstruction"
+      ) {
         // Promote the active batch item into the processing screen.
         set({
           screen: "processing",
@@ -255,6 +267,12 @@ export const useStore = create<AppStore>((set, get) => ({
     // Dev/test hook: start a job immediately if requested via env var.
     const auto = await api.getAutostart().catch(() => null);
     if (auto && !get().jobId) void get().startJob(auto);
+  },
+
+  setSuite: async (suite) => {
+    const next = await api.setSuite(suite);
+    document.documentElement.dataset.suite = next;
+    set({ suite: next, settings: { ...get().settings, defaultSuite: next } });
   },
 
   setThemePreference: (p) => {
@@ -399,19 +417,22 @@ export const useStore = create<AppStore>((set, get) => ({
     }
   },
 
-  enqueueJobs: async (paths) => {
+  enqueueJobs: async (paths, suite) => {
     if (paths.length === 0) return;
+    const activeSuite = suite ?? get().suite;
     try {
-      const st = await api.getEngineStatus();
-      if (!st.colmap || !st.brush) {
-        await api.installEngines();
-        set({ engineStatus: await api.getEngineStatus() });
+      if (activeSuite === "reconstruction") {
+        const st = await api.getEngineStatus();
+        if (!st.colmap || !st.brush) {
+          await api.installEngines();
+          set({ engineStatus: await api.getEngineStatus() });
+        }
       }
-      await api.enqueueJobs(paths);
+      await api.enqueueJobs(paths, activeSuite);
       const snap = await api.listQueue();
       set({ queueItems: snap.items, queuePaused: snap.paused });
     } catch (err) {
-      set({ jobError: String(err), screen: "processing" });
+      set({ jobError: String(err), screen: activeSuite === "reconstruction" ? "processing" : "home" });
     }
   },
 

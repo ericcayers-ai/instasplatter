@@ -5,6 +5,7 @@
 //! (NC research stack after license ack). `resolve()` forks both stacks.
 
 use crate::profiler::{HardwareProfile, Preset};
+use crate::project::Suite;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -86,6 +87,10 @@ pub struct Settings {
     /// "ply" | "splat" | "spz". PLY is the default.
     pub export_format: Option<String>,
     pub keep_intermediates: Option<bool>,
+
+    // ---- Suite ----
+    /// Preferred shell suite: "reconstruction" | "geospatial". Default reconstruction.
+    pub default_suite: Option<String>,
 }
 
 impl Settings {
@@ -103,6 +108,13 @@ impl Settings {
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         // No UTF-8 BOM: serde_json rejects BOM on load, and some editors write one.
         fs::write(settings_path(), json).map_err(|e| e.to_string())
+    }
+
+    pub fn default_suite(&self) -> Suite {
+        self.default_suite
+            .as_deref()
+            .and_then(Suite::parse)
+            .unwrap_or(Suite::Reconstruction)
     }
 }
 

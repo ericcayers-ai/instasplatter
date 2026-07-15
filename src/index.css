@@ -3,7 +3,10 @@
 /* InstaSplatter palette (named for the splatter / capture workflow):
    Ink #0b0d12, Slate #12151d, Panel #171b26, Edge #232939,
    Splatter #38b7a6 (primary pigment), Trace #8b7cf6 (live progress),
-   Paper #e8ecf4, Graphite #8b93a7, Ember #e5654f */
+   Paper #e8ecf4, Graphite #8b93a7, Ember #e5654f
+
+   Geospatial tokens (suite overlay): Basin Ink, Survey Slate, Contour,
+   Hydro Cyan, Gauge Amber, Critical Rose. */
 @theme {
   --color-bg: #0b0d12;
   --color-panel: #12151d;
@@ -14,6 +17,12 @@
   --color-ink: #e8ecf4;
   --color-ink-dim: #8b93a7;
   --color-danger: #e5654f;
+  --color-basin: #08121d;
+  --color-survey: #152536;
+  --color-contour: #36516a;
+  --color-hydro: #25c6d9;
+  --color-gauge: #f1b84b;
+  --color-critical: #e55d78;
   --font-display: "Syne", "Segoe UI", system-ui, sans-serif;
   --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "Cascadia Mono", "Consolas", monospace;
@@ -29,6 +38,12 @@
   --color-ink: #e8ecf4;
   --color-ink-dim: #8b93a7;
   --color-danger: #e5654f;
+  --color-basin: #08121d;
+  --color-survey: #152536;
+  --color-contour: #36516a;
+  --color-hydro: #25c6d9;
+  --color-gauge: #f1b84b;
+  --color-critical: #e55d78;
   color-scheme: dark;
 }
 
@@ -42,7 +57,34 @@
   --color-ink: #14161b;
   --color-ink-dim: #63676f;
   --color-danger: #b3341f;
+  --color-basin: #e8eef3;
+  --color-survey: #d5e0ea;
+  --color-contour: #5a738a;
+  --color-hydro: #0e8a9a;
+  --color-gauge: #b8860b;
+  --color-critical: #c43d58;
   color-scheme: light;
+}
+
+/* Geospatial suite: pull shell surfaces toward the survey palette. */
+:root[data-suite="geospatial"][data-theme="dark"] {
+  --color-bg: var(--color-basin);
+  --color-panel: var(--color-survey);
+  --color-panel2: #1a2d3f;
+  --color-edge: var(--color-contour);
+  --color-accent: var(--color-hydro);
+  --color-accent2: var(--color-gauge);
+  --color-danger: var(--color-critical);
+}
+
+:root[data-suite="geospatial"][data-theme="light"] {
+  --color-bg: #eef3f7;
+  --color-panel: #ffffff;
+  --color-panel2: #f0f5f9;
+  --color-edge: #b8c8d6;
+  --color-accent: var(--color-hydro);
+  --color-accent2: var(--color-gauge);
+  --color-danger: var(--color-critical);
 }
 
 html,
@@ -82,6 +124,27 @@ body,
 }
 :root[data-theme="light"] .splatter-field::before {
   opacity: 0.35;
+}
+
+.geo-field {
+  position: relative;
+  isolation: isolate;
+  background: var(--color-bg);
+}
+.geo-field::before {
+  content: "";
+  position: absolute;
+  inset: -8%;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  background:
+    radial-gradient(ellipse 40% 28% at 12% 88%, color-mix(in srgb, var(--color-hydro) 16%, transparent), transparent 72%),
+    radial-gradient(ellipse 32% 24% at 88% 18%, color-mix(in srgb, var(--color-gauge) 12%, transparent), transparent 70%),
+    radial-gradient(ellipse 18% 14% at 52% 42%, color-mix(in srgb, var(--color-contour) 20%, transparent), transparent 68%);
+}
+:root[data-theme="light"] .geo-field::before {
+  opacity: 0.3;
 }
 
 ::-webkit-scrollbar {

@@ -1,9 +1,12 @@
-//! Project bundles (ROADMAP-V2 1.4).
+//! Project bundles (ROADMAP-V2 1.4 / geospatial suite v2).
 //!
 //! Every job writes a `project.json` next to its workspace holding the input
 //! reference, the resolved settings, where the solved poses live and which
 //! splat is current. That is everything needed to reopen a finished scene or
 //! resume an interrupted run, so closing the app mid-training is not fatal.
+//!
+//! Format v2 adds a suite tag and geospatial placeholders (GeoReference,
+//! layers, flood scenarios, simulation runs) while still loading v1 manifests.
 
 use crate::settings::ResolvedSettings;
 use serde::{Deserialize, Serialize};
@@ -11,12 +14,159 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const PROJECT_FILE: &str = "project.json";
-const PROJECT_VERSION: u32 = 1;
+const PROJECT_VERSION: u32 = 2;
+
+/// Relative paths under a workspace used by the geospatial suite.
+pub const GEO_WORKSPACE_DIRS: &[&str] = &[
+    "geo/sources",
+    "geo/derived",
+    "geo/tiles",
+    "geo/scenarios",
+    "geo/runs",
+    "geo/exports",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Suite {
+    #[default]
+    Reconstruction,
+    Geospatial,
+}
+
+impl Suite {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Suite::Reconstruction => "reconstruction",
+            Suite::Geospatial => "geospatial",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Suite> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "reconstruction" | "recon" => Some(Suite::Reconstruction),
+            "geospatial" | "geo" => Some(Suite::Geospatial),
+            _ => None,
+        }
+    }
+}
+
+/// Metric frame tying the local scene to a geodetic CRS (placeholders until
+/// drone-georeg fills them in).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GeoReference {
+    /// EPSG or PROJ string for the horizontal CRS (e.g. "EPSG:4979").
+    pub source_crs: Option<String>,
+    /// Vertical datum or compound CRS label.
+    pub vertical_datum: Option<String>,
+    /// Linear units of the working frame ("m", "ft", …).
+    pub units: Option<String>,
+    /// 4×4 row-major ECEF → local ENU (or identity stub).
+    pub ecef_to_enu: Option<[f64; 16]>,
+    /// Lon/lat/height or ECEF origin used for ENU.
+    pub local_origin: Option<[f64; 3]>,
+    /// Typical horizontal uncertainty in metres when known.
+    pub uncertainty_m: Option<f64>,
+    /// Mean / max GCP residual (metres) after a Sim(3) solve.
+    pub gcp_residual_m: Option<f64>,
+    /// Free-form provenance (telemetry source, GPS quality, etc.).
+    pub provenance: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum GeoLayerKind {
+    #[default]
+    Raster,
+    Vector,
+    PointCloud,
+    Splat,
+    Mesh,
+    Network,
+    TimeSeries,
+}
+
+/// Layer entry for the geospatial catalog / viewport tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeoLayer {
+    pub id: String,
+    pub name: String,
+    pub kind: GeoLayerKind,
+    pub path: Option<String>,
+    pub source_license: Option<String>,
+    pub content_hash: Option<String>,
+    /// Axis-aligned bounds [min_x, min_y, max_x, max_y] in layer CRS.
+    pub bounds: Option<[f64; 4]>,
+    pub crs: Option<String>,
+    pub visible: bool,
+    pub style: Option<serde_json::Value>,
+    pub lod: Option<u32>,
+}
+
+impl Default for GeoLayer {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            kind: GeoLayerKind::Raster,
+            path: None,
+            source_license: None,
+            content_hash: None,
+            bounds: None,
+            crs: None,
+            visible: true,
+            style: None,
+            lod: None,
+        }
+    }
+}
+
+/// Placeholder flood scenario (terrain + forcing + structures).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FloodScenario {
+    pub id: String,
+    pub name: String,
+    pub terrain_layer_id: Option<String>,
+    pub rainfall: Option<serde_json::Value>,
+    pub inflows: Option<serde_json::Value>,
+    pub infiltration: Option<serde_json::Value>,
+    pub roughness: Option<serde_json::Value>,
+    pub structures: Option<serde_json::Value>,
+    pub drains: Option<serde_json::Value>,
+    pub boundary_conditions: Option<serde_json::Value>,
+    pub solver_settings: Option<serde_json::Value>,
+    /// "draft" | "calibrated" | "validated" | …
+    pub validation_state: Option<String>,
+}
+
+/// One scientific or preview simulation attempt for a scenario.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SimulationRun {
+    pub id: String,
+    pub scenario_id: String,
+    pub engine: Option<String>,
+    pub engine_version: Option<String>,
+    pub grid_or_mesh: Option<String>,
+    pub timestep_s: Option<f64>,
+    pub cfl: Option<f64>,
+    pub mass_balance: Option<f64>,
+    pub result_paths: Vec<String>,
+    pub checkpoint_paths: Vec<String>,
+    pub hardware: Option<String>,
+    pub reproducibility_hash: Option<String>,
+    pub created_unix: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
     pub version: u32,
+    #[serde(default)]
+    pub suite: Suite,
     pub job_id: String,
     pub created_unix: u64,
     pub updated_unix: u64,
@@ -33,6 +183,16 @@ pub struct Project {
     pub completed: bool,
     /// Orientation the user set in the viewport, row-major 3x3.
     pub model_rotation: Option<[f32; 9]>,
+
+    // ---- Geospatial (v2; empty for reconstruction-only projects) ----
+    #[serde(default)]
+    pub geo_reference: Option<GeoReference>,
+    #[serde(default)]
+    pub geo_layers: Vec<GeoLayer>,
+    #[serde(default)]
+    pub flood_scenarios: Vec<FloodScenario>,
+    #[serde(default)]
+    pub simulation_runs: Vec<SimulationRun>,
 }
 
 fn now_unix() -> u64 {
@@ -42,6 +202,14 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Create `workspace/geo/{sources,derived,tiles,scenarios,runs,exports}`.
+pub fn ensure_geo_workspace(workspace: &Path) -> Result<(), String> {
+    for rel in GEO_WORKSPACE_DIRS {
+        fs::create_dir_all(workspace.join(rel)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 impl Project {
     pub fn new(
         job_id: &str,
@@ -49,9 +217,26 @@ impl Project {
         workspace: &Path,
         settings: &ResolvedSettings,
     ) -> Project {
+        Self::new_with_suite(
+            job_id,
+            input_path,
+            workspace,
+            settings,
+            Suite::Reconstruction,
+        )
+    }
+
+    pub fn new_with_suite(
+        job_id: &str,
+        input_path: &Path,
+        workspace: &Path,
+        settings: &ResolvedSettings,
+        suite: Suite,
+    ) -> Project {
         let t = now_unix();
-        Project {
+        let mut proj = Project {
             version: PROJECT_VERSION,
+            suite,
             job_id: job_id.to_string(),
             created_unix: t,
             updated_unix: t,
@@ -64,7 +249,16 @@ impl Project {
             total_steps: settings.total_steps,
             completed: false,
             model_rotation: None,
+            geo_reference: None,
+            geo_layers: Vec::new(),
+            flood_scenarios: Vec::new(),
+            simulation_runs: Vec::new(),
+        };
+        if suite == Suite::Geospatial {
+            proj.geo_reference = Some(GeoReference::default());
+            let _ = ensure_geo_workspace(workspace);
         }
+        proj
     }
 
     pub fn path(workspace: &Path) -> PathBuf {
@@ -76,6 +270,9 @@ impl Project {
     pub fn save(&self) -> Result<(), String> {
         let ws = PathBuf::from(&self.workspace);
         fs::create_dir_all(&ws).map_err(|e| e.to_string())?;
+        if self.suite == Suite::Geospatial {
+            ensure_geo_workspace(&ws)?;
+        }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         let tmp = ws.join(format!("{PROJECT_FILE}.tmp"));
         fs::write(&tmp, json).map_err(|e| e.to_string())?;
@@ -89,13 +286,17 @@ impl Project {
         let p = Project::path(workspace);
         let text = fs::read_to_string(&p)
             .map_err(|e| format!("Cannot read {}: {e}", p.display()))?;
-        let proj: Project = serde_json::from_str(&text)
+        let mut proj: Project = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a valid project file: {e}", p.display()))?;
         if proj.version > PROJECT_VERSION {
             return Err(format!(
                 "This project was written by a newer version of InstaSplatter (format {}).",
                 proj.version
             ));
+        }
+        // v1 → v2: suite/geo fields already defaulted via serde; bump version.
+        if proj.version < PROJECT_VERSION {
+            proj.version = PROJECT_VERSION;
         }
         Ok(proj)
     }
@@ -107,6 +308,9 @@ impl Project {
     /// True when training stopped part way and enough state survives to pick
     /// it up again: poses on disk and at least one exported checkpoint.
     pub fn is_resumable(&self) -> bool {
+        if self.suite != Suite::Reconstruction {
+            return false;
+        }
         if self.completed || self.latest_iter == 0 || self.latest_iter >= self.total_steps {
             return false;
         }
@@ -137,6 +341,7 @@ pub struct ProjectSummary {
     pub latest_iter: u32,
     pub total_steps: u32,
     pub result_path: Option<String>,
+    pub suite: Suite,
 }
 
 impl From<&Project> for ProjectSummary {
@@ -155,6 +360,7 @@ impl From<&Project> for ProjectSummary {
             latest_iter: p.latest_iter,
             total_steps: p.total_steps,
             result_path: result.exists().then(|| result.to_string_lossy().into_owned()),
+            suite: p.suite,
         }
     }
 }
@@ -237,7 +443,53 @@ mod tests {
         assert_eq!(back.latest_iter, 500);
         assert_eq!(back.total_steps, 12000);
         assert_eq!(back.settings.preset, Preset::Balanced);
+        assert_eq!(back.suite, Suite::Reconstruction);
+        assert_eq!(back.version, PROJECT_VERSION);
         assert!(!back.completed);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn v1_manifest_loads_as_v2_reconstruction() {
+        let ws = temp("v1_migrate");
+        let v1 = serde_json::json!({
+            "version": 1,
+            "jobId": "job_old",
+            "createdUnix": 1,
+            "updatedUnix": 2,
+            "inputPath": "C:/in/clip.mp4",
+            "workspace": ws.to_string_lossy(),
+            "settings": settings(),
+            "sparseDir": null,
+            "latestSplat": null,
+            "latestIter": 0,
+            "totalSteps": 12000,
+            "completed": false,
+            "modelRotation": null
+        });
+        fs::write(Project::path(&ws), serde_json::to_string_pretty(&v1).unwrap()).unwrap();
+        let back = Project::load(&ws).unwrap();
+        assert_eq!(back.version, PROJECT_VERSION);
+        assert_eq!(back.suite, Suite::Reconstruction);
+        assert!(back.geo_layers.is_empty());
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn geospatial_project_creates_geo_dirs() {
+        let ws = temp("geo_dirs");
+        let p = Project::new_with_suite(
+            "job_geo",
+            Path::new("C:/in/survey"),
+            &ws,
+            &settings(),
+            Suite::Geospatial,
+        );
+        p.save().unwrap();
+        for rel in GEO_WORKSPACE_DIRS {
+            assert!(ws.join(rel).is_dir(), "missing {rel}");
+        }
+        assert!(p.geo_reference.is_some());
         let _ = fs::remove_dir_all(&ws);
     }
 
@@ -317,6 +569,7 @@ mod tests {
         assert_eq!(list[0].job_id, "job_b");
         assert_eq!(list[0].input_name, "clip.mp4");
         assert!(list[0].result_path.is_none());
+        assert_eq!(list[0].suite, Suite::Reconstruction);
         let _ = fs::remove_dir_all(&jobs);
     }
 }

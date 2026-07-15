@@ -70,8 +70,40 @@ function ExperimentalToggle() {
   );
 }
 
+function SuiteSwitch() {
+  const suite = useStore((s) => s.suite);
+  const setSuite = useStore((s) => s.setSuite);
+  const screen = useStore((s) => s.screen);
+  const busy = screen === "processing";
+  const options: { id: "reconstruction" | "geospatial"; label: string }[] = [
+    { id: "reconstruction", label: "Reconstruction" },
+    { id: "geospatial", label: "Geospatial" },
+  ];
+  return (
+    <div className="flex overflow-hidden rounded border border-edge" title="Product suite">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          disabled={busy && o.id !== suite}
+          onClick={() => void setSuite(o.id)}
+          className={`px-2.5 py-1 text-[11px] font-medium transition ${
+            suite === o.id
+              ? o.id === "geospatial"
+                ? "bg-[color-mix(in_srgb,var(--color-hydro)_18%,transparent)] text-[var(--color-hydro)]"
+                : "bg-accent/15 text-accent"
+              : "text-ink-dim hover:text-ink disabled:opacity-40"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function TitleBar() {
   const screen = useStore((s) => s.screen);
+  const suite = useStore((s) => s.suite);
   const stages = useStore((s) => s.stages);
   const inputPath = useStore((s) => s.inputPath);
   const workspace = useStore((s) => s.workspace);
@@ -88,6 +120,7 @@ export default function TitleBar() {
 
   const running = screen === "processing" && !resultPath && !jobError;
   const name = inputPath?.split(/[\\/]/).pop() ?? workspace?.split(/[\\/]/).pop() ?? "";
+  const showReconChrome = suite === "reconstruction" && screen === "processing";
 
   return (
     <div className="flex h-10 shrink-0 items-center justify-between border-b border-edge bg-panel px-3">
@@ -100,7 +133,8 @@ export default function TitleBar() {
           {leftPanelOpen ? "◀" : "▶"}
         </button>
         <div className="font-display text-[14px] font-bold tracking-tight">InstaSplatter</div>
-        {screen === "processing" && (
+        <SuiteSwitch />
+        {showReconChrome && (
           <>
             <span className="text-ink-dim">/</span>
             <span className="max-w-56 truncate text-xs text-ink-dim">{name}</span>
@@ -118,7 +152,7 @@ export default function TitleBar() {
 
       <div className="flex items-center gap-2">
         <ExperimentalToggle />
-        {screen === "processing" && (
+        {showReconChrome && (
           <>
             {running && (
               <button onClick={cancelJob} className="btn btn-danger">
