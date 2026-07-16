@@ -157,7 +157,8 @@ export const PLACEHOLDER_SCENARIO: GeoScenarioMeta = {
   name: "Draft site rain",
   durationHours: 12,
   engineLabel: "ANUGA / live preview",
-  note: "Start a scientific run for ANUGA checkpoints (or labelled demo if the engine is missing). Live preview stays separate until validated.",
+  note: "Draw an AOI anywhere on the map, then start a scientific run (ANUGA) or scrub the live preview. Preview stays labelled until validated.",
+  aoiWgs84: null,
 };
 
 /**
@@ -180,6 +181,20 @@ export const PLACEHOLDER_HYDROGRAPH: HydrographSample[] = [
   { hours: 12, stageM: 0.42, dischargeCms: 7 },
 ];
 
-/** Demo site center (Wellington waterfront — NZ user timezone). */
-export const GEO_MAP_CENTER: [number, number] = [174.779, -41.2865];
-export const GEO_MAP_ZOOM = 13.2;
+/** Cold-start map view before an AOI is drawn (worldwide, not site-locked). */
+export const GEO_MAP_CENTER: [number, number] = [0, 20];
+export const GEO_MAP_ZOOM = 1.6;
+
+/** Esri World Imagery (Standard satellite). Attribution required. */
+export const ESRI_WORLD_IMAGERY_TILES =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+export const ESRI_WORLD_IMAGERY_ATTRIBUTION =
+  'Tiles &copy; <a href="https://www.esri.com/">Esri</a> — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community';
+
+export const CARTO_DARK_TILES = [
+  "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+  "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+  "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+] as const;
+export const CARTO_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';

@@ -6,12 +6,6 @@ import type { GeoLayerGroup, GeoWaterStyle } from "./types";
 
 const GROUP_ORDER: GeoLayerGroup[] = ["basemap", "terrain", "survey", "network", "flood"];
 
-function statusChip(status: "empty" | "hook" | "ready"): string {
-  if (status === "ready") return "";
-  if (status === "hook") return "Hook";
-  return "Empty";
-}
-
 export default function GeoLayerTree() {
   const layers = useStore((s) => s.geoLayers);
   const setLayerVisible = useStore((s) => s.setGeoLayerVisible);
@@ -20,18 +14,23 @@ export default function GeoLayerTree() {
   const setWaterStyle = useStore((s) => s.setGeoWaterStyle);
   const floodTime = useStore((s) => s.geoFloodTime);
   const preview = useStore((s) => s.geoPreview);
+  const scenario = useStore((s) => s.geoScenario);
+  const aoi = useStore((s) => s.geoAoiWgs84);
   const snap = useMemo(
-    () => floodSnapshotFromTime(floodTime, preview),
-    [floodTime, preview],
+    () => floodSnapshotFromTime(floodTime, preview, scenario?.durationHours),
+    [floodTime, preview, scenario?.durationHours],
   );
+
+  // Hide Empty / Hook layers until real data arrives (plan: layer honesty).
+  const readyLayers = useMemo(() => layers.filter((l) => l.status === "ready"), [layers]);
 
   const grouped = useMemo(() => {
     return GROUP_ORDER.map((g) => ({
       group: g,
       label: LAYER_GROUP_LABELS[g],
-      items: layers.filter((l) => l.group === g),
+      items: readyLayers.filter((l) => l.group === g),
     })).filter((g) => g.items.length > 0);
-  }, [layers]);
+  }, [readyLayers]);
 
   const styles: { id: GeoWaterStyle; label: string }[] = [
     { id: "depth", label: "Depth" },
@@ -53,6 +52,7 @@ export default function GeoLayerTree() {
               onClick={() => setWaterStyle(s.id)}
               className={`btn px-2 py-0.5 text-[10px] ${waterStyle === s.id ? "btn-active" : ""}`}
               aria-pressed={waterStyle === s.id}
+              disabled={!aoi}
             >
               {s.label}
             </button>
@@ -65,12 +65,17 @@ export default function GeoLayerTree() {
           </div>
           <div className="flex justify-between">
             <span>Max depth</span>
-            <span className="text-ink">{snap.maxDepthM.toFixed(2)} m</span>
+            <span className="text-ink">{aoi ? `${snap.maxDepthM.toFixed(2)} m` : "—"}</span>
           </div>
           <div className="flex justify-between">
             <span>Hazard</span>
-            <span className="text-ink">{hazardClassLabel(snap.hazardClass)}</span>
+            <span className="text-ink">{aoi ? hazardClassLabel(snap.hazardClass) : "—"}</span>
           </div>
+          {!aoi && (
+            <p className="pt-1 text-[10px] leading-snug text-[var(--color-gauge)]">
+              Draw an AOI to bind the flood domain.
+            </p>
+          )}
         </div>
       </div>
 
@@ -80,42 +85,31 @@ export default function GeoLayerTree() {
             {g.label}
           </div>
           <ul className="flex flex-col gap-1.5">
-            {g.items.map((layer) => {
-              const chip = statusChip(layer.status);
-              return (
-                <li key={layer.id} className="flex flex-col gap-1">
-                  <label className="flex cursor-pointer items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={layer.visible}
-                      disabled={layer.status === "empty"}
-                      onChange={(e) => setLayerVisible(layer.id, e.target.checked)}
-                      className="accent-[var(--color-hydro)]"
-                    />
-                    <span className={`min-w-0 flex-1 truncate ${layer.status === "empty" ? "text-ink-dim" : ""}`}>
-                      {layer.label}
-                    </span>
-                    {chip && (
-                      <span className="shrink-0 text-[9px] uppercase tracking-wide text-ink-dim">
-                        {chip}
-                      </span>
-                    )}
-                  </label>
-                  {layer.visible && layer.status !== "empty" && (
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={layer.opacity}
-                      onChange={(e) => setLayerOpacity(layer.id, Number(e.target.value))}
-                      aria-label={`${layer.label} opacity`}
-                      className="ml-5 w-[calc(100%-1.25rem)]"
-                    />
-                  )}
-                </li>
-              );
-            })}
+            {g.items.map((layer) => (
+              <li key={layer.id} className="flex flex-col gap-1">
+                <label className="flex cursor-pointer items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={layer.visible}
+                    onChange={(e) => setLayerVisible(layer.id, e.target.checked)}
+                    className="accent-[var(--color-hydro)]"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{layer.label}</span>
+                </label>
+                {layer.visible && (
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={layer.opacity}
+                    onChange={(e) => setLayerOpacity(layer.id, Number(e.target.value))}
+                    aria-label={`${layer.label} opacity`}
+                    className="ml-5 w-[calc(100%-1.25rem)]"
+                  />
+                )}
+              </li>
+            ))}
           </ul>
         </div>
       ))}

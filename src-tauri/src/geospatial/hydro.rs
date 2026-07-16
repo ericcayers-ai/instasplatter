@@ -500,7 +500,66 @@ fn default_scenario(id: &str) -> FloodScenario {
         boundary_conditions: None,
         solver_settings: Some(serde_json::json!({ "cfl": 0.9, "durationHours": 12.0 })),
         validation_state: Some("draft".into()),
+        aoi_wgs84: None,
     }
+}
+
+/// Convert a WGS84 AOI box to approximate local ENU metres about its centre.
+pub fn aoi_wgs84_to_enu_box(aoi: [f64; 4]) -> ([f64; 3], [f64; 4]) {
+    let [west, south, east, north] = aoi;
+    let lon0 = 0.5 * (west + east);
+    let lat0 = 0.5 * (south + north);
+    let m_per_deg_lat = 111_320.0;
+    let m_per_deg_lon = 111_320.0 * (lat0 * std::f64::consts::PI / 180.0).cos();
+    let min_e = (west - lon0) * m_per_deg_lon;
+    let max_e = (east - lon0) * m_per_deg_lon;
+    let min_n = (south - lat0) * m_per_deg_lat;
+    let max_n = (north - lat0) * m_per_deg_lat;
+    ([lon0, lat0, 0.0], [min_e, min_n, max_e, max_n])
+}
+
+/// Persist AOI on a flood scenario and return an extent plan for soft/scientific solvers.
+pub fn commit_flood_aoi(
+    workspace: &Path,
+    scenario_id: &str,
+    aoi_wgs84: [f64; 4],
+) -> Result<(FloodScenario, ExtentPlan, Option<crate::project::GeoReference>), String> {
+    let [west, south, east, north] = aoi_wgs84;
+    if !(west < east && south < north) {
+        return Err("AOI must have west < east and south < north".into());
+    }
+    if (east - west) < 1e-5 || (north - south) < 1e-5 {
+        return Err("AOI is too small".into());
+    }
+
+    let mut project = Project::load(workspace)?;
+    crate::geospatial::prepare_workspace(workspace)?;
+    let mut scenario = ensure_scenario(&mut project, scenario_id);
+    scenario.aoi_wgs84 = Some(aoi_wgs84);
+    if let Some(slot) = project
+        .flood_scenarios
+        .iter_mut()
+        .find(|s| s.id == scenario_id)
+    {
+        *slot = scenario.clone();
+    }
+
+    let (origin, dem_bounds_enu) = aoi_wgs84_to_enu_box(aoi_wgs84);
+    // Seed / refresh geo origin at AOI centre so scientific + preview share a frame.
+    let geo = crate::geospatial::registration::compute_geo_reference(workspace, Some(origin))?;
+    let extent_input = ExtentPlanInput {
+        camera_enu: Vec::new(),
+        splat_bounds_enu: None,
+        dem_bounds_enu: Some(dem_bounds_enu),
+        dem_accuracy_m: Some(2.0),
+        preview_budget_cells: Some(1024),
+        enu_origin: Some(origin),
+        geo_reference: Some(geo.geo_reference.clone()),
+    };
+    let plan = plan_extent(&extent_input);
+    project.geo_reference = Some(geo.geo_reference.clone());
+    project.save()?;
+    Ok((scenario, plan, Some(geo.geo_reference)))
 }
 
 fn ensure_scenario(project: &mut Project, scenario_id: &str) -> FloodScenario {
@@ -1065,14 +1124,34 @@ pub fn start_scientific_flood(
         .name("flood-anuga-cpu".into())
         .spawn(move || {
             let result = (|| -> Result<(SimulationRun, Option<String>), String> {
-                let extent_input = spec_bg.extent.clone().unwrap_or_else(|| ExtentPlanInput {
-                    camera_enu: Vec::new(),
-                    splat_bounds_enu: None,
-                    dem_bounds_enu: Some([0.0, 0.0, 400.0, 300.0]),
-                    dem_accuracy_m: Some(2.0),
-                    preview_budget_cells: Some(1024),
-                    enu_origin: geo_ref.as_ref().and_then(|g| g.local_origin),
-                    geo_reference: geo_ref.clone(),
+                let extent_input = spec_bg.extent.clone().unwrap_or_else(|| {
+                    if let Some(aoi) = scenario_bg.aoi_wgs84 {
+                        let (origin, dem_bounds_enu) = aoi_wgs84_to_enu_box(aoi);
+                        ExtentPlanInput {
+                            camera_enu: Vec::new(),
+                            splat_bounds_enu: None,
+                            dem_bounds_enu: Some(dem_bounds_enu),
+                            dem_accuracy_m: Some(2.0),
+                            preview_budget_cells: Some(1024),
+                            enu_origin: Some(
+                                geo_ref
+                                    .as_ref()
+                                    .and_then(|g| g.local_origin)
+                                    .unwrap_or(origin),
+                            ),
+                            geo_reference: geo_ref.clone(),
+                        }
+                    } else {
+                        ExtentPlanInput {
+                            camera_enu: Vec::new(),
+                            splat_bounds_enu: None,
+                            dem_bounds_enu: Some([0.0, 0.0, 400.0, 300.0]),
+                            dem_accuracy_m: Some(2.0),
+                            preview_budget_cells: Some(1024),
+                            enu_origin: geo_ref.as_ref().and_then(|g| g.local_origin),
+                            geo_reference: geo_ref.clone(),
+                        }
+                    }
                 });
                 let extent_plan = plan_extent(&extent_input);
                 let mesh = mesh_plan_from_extent(&extent_plan);

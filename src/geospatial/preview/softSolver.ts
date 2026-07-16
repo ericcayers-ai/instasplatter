@@ -3,8 +3,11 @@ import type { GridState, PreviewDomain, PreviewForcing, PreviewStats } from "./t
 const G = 9.81;
 export const H_DRY = 5e-4;
 
+/**
+ * Fallback preview domain used only when no AOI has been committed yet
+ * (tests / cold start). Live UI rebinds via `domainFromAoi` after draw.
+ */
 export const DEFAULT_DOMAIN: PreviewDomain = {
-  // ~demo Wellington waterfront extent matching GeoMap placeholder site.
   bounds: [174.762, -41.298, 174.796, -41.275],
   dxM: 12,
   cols: 96,
@@ -74,7 +77,14 @@ export function buildSyntheticBed(cols: number, rows: number): Float32Array {
 }
 
 export function resolveDomain(partial?: Partial<PreviewDomain>, lowPower = false): PreviewDomain {
-  const base = { ...DEFAULT_DOMAIN, ...partial };
+  // Prefer caller-supplied bounds/grid; DEFAULT_DOMAIN is only the cold-start fallback.
+  const base: PreviewDomain = {
+    bounds: partial?.bounds ?? DEFAULT_DOMAIN.bounds,
+    dxM: partial?.dxM ?? DEFAULT_DOMAIN.dxM,
+    cols: partial?.cols ?? DEFAULT_DOMAIN.cols,
+    rows: partial?.rows ?? DEFAULT_DOMAIN.rows,
+    coarseFactor: partial?.coarseFactor ?? DEFAULT_DOMAIN.coarseFactor,
+  };
   if (lowPower) {
     return {
       ...base,

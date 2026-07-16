@@ -149,6 +149,8 @@ pub struct FloodScenario {
     pub solver_settings: Option<serde_json::Value>,
     /// "draft" | "calibrated" | "validated" | …
     pub validation_state: Option<String>,
+    /// Area of interest in WGS84: `[west, south, east, north]` degrees.
+    pub aoi_wgs84: Option<[f64; 4]>,
 }
 
 /// One scientific or preview simulation attempt for a scenario.

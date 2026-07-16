@@ -16,19 +16,18 @@ export default function HydrographTimeline() {
   const scenario = useStore((s) => s.geoScenario);
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const preview = useStore((s) => s.geoPreview);
-  const snap = useMemo(
-    () => floodSnapshotFromTime(floodTime, preview),
-    [floodTime, preview],
-  );
-  const trackRef = useRef<SVGSVGElement>(null);
-
   const series = PLACEHOLDER_HYDROGRAPH;
   const w = 640;
   const h = 72;
   const padX = 8;
   const padY = 10;
   const maxQ = Math.max(...series.map((s) => s.dischargeCms), 1);
-  const maxHours = PLACEHOLDER_SCENARIO.durationHours;
+  const maxHours = scenario?.durationHours ?? PLACEHOLDER_SCENARIO.durationHours;
+  const snap = useMemo(
+    () => floodSnapshotFromTime(floodTime, preview, maxHours),
+    [floodTime, preview, maxHours],
+  );
+  const trackRef = useRef<SVGSVGElement>(null);
 
   const points = series.map((s) => {
     const x = padX + (s.hours / maxHours) * (w - padX * 2);

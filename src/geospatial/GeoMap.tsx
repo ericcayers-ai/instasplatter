@@ -3,14 +3,28 @@ import maplibregl, { type Map as MapLibreMap, type StyleSpecification } from "ma
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useStore } from "../state/store";
 import { api, type SimEvent } from "../lib/ipc";
-import { GEO_MAP_CENTER, GEO_MAP_ZOOM } from "./defaults";
-import { placeholderGauges, placeholderWaterways } from "./floodPreview";
+import {
+  aoiIsValid,
+  aoiPolygonGeoJson,
+  domainFromAoi,
+  networkFeaturesForAoi,
+  normalizeAoi,
+  type AoiWgs84,
+} from "./aoi";
+import {
+  CARTO_ATTRIBUTION,
+  CARTO_DARK_TILES,
+  ESRI_WORLD_IMAGERY_ATTRIBUTION,
+  ESRI_WORLD_IMAGERY_TILES,
+  GEO_MAP_CENTER,
+  GEO_MAP_ZOOM,
+} from "./defaults";
 import {
   FloodPreviewEngine,
   type PreviewRenderArtifacts,
   type ScientificCheckpoint,
 } from "./preview";
-import type { GeoViewMode } from "./types";
+import type { GeoBasemapMode, GeoViewMode } from "./types";
 
 const FLOOD_RASTER_SRC = "geo-flood-raster";
 const FLOOD_RASTER_LAYER = "flood-raster";
@@ -20,46 +34,59 @@ const PARTICLES_SRC = "geo-flood-particles";
 const PARTICLES_LAYER = "flood-particles";
 const WATERWAYS_SRC = "geo-waterways";
 const GAUGES_SRC = "geo-gauges";
+const AOI_SRC = "geo-aoi";
+const AOI_FILL = "geo-aoi-fill";
+const AOI_LINE = "geo-aoi-line";
+const AOI_DRAFT_SRC = "geo-aoi-draft";
+const AOI_DRAFT_FILL = "geo-aoi-draft-fill";
+const AOI_DRAFT_LINE = "geo-aoi-draft-line";
 
-/** Offline-friendly dark basemap using public OSM raster tiles via a MapLibre style. */
-const BASE_STYLE: StyleSpecification = {
-  version: 8,
-  name: "InstaSplatter survey",
-  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-  sources: {
-    "osm-raster": {
-      type: "raster",
-      tiles: [
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-      ],
-      tileSize: 256,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; CARTO',
-    },
-  },
-  layers: [
-    {
-      id: "background",
-      type: "background",
-      paint: { "background-color": "#08121D" },
-    },
-    {
-      id: "osm-raster",
-      type: "raster",
-      source: "osm-raster",
-      paint: { "raster-opacity": 1 },
-    },
-  ],
-};
+const UI_THROTTLE_MS = 100;
 
-function imageDataToCanvas(image: ImageData): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const ctx = canvas.getContext("2d");
-  if (ctx) ctx.putImageData(image, 0, 0);
-  return canvas;
+function buildBaseStyle(mode: GeoBasemapMode): StyleSpecification {
+  const satellite = mode === "satellite";
+  return {
+    version: 8,
+    name: "InstaSplatter survey",
+    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+    sources: {
+      "esri-imagery": {
+        type: "raster",
+        tiles: [ESRI_WORLD_IMAGERY_TILES],
+        tileSize: 256,
+        attribution: ESRI_WORLD_IMAGERY_ATTRIBUTION,
+        maxzoom: 19,
+      },
+      "carto-dark": {
+        type: "raster",
+        tiles: [...CARTO_DARK_TILES],
+        tileSize: 256,
+        attribution: CARTO_ATTRIBUTION,
+        maxzoom: 20,
+      },
+    },
+    layers: [
+      {
+        id: "background",
+        type: "background",
+        paint: { "background-color": satellite ? "#0a1620" : "#08121D" },
+      },
+      {
+        id: "esri-imagery",
+        type: "raster",
+        source: "esri-imagery",
+        layout: { visibility: satellite ? "visible" : "none" },
+        paint: { "raster-opacity": 1 },
+      },
+      {
+        id: "carto-dark",
+        type: "raster",
+        source: "carto-dark",
+        layout: { visibility: satellite ? "none" : "visible" },
+        paint: { "raster-opacity": 1 },
+      },
+    ],
+  };
 }
 
 function boundsToCoords(bounds: [number, number, number, number]): [
@@ -77,12 +104,74 @@ function boundsToCoords(bounds: [number, number, number, number]): [
   ];
 }
 
-function ensureStaticSources(map: MapLibreMap) {
+function emptyFc(): GeoJSON.FeatureCollection {
+  return { type: "FeatureCollection", features: [] };
+}
+
+function ensureAoiLayers(map: MapLibreMap) {
+  if (!map.getSource(AOI_SRC)) {
+    map.addSource(AOI_SRC, { type: "geojson", data: emptyFc() });
+  }
+  if (!map.getSource(AOI_DRAFT_SRC)) {
+    map.addSource(AOI_DRAFT_SRC, { type: "geojson", data: emptyFc() });
+  }
+  if (!map.getLayer(AOI_FILL)) {
+    map.addLayer({
+      id: AOI_FILL,
+      type: "fill",
+      source: AOI_SRC,
+      paint: { "fill-color": "#25C6D9", "fill-opacity": 0.08 },
+    });
+  }
+  if (!map.getLayer(AOI_LINE)) {
+    map.addLayer({
+      id: AOI_LINE,
+      type: "line",
+      source: AOI_SRC,
+      paint: {
+        "line-color": "#F1B84B",
+        "line-width": 2,
+        "line-dasharray": [2, 1.25],
+      },
+    });
+  }
+  if (!map.getLayer(AOI_DRAFT_FILL)) {
+    map.addLayer({
+      id: AOI_DRAFT_FILL,
+      type: "fill",
+      source: AOI_DRAFT_SRC,
+      paint: { "fill-color": "#F1B84B", "fill-opacity": 0.12 },
+    });
+  }
+  if (!map.getLayer(AOI_DRAFT_LINE)) {
+    map.addLayer({
+      id: AOI_DRAFT_LINE,
+      type: "line",
+      source: AOI_DRAFT_SRC,
+      paint: { "line-color": "#F1B84B", "line-width": 1.5 },
+    });
+  }
+}
+
+function ensureStaticSources(map: MapLibreMap, aoi: AoiWgs84 | null) {
+  const net = aoiIsValid(aoi) ? networkFeaturesForAoi(aoi) : null;
   if (!map.getSource(WATERWAYS_SRC)) {
-    map.addSource(WATERWAYS_SRC, { type: "geojson", data: placeholderWaterways() });
+    map.addSource(WATERWAYS_SRC, {
+      type: "geojson",
+      data: net?.waterways ?? emptyFc(),
+    });
+  } else {
+    (map.getSource(WATERWAYS_SRC) as maplibregl.GeoJSONSource).setData(
+      net?.waterways ?? emptyFc(),
+    );
   }
   if (!map.getSource(GAUGES_SRC)) {
-    map.addSource(GAUGES_SRC, { type: "geojson", data: placeholderGauges() });
+    map.addSource(GAUGES_SRC, {
+      type: "geojson",
+      data: net?.gauges ?? emptyFc(),
+    });
+  } else {
+    (map.getSource(GAUGES_SRC) as maplibregl.GeoJSONSource).setData(net?.gauges ?? emptyFc());
   }
   if (!map.getLayer("waterways-line")) {
     map.addLayer({
@@ -109,22 +198,40 @@ function ensureStaticSources(map: MapLibreMap) {
       },
     });
   }
+  ensureAoiLayers(map);
 }
 
-function ensurePreviewLayers(map: MapLibreMap, artifacts: PreviewRenderArtifacts) {
+function syncFloodCanvas(
+  canvas: HTMLCanvasElement,
+  image: ImageData,
+): void {
+  if (canvas.width !== image.width || canvas.height !== image.height) {
+    canvas.width = image.width;
+    canvas.height = image.height;
+  }
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.putImageData(image, 0, 0);
+}
+
+function ensurePreviewLayers(
+  map: MapLibreMap,
+  artifacts: PreviewRenderArtifacts,
+  canvas: HTMLCanvasElement,
+) {
   const coords = boundsToCoords(artifacts.bounds);
+  syncFloodCanvas(canvas, artifacts.image);
 
   if (!map.getSource(FLOOD_RASTER_SRC)) {
-    const canvas = imageDataToCanvas(artifacts.image);
     map.addSource(FLOOD_RASTER_SRC, {
-      type: "image",
-      url: canvas.toDataURL(),
+      type: "canvas",
+      canvas,
       coordinates: coords,
+      animate: true,
     });
   } else {
-    const src = map.getSource(FLOOD_RASTER_SRC) as maplibregl.ImageSource;
-    // ImageData is accepted by MapLibre updateImage — avoids toDataURL each frame.
-    src.updateImage({ url: artifacts.image as unknown as string, coordinates: coords });
+    const src = map.getSource(FLOOD_RASTER_SRC) as maplibregl.CanvasSource;
+    src.setCoordinates(coords);
+    // animate:true re-reads canvas pixels each frame — no ImageData cast / toDataURL.
   }
 
   if (!map.getLayer(FLOOD_RASTER_LAYER)) {
@@ -193,6 +300,17 @@ function applyViewMode(map: MapLibreMap, mode: GeoViewMode) {
   }
 }
 
+function fitAoi(map: MapLibreMap, aoi: AoiWgs84) {
+  const [west, south, east, north] = normalizeAoi(aoi);
+  map.fitBounds(
+    [
+      [west, south],
+      [east, north],
+    ],
+    { padding: 48, duration: 600, maxZoom: 16 },
+  );
+}
+
 interface GeoMapProps {
   className?: string;
 }
@@ -202,7 +320,10 @@ export default function GeoMap({ className }: GeoMapProps) {
   const mapRef = useRef<MapLibreMap | null>(null);
   const readyRef = useRef(false);
   const engineRef = useRef<FloodPreviewEngine | null>(null);
-  const canvasScratch = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastUiPush = useRef(0);
+  const draftCorner = useRef<[number, number] | null>(null);
+  const playingLocal = useRef(false);
 
   const layers = useStore((s) => s.geoLayers);
   const floodTime = useStore((s) => s.geoFloodTime);
@@ -211,28 +332,41 @@ export default function GeoMap({ className }: GeoMapProps) {
   const viewMode = useStore((s) => s.geoViewMode);
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const tool = useStore((s) => s.geoTool);
+  const basemapMode = useStore((s) => s.geoBasemapMode);
+  const aoi = useStore((s) => s.geoAoiWgs84);
+  const aoiRevision = useStore((s) => s.geoAoiRevision);
   const setInspectHint = useStore((s) => s.setGeoInspectHint);
   const setGeoPreview = useStore((s) => s.setGeoPreview);
   const setFloodTime = useStore((s) => s.setGeoFloodTime);
   const setFloodPlaying = useStore((s) => s.setGeoFloodPlaying);
+  const commitGeoAoi = useStore((s) => s.commitGeoAoi);
 
   // Init map + preview engine once.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || mapRef.current) return;
 
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 72;
+    canvasRef.current = canvas;
+
     const reducedMotion = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const low = useStore.getState().geoFloodLowPower;
+    const initialAoi = useStore.getState().geoAoiWgs84;
     const engine = new FloodPreviewEngine({
       lowPower: low,
       reducedMotion,
       waterStyle: useStore.getState().geoWaterStyle,
+      domain: aoiIsValid(initialAoi) ? domainFromAoi(initialAoi, low) : undefined,
+      durationHours: useStore.getState().geoScenario?.durationHours,
     });
     engineRef.current = engine;
 
+    const mode = useStore.getState().geoBasemapMode;
     const map = new maplibregl.Map({
       container: el,
-      style: BASE_STYLE,
+      style: buildBaseStyle(mode),
       center: GEO_MAP_CENTER,
       zoom: GEO_MAP_ZOOM,
       pitch: 0,
@@ -242,7 +376,10 @@ export default function GeoMap({ className }: GeoMapProps) {
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
 
-    const pushPreview = (artifacts: PreviewRenderArtifacts) => {
+    const pushPreviewThrottled = (artifacts: PreviewRenderArtifacts, force = false) => {
+      const now = performance.now();
+      if (!force && now - lastUiPush.current < UI_THROTTLE_MS) return;
+      lastUiPush.current = now;
       const { frame } = artifacts;
       setGeoPreview({
         backend: frame.backend,
@@ -265,49 +402,94 @@ export default function GeoMap({ className }: GeoMapProps) {
       }
     };
 
-    const applyArtifacts = (artifacts: PreviewRenderArtifacts) => {
-      if (!readyRef.current || !mapRef.current) return;
-      ensurePreviewLayers(mapRef.current, artifacts);
-      pushPreview(artifacts);
+    const applyArtifacts = (artifacts: PreviewRenderArtifacts, forceUi = false) => {
+      if (!readyRef.current || !mapRef.current || !canvasRef.current) return;
+      if (!engineRef.current?.hasBoundDomain()) {
+        setLayerVis(mapRef.current, FLOOD_RASTER_LAYER, false);
+        setLayerVis(mapRef.current, SHORE_LAYER, false);
+        setLayerVis(mapRef.current, PARTICLES_LAYER, false);
+        return;
+      }
+      ensurePreviewLayers(mapRef.current, artifacts, canvasRef.current);
+      pushPreviewThrottled(artifacts, forceUi);
     };
 
     map.on("load", () => {
-      ensureStaticSources(map);
-      readyRef.current = true;
       const state = useStore.getState();
-      const byId = Object.fromEntries(state.geoLayers.map((l) => [l.id, l]));
-      if (byId.basemap && map.getLayer("osm-raster")) {
-        map.setPaintProperty(
-          "osm-raster",
-          "raster-opacity",
-          byId.basemap.visible ? byId.basemap.opacity : 0,
+      ensureStaticSources(map, state.geoAoiWgs84);
+      if (aoiIsValid(state.geoAoiWgs84)) {
+        (map.getSource(AOI_SRC) as maplibregl.GeoJSONSource).setData(
+          aoiPolygonGeoJson(state.geoAoiWgs84),
         );
+        fitAoi(map, state.geoAoiWgs84);
       }
-      setLayerVis(map, "waterways-line", !!byId.waterways?.visible);
-      setLayerVis(map, "gauges-circle", !!byId.gauges?.visible);
+      readyRef.current = true;
+      const byId = Object.fromEntries(state.geoLayers.map((l) => [l.id, l]));
+      setLayerVis(map, "waterways-line", !!byId.waterways?.visible && aoiIsValid(state.geoAoiWgs84));
+      setLayerVis(map, "gauges-circle", !!byId.gauges?.visible && aoiIsValid(state.geoAoiWgs84));
       if (state.geoViewMode === "3d") {
         map.jumpTo({ pitch: 55, bearing: -18 });
       }
 
       void engine.whenReady().then(() => {
+        if (!engine.hasBoundDomain()) return;
         const art = engine.seek(state.geoFloodTime);
-        applyArtifacts(art);
+        applyArtifacts(art, true);
         setLayerVis(map, FLOOD_RASTER_LAYER, !!byId.flood_depth?.visible || !!byId.flood_hazard?.visible);
         setLayerVis(map, SHORE_LAYER, !!byId.flood_depth?.visible);
         setLayerVis(map, PARTICLES_LAYER, !!byId.flood_velocity?.visible);
       });
     });
 
+    map.on("mousedown", (e) => {
+      if (useStore.getState().geoTool !== "drawAoi") return;
+      e.preventDefault();
+      draftCorner.current = [e.lngLat.lng, e.lngLat.lat];
+      map.dragPan.disable();
+    });
+
+    map.on("mousemove", (e) => {
+      if (useStore.getState().geoTool !== "drawAoi" || !draftCorner.current) return;
+      const [lng0, lat0] = draftCorner.current;
+      const draft = normalizeAoi([lng0, lat0, e.lngLat.lng, e.lngLat.lat]);
+      const src = map.getSource(AOI_DRAFT_SRC) as maplibregl.GeoJSONSource | undefined;
+      src?.setData(aoiPolygonGeoJson(draft));
+    });
+
+    map.on("mouseup", (e) => {
+      if (useStore.getState().geoTool !== "drawAoi" || !draftCorner.current) return;
+      const [lng0, lat0] = draftCorner.current;
+      draftCorner.current = null;
+      map.dragPan.enable();
+      const box = normalizeAoi([lng0, lat0, e.lngLat.lng, e.lngLat.lat]);
+      const src = map.getSource(AOI_DRAFT_SRC) as maplibregl.GeoJSONSource | undefined;
+      src?.setData(emptyFc());
+      if (!aoiIsValid(box)) {
+        setInspectHint("Drag a larger rectangle for the AOI");
+        return;
+      }
+      void commitGeoAoi(box);
+    });
+
     map.on("click", (e) => {
       const t = useStore.getState().geoTool;
-      const preview = useStore.getState().geoPreview;
+      if (t === "drawAoi") return;
       if (t === "inspect") {
-        const depth = preview?.maxDepthM;
-        setInspectHint(
-          depth != null
-            ? `Inspect ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)} — preview max depth ${depth.toFixed(2)} m (${preview?.backend ?? "?"})`
-            : `Inspect ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)} — flood sample pending`,
-        );
+        const eng = engineRef.current;
+        const sample = eng?.hasBoundDomain()
+          ? eng.sampleAtLngLat(e.lngLat.lng, e.lngLat.lat)
+          : null;
+        if (sample) {
+          setInspectHint(
+            `Inspect ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)} — depth ${sample.depthM.toFixed(2)} m · |v| ${sample.speedMs.toFixed(2)} m/s (${eng?.getBackend() ?? "?"})`,
+          );
+        } else if (!eng?.hasBoundDomain()) {
+          setInspectHint("Draw an AOI first, then inspect flood depth under the cursor");
+        } else {
+          setInspectHint(
+            `Inspect ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)} — outside flood domain`,
+          );
+        }
       } else if (t === "measure") {
         setInspectHint("Measure: click two points (stub — distance tool not connected yet)");
       } else if (t === "profile") {
@@ -319,21 +501,22 @@ export default function GeoMap({ className }: GeoMapProps) {
     mapRef.current = map;
 
     let unlistenSim: (() => void) | undefined;
-    void api.onSimEvent((ev: SimEvent) => {
-      if (ev.kind !== "checkpoint") return;
-      // Only scientific / demo ANUGA-side streams feed comparison.
-      if (ev.mode === "preview") return;
-      if (ev.maxDepthM == null && ev.wetFraction == null && ev.massM3 == null) return;
-      const cp: ScientificCheckpoint = {
-        timeS: ev.simTimeHours * 3600,
-        maxDepthM: ev.maxDepthM ?? 0,
-        wetFraction: ev.wetFraction ?? 0,
-        massM3: ev.massM3 ?? 0,
-      };
-      engineRef.current?.ingestCheckpoint(cp);
-    }).then((u) => {
-      unlistenSim = u;
-    });
+    void api
+      .onSimEvent((ev: SimEvent) => {
+        if (ev.kind !== "checkpoint") return;
+        if (ev.mode === "preview") return;
+        if (ev.maxDepthM == null && ev.wetFraction == null && ev.massM3 == null) return;
+        const cp: ScientificCheckpoint = {
+          timeS: ev.simTimeHours * 3600,
+          maxDepthM: ev.maxDepthM ?? 0,
+          wetFraction: ev.wetFraction ?? 0,
+          massM3: ev.massM3 ?? 0,
+        };
+        engineRef.current?.ingestCheckpoint(cp);
+      })
+      .then((u) => {
+        unlistenSim = u;
+      });
 
     return () => {
       unlistenSim?.();
@@ -344,9 +527,74 @@ export default function GeoMap({ className }: GeoMapProps) {
       setGeoPreview(null);
       map.remove();
       mapRef.current = null;
-      canvasScratch.current = null;
+      canvasRef.current = null;
     };
-  }, [setInspectHint, setGeoPreview]);
+  }, [setInspectHint, setGeoPreview, commitGeoAoi]);
+
+  // Basemap mode toggle (satellite vs low-bandwidth).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    const satellite = basemapMode === "satellite";
+    setLayerVis(map, "esri-imagery", satellite);
+    setLayerVis(map, "carto-dark", !satellite);
+    const basemap = Object.fromEntries(layers.map((l) => [l.id, l])).basemap;
+    const opacity = basemap?.visible ? basemap.opacity : 0;
+    if (map.getLayer("esri-imagery")) {
+      map.setPaintProperty("esri-imagery", "raster-opacity", satellite ? opacity : 0);
+    }
+    if (map.getLayer("carto-dark")) {
+      map.setPaintProperty("carto-dark", "raster-opacity", satellite ? 0 : opacity);
+    }
+  }, [basemapMode, layers]);
+
+  // AOI commit → rebind soft-solver + fit + network stubs.
+  useEffect(() => {
+    const map = mapRef.current;
+    const engine = engineRef.current;
+    if (!map || !readyRef.current || !engine) return;
+
+    ensureStaticSources(map, aoi);
+    if (aoiIsValid(aoi)) {
+      (map.getSource(AOI_SRC) as maplibregl.GeoJSONSource)?.setData(aoiPolygonGeoJson(aoi));
+      const domain = domainFromAoi(aoi, lowPower);
+      const plan = useStore.getState().geoExtentPlan;
+      if (plan?.previewCellM && plan.previewCellM > 0) {
+        domain.dxM = Math.max(4, plan.previewCellM);
+        domain.cols = Math.max(24, Math.round(((aoi[2] - aoi[0]) * 111320 * Math.cos((((aoi[1] + aoi[3]) / 2) * Math.PI) / 180)) / domain.dxM));
+        domain.rows = Math.max(16, Math.round(((aoi[3] - aoi[1]) * 111320) / domain.dxM));
+      }
+      engine.rebindDomain(domain, useStore.getState().geoScenario?.durationHours);
+      const art = engine.seek(useStore.getState().geoFloodTime);
+      if (canvasRef.current) ensurePreviewLayers(map, art, canvasRef.current);
+      setGeoPreview({
+        backend: art.frame.backend,
+        validation: art.frame.validation,
+        maxDepthM: art.frame.stats.maxDepthM,
+        wetFraction: art.frame.stats.wetFraction,
+        massM3: art.frame.stats.massM3,
+        maxSpeedMs: art.frame.stats.maxSpeedMs,
+        hazardClass: art.frame.stats.hazardClass,
+        cfl: art.frame.stats.cfl,
+      });
+      fitAoi(map, aoi);
+      const byId = Object.fromEntries(useStore.getState().geoLayers.map((l) => [l.id, l]));
+      setLayerVis(map, FLOOD_RASTER_LAYER, !!byId.flood_depth?.visible || !!byId.flood_hazard?.visible);
+      setLayerVis(map, SHORE_LAYER, !!byId.flood_depth?.visible);
+      setLayerVis(map, PARTICLES_LAYER, !!byId.flood_velocity?.visible);
+      setLayerVis(map, "waterways-line", !!byId.waterways?.visible);
+      setLayerVis(map, "gauges-circle", !!byId.gauges?.visible);
+    } else {
+      (map.getSource(AOI_SRC) as maplibregl.GeoJSONSource)?.setData(emptyFc());
+      engine.clearBoundDomain();
+      setLayerVis(map, FLOOD_RASTER_LAYER, false);
+      setLayerVis(map, SHORE_LAYER, false);
+      setLayerVis(map, PARTICLES_LAYER, false);
+      setLayerVis(map, "waterways-line", false);
+      setLayerVis(map, "gauges-circle", false);
+      setGeoPreview(null);
+    }
+  }, [aoi, aoiRevision, lowPower, setGeoPreview]);
 
   // Layer visibility / opacity.
   useEffect(() => {
@@ -355,40 +603,52 @@ export default function GeoMap({ className }: GeoMapProps) {
 
     const byId = Object.fromEntries(layers.map((l) => [l.id, l]));
     const basemap = byId.basemap;
-    if (basemap && map.getLayer("osm-raster")) {
-      map.setPaintProperty("osm-raster", "raster-opacity", basemap.visible ? basemap.opacity : 0);
+    const opacity = basemap?.visible ? basemap.opacity : 0;
+    const satellite = useStore.getState().geoBasemapMode === "satellite";
+    if (map.getLayer("esri-imagery")) {
+      map.setPaintProperty("esri-imagery", "raster-opacity", satellite ? opacity : 0);
+    }
+    if (map.getLayer("carto-dark")) {
+      map.setPaintProperty("carto-dark", "raster-opacity", satellite ? 0 : opacity);
     }
 
+    const hasDomain = !!engineRef.current?.hasBoundDomain();
     const flood = byId.flood_depth;
     const hazard = byId.flood_hazard;
-    const floodOn = !!(flood?.visible || (waterStyle === "hazard" && hazard?.visible));
-    setLayerVis(map, FLOOD_RASTER_LAYER, floodOn || !!(hazard?.visible && waterStyle === "hazard"));
-    setLayerVis(map, SHORE_LAYER, !!flood?.visible && (waterStyle === "contour" || waterStyle === "depth"));
+    const floodOn =
+      hasDomain && !!(flood?.visible || (waterStyle === "hazard" && hazard?.visible));
+    setLayerVis(map, FLOOD_RASTER_LAYER, floodOn || !!(hasDomain && hazard?.visible && waterStyle === "hazard"));
+    setLayerVis(
+      map,
+      SHORE_LAYER,
+      hasDomain && !!flood?.visible && (waterStyle === "contour" || waterStyle === "depth"),
+    );
     if (flood && map.getLayer(FLOOD_RASTER_LAYER)) {
       map.setPaintProperty(FLOOD_RASTER_LAYER, "raster-opacity", flood.opacity);
     }
 
-    setLayerVis(map, PARTICLES_LAYER, !!byId.flood_velocity?.visible);
+    setLayerVis(map, PARTICLES_LAYER, hasDomain && !!byId.flood_velocity?.visible);
 
     const waterways = byId.waterways;
-    setLayerVis(map, "waterways-line", !!waterways?.visible);
+    setLayerVis(map, "waterways-line", hasDomain && !!waterways?.visible);
     if (waterways && map.getLayer("waterways-line")) {
       map.setPaintProperty("waterways-line", "line-opacity", waterways.opacity);
     }
 
     const gauges = byId.gauges;
-    setLayerVis(map, "gauges-circle", !!gauges?.visible);
+    setLayerVis(map, "gauges-circle", hasDomain && !!gauges?.visible);
   }, [layers, waterStyle]);
 
-  // Scrub / water style → seek preview.
+  // Scrub / water style → seek preview (throttled while playing to avoid React thrash).
   useEffect(() => {
+    if (playingLocal.current) return;
     const engine = engineRef.current;
     const map = mapRef.current;
-    if (!engine || !map || !readyRef.current) return;
+    if (!engine || !map || !readyRef.current || !engine.hasBoundDomain()) return;
     engine.setWaterStyle(waterStyle);
     engine.setLowPower(lowPower);
     const art = engine.seek(floodTime);
-    ensurePreviewLayers(map, art);
+    if (canvasRef.current) ensurePreviewLayers(map, art, canvasRef.current);
     setGeoPreview({
       backend: art.frame.backend,
       validation: art.frame.validation,
@@ -401,36 +661,69 @@ export default function GeoMap({ className }: GeoMapProps) {
     });
   }, [floodTime, waterStyle, lowPower, setGeoPreview]);
 
-  // Play loop — advances normalised time; preview seek interpolates display frames.
+  // Play loop — advances map directly; throttles React store updates.
   useEffect(() => {
-    if (!floodPlaying) return;
+    if (!floodPlaying) {
+      playingLocal.current = false;
+      return;
+    }
     const reduced = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (reduced) {
       setFloodPlaying(false);
       return;
     }
+    const engine = engineRef.current;
+    if (!engine?.hasBoundDomain()) {
+      setFloodPlaying(false);
+      setInspectHint("Draw an AOI before playing the flood preview");
+      return;
+    }
+
+    playingLocal.current = true;
     let raf = 0;
     let last = performance.now();
-    // Full scenario in ~36s wall time (12 h → 36 s ⇒ 1200×).
+    let lastStore = 0;
+    let playhead = useStore.getState().geoFloodTime;
     const rate = lowPower ? 800 : 1200;
-    const durationS = (useStore.getState().geoScenario?.durationHours ?? 12) * 3600;
+    const durationS = engine.durationS || (useStore.getState().geoScenario?.durationHours ?? 12) * 3600;
 
     const tick = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const cur = useStore.getState().geoFloodTime;
-      const next = cur + (dt * rate) / durationS;
-      if (next >= 1) {
+      // Local playhead avoids thrashing React every frame; store updates are throttled.
+      playhead = Math.min(1, playhead + (dt * rate) / durationS);
+      const art = engine.seek(playhead);
+      if (mapRef.current && canvasRef.current) {
+        ensurePreviewLayers(mapRef.current, art, canvasRef.current);
+      }
+      if (now - lastStore >= UI_THROTTLE_MS || playhead >= 1) {
+        lastStore = now;
+        setFloodTime(playhead);
+        setGeoPreview({
+          backend: art.frame.backend,
+          validation: art.frame.validation,
+          maxDepthM: art.frame.stats.maxDepthM,
+          wetFraction: art.frame.stats.wetFraction,
+          massM3: art.frame.stats.massM3,
+          maxSpeedMs: art.frame.stats.maxSpeedMs,
+          hazardClass: art.frame.stats.hazardClass,
+          cfl: art.frame.stats.cfl,
+        });
+      }
+      if (playhead >= 1) {
         setFloodTime(1);
         setFloodPlaying(false);
+        playingLocal.current = false;
         return;
       }
-      setFloodTime(next);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [floodPlaying, lowPower, setFloodPlaying, setFloodTime]);
+    return () => {
+      cancelAnimationFrame(raf);
+      playingLocal.current = false;
+    };
+  }, [floodPlaying, lowPower, setFloodPlaying, setFloodTime, setGeoPreview, setInspectHint]);
 
   // 2D / 3D.
   useEffect(() => {
@@ -453,7 +746,15 @@ export default function GeoMap({ className }: GeoMapProps) {
     if (!map) return;
     const canvas = map.getCanvas();
     canvas.style.cursor =
-      tool === "pan" ? "" : tool === "inspect" ? "help" : tool === "measure" ? "crosshair" : "cell";
+      tool === "pan"
+        ? ""
+        : tool === "inspect"
+          ? "help"
+          : tool === "drawAoi"
+            ? "crosshair"
+            : tool === "measure"
+              ? "crosshair"
+              : "cell";
   }, [tool]);
 
   return (

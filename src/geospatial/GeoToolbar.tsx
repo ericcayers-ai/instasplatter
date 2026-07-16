@@ -1,5 +1,5 @@
 import { useStore } from "../state/store";
-import type { GeoTool, GeoViewMode } from "./types";
+import type { GeoBasemapMode, GeoTool, GeoViewMode } from "./types";
 
 export default function GeoToolbar() {
   const viewMode = useStore((s) => s.geoViewMode);
@@ -9,6 +9,10 @@ export default function GeoToolbar() {
   const inspectHint = useStore((s) => s.geoInspectHint);
   const rightPanelOpen = useStore((s) => s.rightPanelOpen);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
+  const basemapMode = useStore((s) => s.geoBasemapMode);
+  const setBasemapMode = useStore((s) => s.setGeoBasemapMode);
+  const aoi = useStore((s) => s.geoAoiWgs84);
+  const clearGeoAoi = useStore((s) => s.clearGeoAoi);
 
   const modes: { id: GeoViewMode; label: string }[] = [
     { id: "2d", label: "2D" },
@@ -16,9 +20,14 @@ export default function GeoToolbar() {
   ];
   const tools: { id: GeoTool; label: string; title: string }[] = [
     { id: "pan", label: "Pan", title: "Pan and zoom the map" },
-    { id: "inspect", label: "Inspect", title: "Click a point for coordinates (solver values later)" },
+    { id: "drawAoi", label: "AOI", title: "Draw or replace the flood area of interest" },
+    { id: "inspect", label: "Inspect", title: "Click to sample flood depth under the cursor" },
     { id: "measure", label: "Measure", title: "Distance measure — stub until survey tools land" },
     { id: "profile", label: "Profile", title: "Cross-section profile — stub until DEM tools land" },
+  ];
+  const basemaps: { id: GeoBasemapMode; label: string; title: string }[] = [
+    { id: "satellite", label: "Satellite", title: "Esri World Imagery (attribution required)" },
+    { id: "lowBandwidth", label: "Low BW", title: "Carto dark / OSM fallback" },
   ];
 
   return (
@@ -43,6 +52,25 @@ export default function GeoToolbar() {
         </div>
 
         <div className="flex overflow-hidden rounded border border-edge bg-panel/90 shadow-sm backdrop-blur-sm">
+          {basemaps.map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              title={b.title}
+              onClick={() => setBasemapMode(b.id)}
+              className={`px-2.5 py-1 text-[11px] transition ${
+                basemapMode === b.id
+                  ? "bg-[color-mix(in_srgb,var(--color-hydro)_18%,transparent)] text-[var(--color-hydro)]"
+                  : "text-ink-dim hover:text-ink"
+              }`}
+              aria-pressed={basemapMode === b.id}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex overflow-hidden rounded border border-edge bg-panel/90 shadow-sm backdrop-blur-sm">
           {tools.map((t) => (
             <button
               key={t.id}
@@ -60,6 +88,17 @@ export default function GeoToolbar() {
             </button>
           ))}
         </div>
+
+        {aoi && (
+          <button
+            type="button"
+            className="btn bg-panel/90 text-[11px] backdrop-blur-sm"
+            onClick={() => clearGeoAoi()}
+            title="Clear AOI and unbind flood domain"
+          >
+            Clear AOI
+          </button>
+        )}
 
         <button
           type="button"

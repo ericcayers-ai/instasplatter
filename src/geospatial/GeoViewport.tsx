@@ -17,13 +17,15 @@ export default function GeoViewport() {
   const queueItems = useStore((s) => s.queueItems);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const preview = useStore((s) => s.geoPreview);
+  const scientific = useStore((s) => s.geoScientificRun);
+  const aoi = useStore((s) => s.geoAoiWgs84);
+  const setTool = useStore((s) => s.setGeoTool);
   const geoQueue = queueItems.filter((i) => (i.suite ?? "reconstruction") === "geospatial");
   const [catalog, setCatalog] = useState<GeoCatalogInfo | null>(null);
   const [showImport, setShowImport] = useState(false);
 
   useEffect(() => {
     void api.getGeoCatalogInfo().then(setCatalog).catch(() => setCatalog(null));
-    // Scenario panel is useful on first enter; user can hide it.
     setRightPanelOpen(true);
   }, [setRightPanelOpen]);
 
@@ -56,15 +58,43 @@ export default function GeoViewport() {
     if (paths.length) void enqueueJobs(paths, "geospatial");
   };
 
+  const authority =
+    scientific?.mode === "anuga"
+      ? "Scientific"
+      : scientific?.mode === "demo"
+        ? "Demo"
+        : "Live preview";
+
   return (
     <div className="geo-viewport geo-field flex h-full min-h-0 flex-col" data-water-style="depth">
       <div className="relative min-h-0 flex-1">
         <GeoMap />
         <GeoToolbar />
 
-        <div className="pointer-events-none absolute right-3 top-12 z-10">
+        <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">
           <div className="pointer-events-auto">
             <PreviewBadge validation={preview?.validation ?? "live"} backend={preview?.backend} />
+          </div>
+          <div className="pointer-events-none flex flex-wrap justify-end gap-1">
+            <span
+              className="rounded border border-edge bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-dim backdrop-blur-sm"
+              title="Flood result authority for the current domain"
+            >
+              {authority}
+            </span>
+            {aoi ? (
+              <span className="rounded border border-[var(--color-hydro)]/35 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-hydro)] backdrop-blur-sm">
+                AOI bound
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="pointer-events-auto rounded border border-[var(--color-gauge)]/40 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-gauge)] backdrop-blur-sm"
+                onClick={() => setTool("drawAoi")}
+              >
+                Draw AOI
+              </button>
+            )}
           </div>
         </div>
 
@@ -85,8 +115,8 @@ export default function GeoViewport() {
           {showImport && (
             <div className="pointer-events-auto float-in rounded border border-edge bg-panel/95 p-3 text-[11px] shadow-sm backdrop-blur-sm">
               <p className="leading-relaxed text-ink-dim">
-                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Start a scientific flood from
-                the scenario panel (ANUGA or labelled demo when the engine is missing).
+                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Draw an AOI anywhere, then start a
+                scientific flood from the scenario panel (ANUGA or labelled demo when the engine is missing).
               </p>
               {catalog && (
                 <div className="mt-2 space-y-1 text-ink-dim">

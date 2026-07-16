@@ -9,8 +9,9 @@ function lerp(a: number, b: number, t: number): number {
 export function sampleHydrograph(
   t01: number,
   series: HydrographSample[] = PLACEHOLDER_HYDROGRAPH,
+  durationHours: number = PLACEHOLDER_SCENARIO.durationHours,
 ): { hours: number; stageM: number; dischargeCms: number } {
-  const duration = PLACEHOLDER_SCENARIO.durationHours;
+  const duration = durationHours > 0 ? durationHours : PLACEHOLDER_SCENARIO.durationHours;
   const hours = Math.max(0, Math.min(1, t01)) * duration;
   if (series.length === 0) return { hours, stageM: 0, dischargeCms: 0 };
   if (hours <= series[0].hours) {
@@ -47,8 +48,9 @@ export function floodSnapshotFromTime(
     backend?: GeoFloodSnapshot["backend"];
     validation?: GeoFloodSnapshot["validation"];
   } | null,
+  durationHours: number = PLACEHOLDER_SCENARIO.durationHours,
 ): GeoFloodSnapshot {
-  const { hours, stageM, dischargeCms } = sampleHydrograph(t01);
+  const { hours, stageM, dischargeCms } = sampleHydrograph(t01, PLACEHOLDER_HYDROGRAPH, durationHours);
   const peakStage = Math.max(...PLACEHOLDER_HYDROGRAPH.map((s) => s.stageM));
   const intensity = peakStage > 0 ? Math.min(1, stageM / peakStage) : 0;
 

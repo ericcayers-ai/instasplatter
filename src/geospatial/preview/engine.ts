@@ -52,9 +52,9 @@ type Listener = (artifacts: PreviewRenderArtifacts) => void;
  * scientific checkpoint comparison hooks, and MapLibre-ready rasters.
  */
 export class FloodPreviewEngine {
-  readonly domain: PreviewDomain;
+  domain: PreviewDomain;
   readonly capabilities: PreviewCapabilities;
-  readonly durationS: number;
+  durationS: number;
   readonly cfl: number;
 
   private backend: PreviewBackend = "cpu";
@@ -85,12 +85,14 @@ export class FloodPreviewEngine {
 
   private ready = false;
   private initPromise: Promise<void>;
+  private bound = false;
 
   constructor(opts: PreviewEngineOptions = {}) {
     this.lowPower = !!opts.lowPower;
     this.capabilities = detectPreviewCapabilities({ lowPower: this.lowPower });
     this.reducedMotion = opts.reducedMotion ?? this.capabilities.reducedMotion;
     this.domain = resolveDomain(opts.domain, this.lowPower);
+    this.bound = !!opts.domain?.bounds;
     this.durationS = (opts.durationHours ?? PLACEHOLDER_SCENARIO.durationHours) * 3600;
     this.cfl = opts.cfl ?? (this.lowPower ? 0.25 : 0.4);
     this.waterStyle = opts.waterStyle ?? "depth";
@@ -105,6 +107,69 @@ export class FloodPreviewEngine {
     this.lastStats = computeStats(this.state, 0, this.cfl);
 
     this.initPromise = this.initAccelerator();
+  }
+
+  /** True once the engine has been rebound to a user AOI (or constructed with one). */
+  hasBoundDomain(): boolean {
+    return this.bound;
+  }
+
+  /** Drop AOI binding (hides flood until a new domain is committed). */
+  clearBoundDomain(): void {
+    this.bound = false;
+    this.particles = [];
+    this.image = null;
+    this.checkpoints = [];
+    this.lastCompare = null;
+    this.validation = "live";
+  }
+
+  /**
+   * Rebuild soft-solver grids for a new AOI / resolution plan.
+   * Clears keyframes and scientific comparison state.
+   */
+  rebindDomain(partial: Partial<PreviewDomain>, durationHours?: number): void {
+    this.domain = resolveDomain(partial, this.lowPower);
+    this.bound = true;
+    if (durationHours != null && Number.isFinite(durationHours) && durationHours > 0) {
+      this.durationS = durationHours * 3600;
+    }
+    this.keyframeEveryS = this.lowPower ? 1800 : 900;
+    const { cols, rows, dxM } = this.domain;
+    this.state = createEmptyState(cols, rows, dxM, 0);
+    this.state.z = buildSyntheticBed(cols, rows);
+    this.prev = cloneState(this.state);
+    this.curr = cloneState(this.state);
+    this.display = cloneState(this.state);
+    this.lastStats = computeStats(this.state, 0, this.cfl);
+    this.keyframes = [];
+    this.image = null;
+    this.particles = [];
+    this.checkpoints = [];
+    this.lastCompare = null;
+    this.validation = "live";
+    this.captureKeyframe();
+  }
+
+  /** Per-pixel depth/velocity sample under a WGS84 click. */
+  sampleAtLngLat(lng: number, lat: number): {
+    depthM: number;
+    speedMs: number;
+    u: number;
+    v: number;
+    i: number;
+    j: number;
+  } | null {
+    const [west, south, east, north] = this.domain.bounds;
+    if (lng < west || lng > east || lat < south || lat > north) return null;
+    const { cols, rows } = this.display;
+    const i = Math.max(0, Math.min(cols - 1, Math.floor(((lng - west) / (east - west || 1e-12)) * cols)));
+    const j = Math.max(0, Math.min(rows - 1, Math.floor(((lat - south) / (north - south || 1e-12)) * rows)));
+    const k = j * cols + i;
+    const depthM = this.display.h[k] ?? 0;
+    const u = this.display.u[k] ?? 0;
+    const v = this.display.v[k] ?? 0;
+    return { depthM, speedMs: Math.hypot(u, v), u, v, i, j };
   }
 
   private async initAccelerator(): Promise<void> {
@@ -191,7 +256,8 @@ export class FloodPreviewEngine {
   }
 
   sampleForcing(t01: number): PreviewForcing {
-    const { stageM, dischargeCms } = sampleHydrograph(t01);
+    const durationHours = this.durationS / 3600;
+    const { stageM, dischargeCms } = sampleHydrograph(t01, undefined, durationHours);
     const peak = 2.35;
     const intensity = peak > 0 ? Math.min(1.4, stageM / peak) : 0;
     return {
