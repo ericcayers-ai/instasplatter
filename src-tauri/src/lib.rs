@@ -391,6 +391,25 @@ fn plan_geo_extent(
     geospatial::registration::plan_extent(&input)
 }
 
+/// Persist a WGS84 AOI on the flood scenario, refresh geo origin, and return an extent plan.
+#[tauri::command]
+fn commit_flood_aoi(
+    workspace: String,
+    scenario_id: String,
+    aoi_wgs84: [f64; 4],
+) -> Result<serde_json::Value, String> {
+    let (scenario, plan, geo) = geospatial::hydro::commit_flood_aoi(
+        &PathBuf::from(workspace),
+        &scenario_id,
+        aoi_wgs84,
+    )?;
+    Ok(serde_json::json!({
+        "scenario": scenario,
+        "extentPlan": plan,
+        "geoReference": geo,
+    }))
+}
+
 /// Load current GeoReference from a project (if any).
 #[tauri::command]
 fn get_geo_reference(workspace: String) -> Result<Option<project::GeoReference>, String> {
