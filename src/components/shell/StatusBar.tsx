@@ -25,6 +25,8 @@ export default function StatusBar() {
   const viewMode = useStore((s) => s.geoViewMode);
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const preview = useStore((s) => s.geoPreview);
+  const scientific = useStore((s) => s.geoScientificRun);
+  const pipelineChips = useStore((s) => s.pipelineChips);
   const geoSnap = useMemo(
     () => floodSnapshotFromTime(floodTime, preview),
     [floodTime, preview],
@@ -38,6 +40,12 @@ export default function StatusBar() {
   void tick;
 
   if (suite === "geospatial") {
+    const floodPct =
+      scientific?.state === "running"
+        ? Math.round(scientific.progress * 100)
+        : scientific?.state === "done"
+          ? 100
+          : null;
     return (
       <div className="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-3 text-[11px] tabular-nums text-ink-dim">
         <div className="flex min-w-0 items-center gap-4 overflow-hidden">
@@ -46,6 +54,17 @@ export default function StatusBar() {
             {preview?.validation === "validated" ? "Validated" : "Live preview"}
             {preview?.backend ? ` · ${preview.backend}` : ""}
           </span>
+          {scientific && (
+            <span title={scientific.detail}>
+              Flood {scientific.state}
+              {floodPct != null ? ` ${floodPct}%` : ""}
+            </span>
+          )}
+          {pipelineChips.export && (
+            <span className="max-w-48 truncate" title={pipelineChips.export}>
+              {pipelineChips.export.replace(/^Export:\s*/i, "Export · ")}
+            </span>
+          )}
           <span>{geoSnap.statusLabel}</span>
           <span>
             t {geoSnap.hours.toFixed(1)} h · depth {geoSnap.maxDepthM.toFixed(2)} m ·{" "}
@@ -81,6 +100,7 @@ export default function StatusBar() {
   const running = !resultPath && !jobError;
   const elapsed = elapsedSecs ?? (jobStartedAt ? (Date.now() - jobStartedAt) / 1000 : 0);
   const trainStage = stages.find((s) => s.id === "train");
+  const activeStage = stages.find((s) => s.state === "active");
   const eta =
     running && trainStage?.state === "active" && latestIter > 100 && totalSteps > 0
       ? (elapsed / latestIter) * (totalSteps - latestIter)
@@ -92,10 +112,30 @@ export default function StatusBar() {
   return (
     <div className="flex h-6 shrink-0 items-center justify-between border-t border-edge bg-panel px-3 text-[11px] tabular-nums text-ink-dim">
       <div className="flex items-center gap-4">
-        <span>{jobError ? "Failed" : resultPath ? "Complete" : (stages.find((s) => s.state === "active")?.detail || "Preparing")}</span>
+        <span>
+          {jobError
+            ? "Failed"
+            : resultPath
+              ? "Complete"
+              : activeStage
+                ? `${activeStage.detail || activeStage.label}${
+                    activeStage.progress > 0 ? ` ${Math.round(activeStage.progress * 100)}%` : ""
+                  }`
+                : "Preparing"}
+        </span>
         {solvingCameras && (
           <span>
             {registeredCameras} / {totalCameras} cameras, {Math.round(trackingConfidence * 100)}% confidence
+          </span>
+        )}
+        {pipelineChips.cameras && (
+          <span className="max-w-40 truncate" title={pipelineChips.cameras}>
+            {pipelineChips.cameras.replace(/^Cameras:\s*/i, "")}
+          </span>
+        )}
+        {pipelineChips.init && (
+          <span className="max-w-40 truncate" title={pipelineChips.init}>
+            {pipelineChips.init.replace(/^Init:\s*/i, "")}
           </span>
         )}
         <span>splats {splatCount.toLocaleString()}</span>

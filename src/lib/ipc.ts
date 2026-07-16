@@ -143,7 +143,17 @@ export type JobEvent =
   | { kind: "stageStarted"; jobId: string; stage: string; label: string }
   | { kind: "stageProgress"; jobId: string; stage: string; progress: number; detail: string }
   | { kind: "log"; jobId: string; line: string }
+  | { kind: "camerasReset"; jobId: string }
   | CameraRegistered
+  | {
+      kind: "ingestPreview";
+      jobId: string;
+      frameCount: number;
+      path: [number, number, number][];
+    }
+  | { kind: "sparseCloudReady"; jobId: string; path: string; pointCount: number }
+  | { kind: "denseCloudReady"; jobId: string; path: string; pointCount: number }
+  | { kind: "meshReady"; jobId: string; path: string; triangleCount: number }
   /** Something the user should know that is not a failure. */
   | { kind: "notice"; jobId: string; message: string }
   | { kind: "splatReady"; jobId: string; path: string; iter: number; totalSteps: number }
@@ -243,6 +253,60 @@ export interface FloodEngineStatus {
   demoAvailable: boolean;
 }
 
+export interface ExtentPlanInput {
+  cameraEnu?: [number, number, number][];
+  splatBoundsEnu?: [number, number, number, number, number, number] | null;
+  demBoundsEnu?: [number, number, number, number] | null;
+  demAccuracyM?: number | null;
+  previewBudgetCells?: number | null;
+  enuOrigin?: [number, number, number] | null;
+  geoReference?: GeoReference | null;
+}
+
+export interface ExtentPlan {
+  workingCrs: string;
+  enuOrigin: [number, number, number];
+  boundsEnu: [number, number, number, number];
+  extentDiagM: number;
+  demResolutionM: number;
+  previewCellM: number;
+  scientificMeshMaxAreaM2: number;
+  regionalMeshMaxAreaM2: number;
+  terrainTileLevels: number[];
+  scaleStatus: string;
+  notes: string[];
+}
+
+export interface GeoReference {
+  sourceCrs?: string | null;
+  verticalDatum?: string | null;
+  units?: string | null;
+  workingCrs?: string | null;
+  ecefToEnu?: number[] | null;
+  enuToEcef?: number[] | null;
+  localOrigin?: [number, number, number] | null;
+  localOriginEcef?: [number, number, number] | null;
+  uncertaintyM?: number | null;
+  gcpResidualM?: number | null;
+  gcpResidualMaxM?: number | null;
+  provenance?: string | null;
+  scaleStatus?: string | null;
+}
+
+export interface FloodScenarioDto {
+  id: string;
+  name: string;
+  aoiWgs84?: [number, number, number, number] | null;
+  validationState?: string | null;
+  solverSettings?: Record<string, unknown> | null;
+}
+
+export interface CommitFloodAoiResult {
+  scenario: FloodScenarioDto;
+  extentPlan: ExtentPlan;
+  geoReference?: GeoReference | null;
+}
+
 export interface FloodExportArtifact {
   kind: string;
   path: string;
@@ -326,6 +390,27 @@ export const api = {
   getGeoCatalogInfo: () => invoke<GeoCatalogInfo>("get_geo_catalog_info"),
 
   getFloodEngineStatus: () => invoke<FloodEngineStatus>("get_flood_engine_status"),
+  planGeoExtent: (input: ExtentPlanInput) => invoke<ExtentPlan>("plan_geo_extent", { input }),
+  computeGeoReference: (workspace: string, originLonLatH?: [number, number, number] | null) =>
+    invoke<{
+      geoReference: GeoReference;
+      cameraCount: number;
+      telemetryCount: number;
+      matchedFrames: number;
+      warnings: string[];
+      posePriorsPath?: string | null;
+    }>("compute_geo_reference", {
+      workspace,
+      originLonLatH: originLonLatH ?? null,
+    }),
+  getGeoReference: (workspace: string) =>
+    invoke<GeoReference | null>("get_geo_reference", { workspace }),
+  commitFloodAoi: (workspace: string, scenarioId: string, aoiWgs84: [number, number, number, number]) =>
+    invoke<CommitFloodAoiResult>("commit_flood_aoi", {
+      workspace,
+      scenarioId,
+      aoiWgs84,
+    }),
   startScientificFlood: (
     workspace: string,
     scenarioId: string,

@@ -101,10 +101,111 @@ function SuiteSwitch() {
   );
 }
 
+function ReconStageStrip() {
+  const stages = useStore((s) => s.stages);
+  const pipelineChips = useStore((s) => s.pipelineChips);
+
+  return (
+    <div className="ml-2 hidden items-center gap-2.5 sm:flex">
+      {stages.map((s) => {
+        const pct =
+          s.state === "active" && s.progress > 0
+            ? ` ${Math.round(s.progress * 100)}%`
+            : s.state === "done"
+              ? ""
+              : "";
+        return (
+          <span
+            key={s.id}
+            className={`flex items-center gap-1.5 text-[11px] ${
+              s.state === "active" ? "text-ink" : "text-ink-dim"
+            }`}
+            title={s.detail || s.label}
+          >
+            <StageDot state={s.state} />
+            {s.label}
+            {pct && <span className="tabular-nums text-accent2">{pct.trim()}</span>}
+          </span>
+        );
+      })}
+      {(pipelineChips.cameras || pipelineChips.init || pipelineChips.trainer) && (
+        <span className="ml-1 hidden items-center gap-1 lg:flex">
+          {[pipelineChips.cameras, pipelineChips.init, pipelineChips.trainer]
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((c) => (
+              <span
+                key={c}
+                className="max-w-36 truncate rounded border border-edge bg-panel2/80 px-1.5 py-0.5 text-[9px] text-ink-dim"
+                title={c}
+              >
+                {c!.replace(/^(Cameras|Init|Polish|Trainer):\s*/i, "")}
+              </span>
+            ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function GeoStageStrip() {
+  const scientific = useStore((s) => s.geoScientificRun);
+  const pipelineChips = useStore((s) => s.pipelineChips);
+  const preview = useStore((s) => s.geoPreview);
+
+  const floodState: "pending" | "active" | "done" = !scientific
+    ? "pending"
+    : scientific.state === "running"
+      ? "active"
+      : scientific.state === "done"
+        ? "done"
+        : "pending";
+  const exportState: "pending" | "active" | "done" = pipelineChips.export
+    ? pipelineChips.export.includes("failed")
+      ? "pending"
+      : "done"
+    : "pending";
+
+  return (
+    <div className="ml-2 hidden items-center gap-2.5 sm:flex">
+      <span
+        className={`flex items-center gap-1.5 text-[11px] ${
+          floodState === "active" ? "text-ink" : "text-ink-dim"
+        }`}
+        title={scientific?.detail || "Flood"}
+      >
+        <StageDot state={floodState} />
+        Flood
+        {floodState === "active" && scientific && (
+          <span className="tabular-nums text-[var(--color-hydro)]">
+            {Math.round(scientific.progress * 100)}%
+          </span>
+        )}
+      </span>
+      <span className="flex items-center gap-1.5 text-[11px] text-ink-dim" title="Export products">
+        <StageDot state={exportState} />
+        Export
+      </span>
+      {preview && (
+        <span className="rounded border border-edge bg-panel2/80 px-1.5 py-0.5 text-[9px] text-ink-dim">
+          Preview · {preview.backend}
+        </span>
+      )}
+      {pipelineChips.flood && (
+        <span
+          className="max-w-40 truncate rounded border border-[var(--color-hydro)]/30 bg-panel2/80 px-1.5 py-0.5 text-[9px] text-ink-dim"
+          title={pipelineChips.flood}
+        >
+          {pipelineChips.flood.replace(/^Flood:\s*/i, "")}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function TitleBar() {
   const screen = useStore((s) => s.screen);
   const suite = useStore((s) => s.suite);
-  const stages = useStore((s) => s.stages);
   const inputPath = useStore((s) => s.inputPath);
   const workspace = useStore((s) => s.workspace);
   const resultPath = useStore((s) => s.resultPath);
@@ -117,10 +218,12 @@ export default function TitleBar() {
   const toggleRightPanel = useStore((s) => s.toggleRightPanel);
   const leftPanelOpen = useStore((s) => s.leftPanelOpen);
   const setLeftPanelOpen = useStore((s) => s.setLeftPanelOpen);
+  const setAboutOpen = useStore((s) => s.setAboutOpen);
 
   const running = screen === "processing" && !resultPath && !jobError;
   const name = inputPath?.split(/[\\/]/).pop() ?? workspace?.split(/[\\/]/).pop() ?? "";
   const showReconChrome = suite === "reconstruction" && screen === "processing";
+  const showGeoChrome = suite === "geospatial";
 
   return (
     <div className="flex h-10 shrink-0 items-center justify-between border-b border-edge bg-panel px-3">
@@ -138,16 +241,10 @@ export default function TitleBar() {
           <>
             <span className="text-ink-dim">/</span>
             <span className="max-w-56 truncate text-xs text-ink-dim">{name}</span>
-            <div className="ml-2 hidden items-center gap-3 sm:flex">
-              {stages.map((s) => (
-                <span key={s.id} className="flex items-center gap-1.5 text-[11px] text-ink-dim">
-                  <StageDot state={s.state} />
-                  {s.label}
-                </span>
-              ))}
-            </div>
+            <ReconStageStrip />
           </>
         )}
+        {showGeoChrome && <GeoStageStrip />}
       </div>
 
       <div className="flex items-center gap-2">
@@ -177,6 +274,13 @@ export default function TitleBar() {
           </>
         )}
         <ThemeToggle />
+        <button
+          onClick={() => setAboutOpen(true)}
+          className="btn"
+          title="About implementations, licenses, and docs"
+        >
+          About
+        </button>
         <button
           onClick={toggleRightPanel}
           className={`btn ${rightPanelOpen ? "btn-active" : ""}`}

@@ -17,7 +17,9 @@ import type {
 } from "../lib/ipc";
 import { api } from "../lib/ipc";
 import { DEFAULT_GEO_LAYERS, PLACEHOLDER_SCENARIO } from "../geospatial/defaults";
+import { aoiIsValid, aoiToEnuBox, domainFromAoi, normalizeAoi, type AoiWgs84 } from "../geospatial/aoi";
 import type {
+  GeoBasemapMode,
   GeoLayer,
   GeoPreviewRuntime,
   GeoScenarioMeta,
@@ -26,6 +28,7 @@ import type {
   GeoViewMode,
   GeoWaterStyle,
 } from "../geospatial/types";
+import type { ExtentPlan } from "../lib/ipc";
 
 export type Screen = "home" | "processing";
 export type ThemePreference = "system" | "light" | "dark";
@@ -108,13 +111,17 @@ interface AppStore {
   logs: LogLine[];
   /** Plain statements the pipeline made that are not failures. */
   notices: string[];
-  /** Status chips emitted by the pipeline (Cameras / Init / Polish / Trainer). */
+  /** Status chips emitted by the pipeline (Cameras / Init / Polish / Trainer / Flood / Export). */
   pipelineChips: {
     cameras?: string;
     init?: string;
     polish?: string;
     trainer?: string;
+    flood?: string;
+    export?: string;
   };
+  /** About / implementations panel. */
+  aboutOpen: boolean;
   /** Cameras the live-init engine has solved, in registration order. */
   cameras: CameraRegistered[];
   registeredCameras: number;
@@ -131,6 +138,22 @@ interface AppStore {
   jobStartedAt: number;
   elapsedSecs: number | null;
   meshStatus: string | null;
+  /** Live recon stage layers (paths + visibility). */
+  sparseCloudPath: string | null;
+  denseCloudPath: string | null;
+  latestMeshPath: string | null;
+  sparsePointCount: number;
+  densePointCount: number;
+  ingestFrameCount: number;
+  ingestPath: [number, number, number][];
+  reconLayers: {
+    cameras: boolean;
+    cameraPath: boolean;
+    sparse: boolean;
+    dense: boolean;
+    splat: boolean;
+    mesh: boolean;
+  };
   /** First-enable Experimental Mode license modal. */
   experimentalModalOpen: boolean;
 
@@ -155,6 +178,14 @@ interface AppStore {
   geoFloodEngine: FloodEngineStatus | null;
   /** Latest scientific checkpoint GeoJSON for the depth layer (WGS84 or local). */
   geoScientificExtent: GeoJSON.FeatureCollection | null;
+  /** Committed AOI (WGS84). Null until the user draws/edits a box. */
+  geoAoiWgs84: AoiWgs84 | null;
+  /** Esri satellite (default) or low-bandwidth Carto/OSM. */
+  geoBasemapMode: GeoBasemapMode;
+  /** Last extent plan from AOI commit (preview cell size etc.). */
+  geoExtentPlan: ExtentPlan | null;
+  /** Bumped when AOI is committed so the map engine can rebind. */
+  geoAoiRevision: number;
 
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
@@ -165,6 +196,10 @@ interface AppStore {
   toggleGeoFloodPlaying: () => void;
   setGeoFloodLowPower: (on: boolean) => void;
   setGeoPreview: (runtime: GeoPreviewRuntime | null) => void;
+  setGeoBasemapMode: (mode: GeoBasemapMode) => void;
+  /** Draw/edit commit: persist AOI, plan extent, rebind soft-solver domain. */
+  commitGeoAoi: (aoi: AoiWgs84) => Promise<void>;
+  clearGeoAoi: () => void;
   startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
   cancelScientificFlood: () => Promise<void>;
   exportFloodProducts: () => Promise<void>;
@@ -179,6 +214,7 @@ interface AppStore {
   setRightPanelOpen: (open: boolean) => void;
   toggleRightPanel: () => void;
   setLogConsoleOpen: (open: boolean) => void;
+  setAboutOpen: (open: boolean) => void;
   updateSettings: (patch: Partial<Settings>) => Promise<void>;
   requestExperimental: () => void;
   acceptExperimental: () => Promise<void>;
@@ -197,6 +233,7 @@ interface AppStore {
   handleJobEvent: (e: JobEvent) => void;
   setSplatCount: (n: number) => void;
   setFps: (n: number) => void;
+  setReconLayer: (id: keyof AppStore["reconLayers"], visible: boolean) => void;
   exportSplatAction: (rotation?: number[] | null) => Promise<void>;
   exportMeshAction: () => Promise<void>;
   exportDiagnosticsAction: () => Promise<void>;
@@ -254,7 +291,23 @@ export const useStore = create<AppStore>((set, get) => ({
   jobStartedAt: 0,
   elapsedSecs: null,
   meshStatus: null,
+  sparseCloudPath: null,
+  denseCloudPath: null,
+  latestMeshPath: null,
+  sparsePointCount: 0,
+  densePointCount: 0,
+  ingestFrameCount: 0,
+  ingestPath: [],
+  reconLayers: {
+    cameras: true,
+    cameraPath: true,
+    sparse: true,
+    dense: true,
+    splat: true,
+    mesh: true,
+  },
   experimentalModalOpen: false,
+  aboutOpen: false,
 
   geoLayers: DEFAULT_GEO_LAYERS.map((l) => ({ ...l })),
   geoFloodTime: 0.35,
@@ -269,6 +322,10 @@ export const useStore = create<AppStore>((set, get) => ({
   geoScientificRun: null,
   geoFloodEngine: null,
   geoScientificExtent: null,
+  geoAoiWgs84: null,
+  geoBasemapMode: "satellite",
+  geoExtentPlan: null,
+  geoAoiRevision: 0,
 
   init: async () => {
     // React StrictMode double-invokes effects in dev; init exactly once.
@@ -381,6 +438,81 @@ export const useStore = create<AppStore>((set, get) => ({
 
   setGeoPreview: (runtime) => set({ geoPreview: runtime }),
 
+  setGeoBasemapMode: (mode) => set({ geoBasemapMode: mode }),
+
+  clearGeoAoi: () => {
+    set({
+      geoAoiWgs84: null,
+      geoExtentPlan: null,
+      geoAoiRevision: get().geoAoiRevision + 1,
+      geoScenario: {
+        ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+        aoiWgs84: null,
+      },
+      geoInspectHint: "Draw an AOI to bind the flood domain",
+    });
+  },
+
+  commitGeoAoi: async (raw) => {
+    if (!aoiIsValid(raw)) {
+      set({ geoInspectHint: "AOI must be a non-empty rectangle" });
+      return;
+    }
+    const aoi = normalizeAoi(raw);
+    const domain = domainFromAoi(aoi, get().geoFloodLowPower);
+    const { origin, demBoundsEnu } = aoiToEnuBox(aoi);
+    let extentPlan: ExtentPlan | null = null;
+    let persistNote = "AOI set (local preview)";
+
+    try {
+      extentPlan = await api.planGeoExtent({
+        cameraEnu: [],
+        demBoundsEnu,
+        demAccuracyM: 2,
+        previewBudgetCells: 1024,
+        enuOrigin: origin,
+      });
+      if (extentPlan?.previewCellM && extentPlan.previewCellM > 0) {
+        domain.dxM = Math.max(domain.dxM, extentPlan.previewCellM);
+      }
+    } catch {
+      // Planner is pure; if invoke fails (tests / missing IPC), keep local domain.
+    }
+
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? null;
+    }
+
+    const scenarioId = get().geoScenario?.id ?? PLACEHOLDER_SCENARIO.id;
+    if (workspace) {
+      try {
+        const result = await api.commitFloodAoi(workspace, scenarioId, aoi);
+        extentPlan = result.extentPlan ?? extentPlan;
+        persistNote = "AOI saved on project";
+        set({ workspace });
+      } catch (err) {
+        persistNote = `AOI local only (${String(err)})`;
+      }
+    }
+
+    set({
+      geoAoiWgs84: aoi,
+      geoExtentPlan: extentPlan,
+      geoAoiRevision: get().geoAoiRevision + 1,
+      geoScenario: {
+        ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+        aoiWgs84: aoi,
+      },
+      geoTool: "pan",
+      geoInspectHint: `${persistNote} · ${domain.cols}×${domain.rows} @ ${domain.dxM.toFixed(1)} m`,
+      geoFloodPlaying: false,
+    });
+  },
+
   startScientificFlood: async (opts) => {
     let workspace = get().workspace;
     if (!workspace) {
@@ -480,30 +612,38 @@ export const useStore = create<AppStore>((set, get) => ({
       const auth = result.authoritative
         ? "calibrated scientific"
         : "non-authoritative (demo/preview/uncalibrated)";
-      set({
+      set((s) => ({
         workspace,
         geoScientificRun: {
           runId: result.runId,
-          state: get().geoScientificRun?.state ?? "done",
-          progress: get().geoScientificRun?.progress ?? 1,
+          state: s.geoScientificRun?.state ?? "done",
+          progress: s.geoScientificRun?.progress ?? 1,
           detail: `Exported ${n} products → ${result.exportDir} (${auth})`,
-          mode: result.mode ?? get().geoScientificRun?.mode,
-          label: get().geoScientificRun?.label,
-          massBalance: get().geoScientificRun?.massBalance,
+          mode: result.mode ?? s.geoScientificRun?.mode,
+          label: s.geoScientificRun?.label,
+          massBalance: s.geoScientificRun?.massBalance,
         },
-      });
+        pipelineChips: {
+          ...s.pipelineChips,
+          export: `Export: ${n} products (${auth})`,
+        },
+      }));
     } catch (err) {
-      set({
+      set((s) => ({
         geoScientificRun: {
-          runId: get().geoScientificRun?.runId ?? "",
-          state: get().geoScientificRun?.state ?? "failed",
-          progress: get().geoScientificRun?.progress ?? 0,
+          runId: s.geoScientificRun?.runId ?? "",
+          state: s.geoScientificRun?.state ?? "failed",
+          progress: s.geoScientificRun?.progress ?? 0,
           detail: `Export failed: ${String(err)}`,
-          mode: get().geoScientificRun?.mode,
-          label: get().geoScientificRun?.label,
-          massBalance: get().geoScientificRun?.massBalance,
+          mode: s.geoScientificRun?.mode,
+          label: s.geoScientificRun?.label,
+          massBalance: s.geoScientificRun?.massBalance,
         },
-      });
+        pipelineChips: {
+          ...s.pipelineChips,
+          export: `Export: failed`,
+        },
+      }));
     }
   },
 
@@ -519,6 +659,10 @@ export const useStore = create<AppStore>((set, get) => ({
                 progress: e.progress,
                 detail: e.detail,
               },
+          pipelineChips: {
+            ...s.pipelineChips,
+            flood: `Flood: ${e.detail || "running"} (${Math.round(e.progress * 100)}%)`,
+          },
         }));
         break;
       case "runDone":
@@ -531,6 +675,10 @@ export const useStore = create<AppStore>((set, get) => ({
             mode: e.mode,
             massBalance: e.massBalance,
             label: e.mode === "demo" ? "Demo mode — synthetic extents" : undefined,
+          },
+          pipelineChips: {
+            ...s.pipelineChips,
+            flood: e.mode === "demo" ? "Flood: demo complete" : "Flood: scientific complete",
           },
           geoScenario: {
             ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
@@ -598,6 +746,10 @@ export const useStore = create<AppStore>((set, get) => ({
           progress: e.progress,
           detail: e.detail,
           mode: e.mode,
+        },
+        pipelineChips: {
+          ...s.pipelineChips,
+          flood: `Flood: ${e.detail || e.mode || "checkpoint"} (${Math.round(e.progress * 100)}%)`,
         },
         geoScenario:
           e.mode === "demo"
@@ -679,6 +831,8 @@ export const useStore = create<AppStore>((set, get) => ({
     writeBool(LOG_CONSOLE_KEY, open);
     set({ logConsoleOpen: open });
   },
+
+  setAboutOpen: (open) => set({ aboutOpen: open }),
 
   updateSettings: async (patch) => {
     const next = { ...get().settings, ...patch };
@@ -784,6 +938,13 @@ export const useStore = create<AppStore>((set, get) => ({
       jobStartedAt: Date.now(),
       jobSettingsSnapshot: get().resolved,
       meshStatus: null,
+      sparseCloudPath: null,
+      denseCloudPath: null,
+      latestMeshPath: null,
+      sparsePointCount: 0,
+      densePointCount: 0,
+      ingestFrameCount: 0,
+      ingestPath: [],
     });
     try {
       // Make sure engines are present (first-run download).
@@ -856,13 +1017,20 @@ export const useStore = create<AppStore>((set, get) => ({
       notices: [],
       pipelineChips: {},
       meshStatus: null,
+      sparseCloudPath: null,
+      denseCloudPath: null,
+      latestMeshPath: null,
+      sparsePointCount: 0,
+      densePointCount: 0,
+      ingestFrameCount: 0,
+      ingestPath: [],
     });
     void get().refreshProjects();
   },
 
   handleJobEvent: (e) => {
     const { jobId } = get();
-    if (jobId && e.jobId !== jobId) return;
+    if (jobId && e.jobId && e.jobId !== jobId) return;
     switch (e.kind) {
       case "stageStarted":
         set((s) => ({
@@ -897,8 +1065,13 @@ export const useStore = create<AppStore>((set, get) => ({
           else if (/^Init:/i.test(msg)) chips.init = msg;
           else if (/^Polish:/i.test(msg)) chips.polish = msg;
           else if (/^Trainer:/i.test(msg)) chips.trainer = msg;
+          else if (/^Flood:/i.test(msg)) chips.flood = msg;
+          else if (/^Export:/i.test(msg)) chips.export = msg;
           return { notices: [...s.notices, msg], pipelineChips: chips };
         });
+        break;
+      case "camerasReset":
+        set({ cameras: [], registeredCameras: 0, trackingConfidence: 0 });
         break;
       case "cameraRegistered":
         set((s) => ({
@@ -907,6 +1080,21 @@ export const useStore = create<AppStore>((set, get) => ({
           totalCameras: e.total,
           trackingConfidence: e.confidence,
         }));
+        break;
+      case "ingestPreview":
+        set({
+          ingestFrameCount: e.frameCount,
+          ingestPath: e.path,
+        });
+        break;
+      case "sparseCloudReady":
+        set({ sparseCloudPath: e.path, sparsePointCount: e.pointCount });
+        break;
+      case "denseCloudReady":
+        set({ denseCloudPath: e.path, densePointCount: e.pointCount });
+        break;
+      case "meshReady":
+        set({ latestMeshPath: e.path });
         break;
       case "splatReady":
         set({ latestSplatPath: e.path, latestIter: e.iter, totalSteps: e.totalSteps });
@@ -934,6 +1122,8 @@ export const useStore = create<AppStore>((set, get) => ({
 
   setSplatCount: (n) => set({ splatCount: n }),
   setFps: (n) => set({ fps: n }),
+  setReconLayer: (id, visible) =>
+    set((s) => ({ reconLayers: { ...s.reconLayers, [id]: visible } })),
 
   exportSplatAction: async (rotation) => {
     const { resultPath, workspace, settings } = get();
@@ -978,7 +1168,10 @@ export const useStore = create<AppStore>((set, get) => ({
     );
     try {
       const triangles = await api.exportMesh(workspace, resultPath, dest);
-      set({ meshStatus: `Wrote ${triangles.toLocaleString()} triangles to ${dest}` });
+      set({
+        meshStatus: `Wrote ${triangles.toLocaleString()} triangles to ${dest}`,
+        latestMeshPath: dest,
+      });
     } catch (err) {
       set({ meshStatus: String(err) });
     } finally {

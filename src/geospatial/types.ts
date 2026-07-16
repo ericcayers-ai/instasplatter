@@ -21,7 +21,13 @@ export type GeoViewMode = "2d" | "3d";
 
 export type GeoWaterStyle = "depth" | "hazard" | "contour";
 
-export type GeoTool = "pan" | "measure" | "inspect" | "profile";
+export type GeoTool = "pan" | "measure" | "inspect" | "profile" | "drawAoi";
+
+/** Basemap: Esri World Imagery (default) or low-bandwidth Carto/OSM. */
+export type GeoBasemapMode = "satellite" | "lowBandwidth";
+
+/** WGS84 AOI: west, south, east, north (degrees). */
+export type AoiWgs84 = [number, number, number, number];
 
 export interface GeoLayer {
   id: string;
@@ -83,6 +89,8 @@ export interface GeoScenarioMeta {
   durationHours: number;
   engineLabel: string;
   note: string;
+  /** Committed AOI when set (mirrors FloodScenario.aoiWgs84). */
+  aoiWgs84?: AoiWgs84 | null;
 }
 
 /** Scientific / demo flood run feed for the inspector and map. */

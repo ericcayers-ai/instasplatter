@@ -5,6 +5,7 @@ import GeoViewport from "./geospatial/GeoViewport";
 import TitleBar from "./components/shell/TitleBar";
 import ExperimentalBanner from "./components/shell/ExperimentalBanner";
 import ExperimentalLicenseModal from "./components/shell/ExperimentalLicenseModal";
+import AboutPanel from "./components/shell/AboutPanel";
 import SceneTree from "./components/shell/SceneTree";
 import PropertiesPanel from "./components/shell/PropertiesPanel";
 import LogConsole from "./components/shell/LogConsole";
@@ -41,6 +42,7 @@ export default function App() {
       <LogConsole />
       <StatusBar />
       <ExperimentalLicenseModal />
+      <AboutPanel />
     </div>
   );
 }

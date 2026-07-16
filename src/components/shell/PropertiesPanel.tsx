@@ -1,6 +1,7 @@
 import { useStore } from "../../state/store";
 import type { Settings } from "../../lib/ipc";
 import GeoScenarioInspector from "../../geospatial/GeoScenarioInspector";
+import CollapsibleSection from "./CollapsibleSection";
 
 const PRESETS = [
   { id: null, label: "Auto" },
@@ -111,15 +112,6 @@ function BoolSelect({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border-b border-edge px-3 py-3">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">{title}</div>
-      <div className="divide-y divide-edge/60">{children}</div>
-    </div>
-  );
-}
-
 export default function PropertiesPanel() {
   const open = useStore((s) => s.rightPanelOpen);
   const suite = useStore((s) => s.suite);
@@ -131,6 +123,7 @@ export default function PropertiesPanel() {
   const resultPath = useStore((s) => s.resultPath);
   const jobError = useStore((s) => s.jobError);
   const updateSettings = useStore((s) => s.updateSettings);
+  const experimentalOn = !!(resolved?.experimentalMode);
 
   if (!open) return null;
   if (suite === "geospatial") return <GeoScenarioInspector />;
@@ -163,7 +156,7 @@ export default function PropertiesPanel() {
                 postPolish: null, trainer: null, gsplatStrategy: null,
                 gsplatAbsgrad: null, gsplatAntialiased: null,
                 gsplatAppearance: null, gsplatBilateralGrid: null,
-                exportFormat: null,
+                exportFormat: null, defaultSuite: null,
               })
             }
             className="text-[10px] text-ink-dim hover:text-ink"
@@ -182,7 +175,7 @@ export default function PropertiesPanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-1.5 p-3">
+      <div className="grid grid-cols-3 gap-1.5 border-b border-edge p-3">
         {PRESETS.map((p) => {
           const active = (settings.preset ?? null) === p.id;
           return (
@@ -198,38 +191,13 @@ export default function PropertiesPanel() {
         })}
       </div>
 
-      <Section title="Mode">
-        <Row
-          label="Experimental Mode"
-          hint="NC research stack (VGGT-Ω, MASt3R, DUSt3R, Difix). Requires a one-time license ack. Prefer the TitleBar toggle."
-        >
-          <BoolSelect
-            value={
-              resolved
-                ? resolved.experimentalMode
-                : settings.experimentalMode === true && settings.experimentalLicenseAcked === true
-                  ? true
-                  : settings.experimentalMode === false
-                    ? false
-                    : null
-            }
-            onChange={(v) => {
-              if (v === true) {
-                useStore.getState().requestExperimental();
-              } else {
-                set({ experimentalMode: false, allowResearchSidecars: false });
-              }
-            }}
-          />
-        </Row>
-        {resolved?.experimentalMode && (
-          <div className="px-0 py-2 text-[10px] text-danger/90">
-            Research sidecars are unlocked for this session. Standard Mode never runs NC models.
-          </div>
-        )}
-      </Section>
+      {experimentalOn && (
+        <div className="border-b border-danger/30 bg-danger/10 px-3 py-2 text-[10px] leading-snug text-danger/90">
+          Experimental Mode is on via the TitleBar. NC research sidecars are unlocked for this session.
+        </div>
+      )}
 
-      <Section title="Input">
+      <CollapsibleSection title="Input" defaultOpen>
         <Row label="Max frames" hint="Frames used for reconstruction">
           <AutoNumber value={settings.maxFrames} autoValue={resolved?.maxFrames} min={10} max={2000} step={10} onChange={(v) => set({ maxFrames: v })} />
         </Row>
@@ -239,9 +207,9 @@ export default function PropertiesPanel() {
         <Row label="Blur rejection" hint="Fraction of blurriest frames dropped">
           <AutoNumber value={settings.blurRejectFraction} autoValue={resolved?.blurRejectFraction} min={0} max={0.9} step={0.05} onChange={(v) => set({ blurRejectFraction: v })} />
         </Row>
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Camera solving">
+      <CollapsibleSection title="Cameras" defaultOpen>
         <Row label="Matcher" hint="Sequential suits video, exhaustive suits unordered photos">
           <AutoSelect
             value={settings.matcher}
@@ -261,9 +229,9 @@ export default function PropertiesPanel() {
         <Row label="GPU feature extraction" hint="Requires NVIDIA CUDA">
           <BoolSelect value={settings.siftGpu} onChange={(v) => set({ siftGpu: v })} />
         </Row>
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Training">
+      <CollapsibleSection title="Training" defaultOpen>
         <Row label="Total steps" hint="More steps means a sharper result and a longer run">
           <AutoNumber value={settings.totalSteps} autoValue={resolved?.totalSteps} min={500} max={100000} step={500} onChange={(v) => set({ totalSteps: v })} />
         </Row>
@@ -292,6 +260,70 @@ export default function PropertiesPanel() {
             onChange={(v) => set({ trainer: v })}
           />
         </Row>
+        <Row label="Live update every" hint="Steps between Brush checkpoints; the viewport interpolates between them">
+          <AutoNumber value={settings.exportEvery} autoValue={resolved?.exportEvery} min={100} max={5000} step={100} onChange={(v) => set({ exportEvery: v })} />
+        </Row>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Cleanliness" defaultOpen={false}>
+        <Row label="Clean vs. detailed" hint="Higher means stronger floater suppression; lower keeps fine detail">
+          <button
+            onClick={() => set({ strictness: settings.strictness == null ? 0.5 : null })}
+            className={`btn px-2 py-0.5 text-[10px] ${settings.strictness == null ? "btn-active" : ""}`}
+          >
+            Auto
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            disabled={settings.strictness == null}
+            value={settings.strictness ?? resolved?.strictness ?? 0.5}
+            onChange={(e) => set({ strictness: Number(e.target.value) })}
+            className={`w-28 ${settings.strictness == null ? "opacity-40" : ""}`}
+          />
+        </Row>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Output" defaultOpen={false}>
+        <Row label="Export format" hint="Offered first in the export dialog">
+          <AutoSelect
+            value={settings.exportFormat ?? null}
+            options={[
+              { id: "ply", label: "PLY" },
+              { id: "splat", label: "Splat" },
+              { id: "spz", label: "SPZ" },
+            ]}
+            onChange={(v) => set({ exportFormat: v })}
+          />
+        </Row>
+        <Row label="Keep intermediates" hint="Keep frames and the COLMAP database on disk">
+          <BoolSelect value={settings.keepIntermediates} onChange={(v) => set({ keepIntermediates: v })} onLabel="Keep" offLabel="Clean up" />
+        </Row>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Geospatial" defaultOpen={false}>
+        <Row
+          label="Default suite"
+          hint="Preferred suite when the app starts. Switch suites anytime from the TitleBar."
+        >
+          <AutoSelect
+            value={settings.defaultSuite ?? null}
+            options={[
+              { id: "reconstruction", label: "Reconstruction" },
+              { id: "geospatial", label: "Geospatial" },
+            ]}
+            onChange={(v) => set({ defaultSuite: v as "reconstruction" | "geospatial" | null })}
+          />
+        </Row>
+        <div className="py-2 text-[10px] leading-snug text-ink-dim">
+          AOI, basemap, flood engine, and water style live in the Geospatial suite Settings panel
+          (switch suite from the TitleBar).
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Advanced" defaultOpen={false}>
         <Row
           label="gsplat strategy"
           hint="Mutually exclusive densify strategies: MCMC (floater-resistant cap) or Default + AbsGrad (steerable densify). AbsGrad is only active for Default."
@@ -305,7 +337,6 @@ export default function PropertiesPanel() {
             onChange={(v) =>
               set({
                 gsplatStrategy: v,
-                // Keep stored absgrad coherent with the chosen strategy.
                 gsplatAbsgrad: v === "default" ? true : false,
               })
             }
@@ -338,6 +369,19 @@ export default function PropertiesPanel() {
         >
           <BoolSelect value={settings.denseInit} onChange={(v) => set({ denseInit: v })} />
         </Row>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Experimental engines"
+        defaultOpen={false}
+        tone="danger"
+        badge={experimentalOn ? "ON" : "off"}
+      >
+        <div className="py-2 text-[10px] leading-snug text-ink-dim">
+          Toggle Experimental Mode from the TitleBar (requires a one-time NC license ack). These
+          knobs only affect Standard densifiers / polish; NC research sidecars stay gated by the
+          TitleBar toggle.
+        </div>
         <Row
           label="Neural densifiers"
           hint="AND with MVS / RoMa when present (DA3 / MapAnything / VGGT-Commercial). Experimental evaluates Ω / MASt3R / DUSt3R then confidence-fuses."
@@ -350,48 +394,7 @@ export default function PropertiesPanel() {
         >
           <BoolSelect value={settings.postPolish} onChange={(v) => set({ postPolish: v })} />
         </Row>
-        <Row label="Live update every" hint="Steps between Brush checkpoints; the viewport interpolates between them">
-          <AutoNumber value={settings.exportEvery} autoValue={resolved?.exportEvery} min={100} max={5000} step={100} onChange={(v) => set({ exportEvery: v })} />
-        </Row>
-      </Section>
-
-      <Section title="Cleanliness">
-        <Row label="Clean vs. detailed" hint="Higher means stronger floater suppression; lower keeps fine detail">
-          <button
-            onClick={() => set({ strictness: settings.strictness == null ? 0.5 : null })}
-            className={`btn px-2 py-0.5 text-[10px] ${settings.strictness == null ? "btn-active" : ""}`}
-          >
-            Auto
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            disabled={settings.strictness == null}
-            value={settings.strictness ?? resolved?.strictness ?? 0.5}
-            onChange={(e) => set({ strictness: Number(e.target.value) })}
-            className={`w-28 ${settings.strictness == null ? "opacity-40" : ""}`}
-          />
-        </Row>
-      </Section>
-
-      <Section title="Output">
-        <Row label="Export format" hint="Offered first in the export dialog">
-          <AutoSelect
-            value={settings.exportFormat ?? null}
-            options={[
-              { id: "ply", label: "PLY" },
-              { id: "splat", label: "Splat" },
-              { id: "spz", label: "SPZ" },
-            ]}
-            onChange={(v) => set({ exportFormat: v })}
-          />
-        </Row>
-        <Row label="Keep intermediates" hint="Keep frames and the COLMAP database on disk">
-          <BoolSelect value={settings.keepIntermediates} onChange={(v) => set({ keepIntermediates: v })} onLabel="Keep" offLabel="Clean up" />
-        </Row>
-      </Section>
+      </CollapsibleSection>
 
       <div className="p-3 text-center text-[10px] text-ink-dim">
         Every setting defaults to Auto, resolved from your hardware profile at job start.
