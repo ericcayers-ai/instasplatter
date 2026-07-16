@@ -176,6 +176,26 @@ pub struct SimulationRun {
     pub mode: Option<String>,
 }
 
+/// Manual override of auto geo pose for the splat layer (translate / rotate / scale).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelTransform {
+    pub translation: [f32; 3],
+    /// Row-major 3×3.
+    pub rotation: [f32; 9],
+    pub scale: [f32; 3],
+}
+
+impl ModelTransform {
+    pub fn identity() -> Self {
+        Self {
+            translation: [0.0, 0.0, 0.0],
+            rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -198,6 +218,9 @@ pub struct Project {
     pub completed: bool,
     /// Orientation the user set in the viewport, row-major 3x3.
     pub model_rotation: Option<[f32; 9]>,
+    /// Manual geo splat TRS override (ENU metres); supersedes auto registration pose when set.
+    #[serde(default)]
+    pub model_transform: Option<ModelTransform>,
 
     // ---- Geospatial (v2; empty for reconstruction-only projects) ----
     #[serde(default)]
@@ -264,6 +287,7 @@ impl Project {
             total_steps: settings.total_steps,
             completed: false,
             model_rotation: None,
+            model_transform: None,
             geo_reference: None,
             geo_layers: Vec::new(),
             flood_scenarios: Vec::new(),

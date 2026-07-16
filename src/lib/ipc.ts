@@ -200,8 +200,15 @@ export interface FormatChoice {
   label: string;
 }
 
-/** Row-major 3x3. */
 export type Mat3 = number[];
+
+/** Geo splat TRS override (ENU metres). */
+export interface ModelTransformDto {
+  translation: [number, number, number];
+  /** Row-major 3×3. */
+  rotation: number[];
+  scale: [number, number, number];
+}
 
 export interface QueueItem {
   id: string;
@@ -460,6 +467,10 @@ export const api = {
   deleteProject: (workspace: string) => invoke<void>("delete_project", { workspace }),
   saveProjectOrientation: (workspace: string, rotation: Mat3) =>
     invoke<void>("save_project_orientation", { workspace, rotation }),
+  saveModelTransform: (workspace: string, transform: ModelTransformDto) =>
+    invoke<void>("save_model_transform", { workspace, transform }),
+  getModelTransform: (workspace: string) =>
+    invoke<ModelTransformDto | null>("get_model_transform", { workspace }),
 
   /** The ground plane of a splat, and the rotation that stands it upright. */
   estimateUpAxis: (splatPath: string, target?: string) =>

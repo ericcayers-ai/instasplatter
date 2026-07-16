@@ -6,11 +6,12 @@ import { api } from "../lib/ipc";
 import BatchQueue from "../components/BatchQueue";
 import GeoMap from "./GeoMap";
 import GeoToolbar from "./GeoToolbar";
+import GeoWorkspace3D from "./GeoWorkspace3D";
 import HydrographTimeline from "./HydrographTimeline";
 import { PreviewBadge } from "./PreviewBadge";
 
 /**
- * Geospatial suite viewport: MapLibre map, tools, hydrograph timeline, and import entry.
+ * Geospatial suite viewport: default 3D ENU workspace, optional 2D satellite MapLibre.
  */
 export default function GeoViewport() {
   const enqueueJobs = useStore((s) => s.enqueueJobs);
@@ -20,6 +21,7 @@ export default function GeoViewport() {
   const scientific = useStore((s) => s.geoScientificRun);
   const aoi = useStore((s) => s.geoAoiWgs84);
   const setTool = useStore((s) => s.setGeoTool);
+  const viewMode = useStore((s) => s.geoViewMode);
   const geoQueue = queueItems.filter((i) => (i.suite ?? "reconstruction") === "geospatial");
   const [catalog, setCatalog] = useState<GeoCatalogInfo | null>(null);
   const [showImport, setShowImport] = useState(false);
@@ -65,40 +67,48 @@ export default function GeoViewport() {
         ? "Demo"
         : "Live preview";
 
+  const is2d = viewMode === "2d";
+
   return (
     <div className="geo-viewport geo-field flex h-full min-h-0 flex-col" data-water-style="depth">
       <div className="relative min-h-0 flex-1">
-        <GeoMap />
+        {is2d ? <GeoMap /> : <GeoWorkspace3D />}
         <GeoToolbar />
 
-        <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">
-          <div className="pointer-events-auto">
-            <PreviewBadge validation={preview?.validation ?? "live"} backend={preview?.backend} />
-          </div>
-          <div className="pointer-events-none flex flex-wrap justify-end gap-1">
-            <span
-              className="rounded border border-edge bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-dim backdrop-blur-sm"
-              title="Flood result authority for the current domain"
-            >
-              {authority}
-            </span>
-            {aoi ? (
-              <span className="rounded border border-[var(--color-hydro)]/35 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-hydro)] backdrop-blur-sm">
-                AOI bound
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="pointer-events-auto rounded border border-[var(--color-gauge)]/40 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-gauge)] backdrop-blur-sm"
-                onClick={() => setTool("drawAoi")}
+        {is2d && (
+          <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">
+            <div className="pointer-events-auto">
+              <PreviewBadge validation={preview?.validation ?? "live"} backend={preview?.backend} />
+            </div>
+            <div className="pointer-events-none flex flex-wrap justify-end gap-1">
+              <span
+                className="rounded border border-edge bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-dim backdrop-blur-sm"
+                title="Flood result authority for the current domain"
               >
-                Draw AOI
-              </button>
-            )}
+                {authority}
+              </span>
+              {aoi ? (
+                <span className="rounded border border-[var(--color-hydro)]/35 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-hydro)] backdrop-blur-sm">
+                  AOI bound
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="pointer-events-auto rounded border border-[var(--color-gauge)]/40 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-gauge)] backdrop-blur-sm"
+                  onClick={() => setTool("drawAoi")}
+                >
+                  Draw AOI
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex max-w-sm flex-col gap-2">
+        <div
+          className={`pointer-events-none absolute z-10 flex max-w-sm flex-col gap-2 ${
+            is2d ? "bottom-3 left-3" : "bottom-3 right-3"
+          }`}
+        >
           <div className="pointer-events-auto flex flex-wrap gap-1.5">
             <button type="button" className="btn bg-panel/90 text-[11px] backdrop-blur-sm" onClick={() => void browse()}>
               Add sources
@@ -115,8 +125,8 @@ export default function GeoViewport() {
           {showImport && (
             <div className="pointer-events-auto float-in rounded border border-edge bg-panel/95 p-3 text-[11px] shadow-sm backdrop-blur-sm">
               <p className="leading-relaxed text-ink-dim">
-                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Draw an AOI anywhere, then start a
-                scientific flood from the scenario panel (ANUGA or labelled demo when the engine is missing).
+                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Draw an AOI on the 2D satellite map,
+                then scrub the live preview in the 3D workspace (ANUGA scientific from the scenario panel).
               </p>
               {catalog && (
                 <div className="mt-2 space-y-1 text-ink-dim">

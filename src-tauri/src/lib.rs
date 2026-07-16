@@ -560,6 +560,26 @@ fn save_project_orientation(workspace: String, rotation: [f32; 9]) -> Result<(),
     proj.save()
 }
 
+/// Persist geo splat TRS (manual override of auto registration pose).
+#[tauri::command]
+fn save_model_transform(
+    workspace: String,
+    transform: project::ModelTransform,
+) -> Result<(), String> {
+    let ws = PathBuf::from(&workspace);
+    let mut proj = Project::load(&ws)?;
+    proj.model_transform = Some(transform);
+    proj.touch();
+    proj.save()
+}
+
+#[tauri::command]
+fn get_model_transform(workspace: String) -> Result<Option<project::ModelTransform>, String> {
+    let ws = PathBuf::from(&workspace);
+    let proj = Project::load(&ws)?;
+    Ok(proj.model_transform)
+}
+
 /// Consume one-shot developer input paths (single or batch). Ignored unless
 /// `INSTASPLATTER_DEV` is set. Shared by Rust setup and the frontend hook so a
 /// path is never started twice (HMR / double mount).
@@ -987,6 +1007,8 @@ pub fn run() {
             list_projects,
             delete_project,
             save_project_orientation,
+            save_model_transform,
+            get_model_transform,
             estimate_up_axis,
             list_export_formats,
             export_splat,

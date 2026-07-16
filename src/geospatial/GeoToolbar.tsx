@@ -14,9 +14,9 @@ export default function GeoToolbar() {
   const aoi = useStore((s) => s.geoAoiWgs84);
   const clearGeoAoi = useStore((s) => s.clearGeoAoi);
 
-  const modes: { id: GeoViewMode; label: string }[] = [
-    { id: "2d", label: "2D" },
-    { id: "3d", label: "3D" },
+  const modes: { id: GeoViewMode; label: string; title: string }[] = [
+    { id: "3d", label: "3D", title: "ENU 3D workspace (terrain, water, splat)" },
+    { id: "2d", label: "2D", title: "2D satellite MapLibre (AOI draw, flood overlay)" },
   ];
   const tools: { id: GeoTool; label: string; title: string }[] = [
     { id: "pan", label: "Pan", title: "Pan and zoom the map" },
@@ -38,6 +38,7 @@ export default function GeoToolbar() {
             <button
               key={m.id}
               type="button"
+              title={m.title}
               onClick={() => setViewMode(m.id)}
               className={`px-2.5 py-1 text-[11px] font-medium transition ${
                 viewMode === m.id

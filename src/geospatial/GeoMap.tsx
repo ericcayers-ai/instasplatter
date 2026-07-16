@@ -24,7 +24,7 @@ import {
   type PreviewRenderArtifacts,
   type ScientificCheckpoint,
 } from "./preview";
-import type { GeoBasemapMode, GeoViewMode } from "./types";
+import type { GeoBasemapMode } from "./types";
 
 const FLOOD_RASTER_SRC = "geo-flood-raster";
 const FLOOD_RASTER_LAYER = "flood-raster";
@@ -292,14 +292,6 @@ function setLayerVis(map: MapLibreMap, id: string, visible: boolean) {
   map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
 }
 
-function applyViewMode(map: MapLibreMap, mode: GeoViewMode) {
-  if (mode === "3d") {
-    map.easeTo({ pitch: 55, bearing: -18, duration: 450 });
-  } else {
-    map.easeTo({ pitch: 0, bearing: 0, duration: 450 });
-  }
-}
-
 function fitAoi(map: MapLibreMap, aoi: AoiWgs84) {
   const [west, south, east, north] = normalizeAoi(aoi);
   map.fitBounds(
@@ -329,7 +321,6 @@ export default function GeoMap({ className }: GeoMapProps) {
   const floodTime = useStore((s) => s.geoFloodTime);
   const floodPlaying = useStore((s) => s.geoFloodPlaying);
   const lowPower = useStore((s) => s.geoFloodLowPower);
-  const viewMode = useStore((s) => s.geoViewMode);
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const tool = useStore((s) => s.geoTool);
   const basemapMode = useStore((s) => s.geoBasemapMode);
@@ -427,9 +418,6 @@ export default function GeoMap({ className }: GeoMapProps) {
       const byId = Object.fromEntries(state.geoLayers.map((l) => [l.id, l]));
       setLayerVis(map, "waterways-line", !!byId.waterways?.visible && aoiIsValid(state.geoAoiWgs84));
       setLayerVis(map, "gauges-circle", !!byId.gauges?.visible && aoiIsValid(state.geoAoiWgs84));
-      if (state.geoViewMode === "3d") {
-        map.jumpTo({ pitch: 55, bearing: -18 });
-      }
 
       void engine.whenReady().then(() => {
         if (!engine.hasBoundDomain()) return;
@@ -724,21 +712,6 @@ export default function GeoMap({ className }: GeoMapProps) {
       playingLocal.current = false;
     };
   }, [floodPlaying, lowPower, setFloodPlaying, setFloodTime, setGeoPreview, setInspectHint]);
-
-  // 2D / 3D.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !readyRef.current) return;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduce) {
-      map.jumpTo({
-        pitch: viewMode === "3d" ? 55 : 0,
-        bearing: viewMode === "3d" ? -18 : 0,
-      });
-    } else {
-      applyViewMode(map, viewMode);
-    }
-  }, [viewMode]);
 
   // Cursor for tools.
   useEffect(() => {

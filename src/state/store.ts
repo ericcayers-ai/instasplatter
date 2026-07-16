@@ -18,6 +18,11 @@ import type {
 import { api } from "../lib/ipc";
 import { DEFAULT_GEO_LAYERS, PLACEHOLDER_SCENARIO } from "../geospatial/defaults";
 import { aoiIsValid, aoiToEnuBox, domainFromAoi, normalizeAoi, type AoiWgs84 } from "../geospatial/aoi";
+import {
+  identityModelTransform,
+  normalizeModelTransform,
+  type ModelTransform,
+} from "../geospatial/modelTransform";
 import type {
   GeoBasemapMode,
   GeoLayer,
@@ -186,6 +191,8 @@ interface AppStore {
   geoExtentPlan: ExtentPlan | null;
   /** Bumped when AOI is committed so the map engine can rebind. */
   geoAoiRevision: number;
+  /** Manual splat TRS in ENU (persisted as modelTransform on project). */
+  geoModelTransform: ModelTransform;
 
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
@@ -209,6 +216,8 @@ interface AppStore {
   setGeoWaterStyle: (style: GeoWaterStyle) => void;
   setGeoTool: (tool: GeoTool) => void;
   setGeoInspectHint: (hint: string | null) => void;
+  setGeoModelTransform: (tf: ModelTransform) => void;
+  persistGeoModelTransform: () => Promise<void>;
   setThemePreference: (p: ThemePreference) => void;
   setLeftPanelOpen: (open: boolean) => void;
   setRightPanelOpen: (open: boolean) => void;
@@ -314,7 +323,7 @@ export const useStore = create<AppStore>((set, get) => ({
   geoFloodPlaying: false,
   geoFloodLowPower: false,
   geoScenario: PLACEHOLDER_SCENARIO,
-  geoViewMode: "2d",
+  geoViewMode: "3d",
   geoWaterStyle: "depth",
   geoTool: "pan",
   geoInspectHint: null,
@@ -326,6 +335,7 @@ export const useStore = create<AppStore>((set, get) => ({
   geoBasemapMode: "satellite",
   geoExtentPlan: null,
   geoAoiRevision: 0,
+  geoModelTransform: identityModelTransform(),
 
   init: async () => {
     // React StrictMode double-invokes effects in dev; init exactly once.
@@ -785,6 +795,18 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   setGeoViewMode: (mode) => set({ geoViewMode: mode }),
+
+  setGeoModelTransform: (tf) => set({ geoModelTransform: normalizeModelTransform(tf) }),
+
+  persistGeoModelTransform: async () => {
+    const { workspace, geoModelTransform } = get();
+    if (!workspace) return;
+    try {
+      await api.saveModelTransform(workspace, geoModelTransform);
+    } catch {
+      // Workspace may be a draft without project.json yet.
+    }
+  },
 
   setGeoWaterStyle: (style) => {
     const layers = get().geoLayers.map((l) => {

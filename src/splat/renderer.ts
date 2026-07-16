@@ -16,12 +16,12 @@ import {
   identity3,
   mat3Mul,
   mat4Mul,
-  modelMatrix,
   orbitBasis,
   orbitBy,
   panBy,
   projectionMatrix,
   rotationBetween,
+  trsModelMatrix,
   viewMatrix,
   zoomAtCursor,
   type CameraState,
@@ -243,6 +243,10 @@ export class SplatRenderer {
   /** Row-major 3x3 model rotation, applied about `pivot`. */
   private modelRot: number[][] = identity3();
   private pivot: Vec3 = [0, 0, 0];
+  /** Optional ENU / geo offset after rotation (metres). */
+  private modelTranslation: Vec3 = [0, 0, 0];
+  /** Optional non-uniform scale about `pivot`. */
+  private modelScale: Vec3 = [1, 1, 1];
   private frustums: { f: CameraFrustum; addedAt: number }[] = [];
   private frustumsDirty = false;
   private lastFrameTime = 0;
@@ -436,8 +440,25 @@ export class SplatRenderer {
     this.lastSortVP = null;
   }
 
+  /** Extra world-space translation after rotation (geo ENU gizmos). */
+  setModelTranslation(t: Vec3) {
+    this.modelTranslation = [...t] as Vec3;
+    this.lastSortVP = null;
+  }
+
+  setModelScale(s: Vec3) {
+    this.modelScale = [
+      Math.max(1e-4, s[0]),
+      Math.max(1e-4, s[1]),
+      Math.max(1e-4, s[2]),
+    ];
+    this.lastSortVP = null;
+  }
+
   resetModelRotation() {
     this.setModelRotation(identity3());
+    this.setModelTranslation([0, 0, 0]);
+    this.setModelScale([1, 1, 1]);
   }
 
   /** Turn the model about a world axis, on top of the current rotation. */
@@ -767,7 +788,12 @@ export class SplatRenderer {
       100 * this.camera.distance,
     );
     const view = viewMatrix(orbitBasis(this.camera));
-    const model = modelMatrix(this.modelRot, this.pivot);
+    const model = trsModelMatrix(
+      this.modelRot,
+      this.pivot,
+      this.modelTranslation,
+      this.modelScale,
+    );
     const focal = h / (2 * Math.tan(this.camera.fovY / 2));
 
     if (this.showSplat && this.count > 0 && this.sortedCount > 0) {

@@ -240,17 +240,41 @@ export function mat4Mul(a: Float32Array, b: Float32Array): Float32Array {
 
 /** Column-major 4x4 from a row-major 3x3 rotation about `pivot`. */
 export function modelMatrix(rot: number[][], pivot: Vec3): Float32Array {
-  // p' = R (p - pivot) + pivot  =>  translation = pivot - R * pivot
+  return trsModelMatrix(rot, pivot);
+}
+
+/**
+ * Column-major 4×4: scale about pivot, then rotate about pivot, then translate.
+ * `p' = R S (p - pivot) + pivot + translation`
+ */
+export function trsModelMatrix(
+  rot: number[][],
+  pivot: Vec3,
+  translation: Vec3 = [0, 0, 0],
+  scale: Vec3 = [1, 1, 1],
+): Float32Array {
+  const sx = scale[0];
+  const sy = scale[1];
+  const sz = scale[2];
+  const m00 = rot[0][0] * sx;
+  const m01 = rot[0][1] * sy;
+  const m02 = rot[0][2] * sz;
+  const m10 = rot[1][0] * sx;
+  const m11 = rot[1][1] * sy;
+  const m12 = rot[1][2] * sz;
+  const m20 = rot[2][0] * sx;
+  const m21 = rot[2][1] * sy;
+  const m22 = rot[2][2] * sz;
   const rp: Vec3 = [
-    rot[0][0] * pivot[0] + rot[0][1] * pivot[1] + rot[0][2] * pivot[2],
-    rot[1][0] * pivot[0] + rot[1][1] * pivot[1] + rot[1][2] * pivot[2],
-    rot[2][0] * pivot[0] + rot[2][1] * pivot[1] + rot[2][2] * pivot[2],
+    m00 * pivot[0] + m01 * pivot[1] + m02 * pivot[2],
+    m10 * pivot[0] + m11 * pivot[1] + m12 * pivot[2],
+    m20 * pivot[0] + m21 * pivot[1] + m22 * pivot[2],
   ];
-  const t = sub(pivot, rp);
+  const t = add(sub(pivot, rp), translation);
   return new Float32Array([
-    rot[0][0], rot[1][0], rot[2][0], 0,
-    rot[0][1], rot[1][1], rot[2][1], 0,
-    rot[0][2], rot[1][2], rot[2][2], 0,
+    m00, m10, m20, 0,
+    m01, m11, m21, 0,
+    m02, m12, m22, 0,
     t[0], t[1], t[2], 1,
   ]);
 }

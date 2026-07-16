@@ -196,6 +196,11 @@ export class FloodPreviewEngine {
     return this.domain.bounds;
   }
 
+  /** Bed elevations for the current display grid (row-major, metres). */
+  getBedZ(): Float32Array {
+    return this.display.z;
+  }
+
   setWaterStyle(style: GeoWaterStyle): void {
     this.waterStyle = style;
     this.emit();
