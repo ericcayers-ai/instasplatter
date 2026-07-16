@@ -116,7 +116,7 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 
 - **v0.8**: suites, georeg, viewport, dual flood engines, exports, experimental adapters.
 - **v0.9** (this release): worldwide AOI, Esri imagery, 3D ENU workspace, live recon stages, Settings/About cleanup.
-- **v1.0**: large-scene tiling, uncertainty ensembles, full ANUGA validation suite, multi-drone RTK/GCP truth sets, site/city benchmarks, shared water/splat depth compositing, accessibility + installer migration audit.
+- **v1.0**: large-scene tiling, uncertainty ensembles, full ANUGA validation suite, multi-drone RTK/GCP truth sets, site/city benchmarks, accessibility + installer migration audit.
 
 See also **[ROADMAP-V2.md](ROADMAP-V2.md)** and **[ROADMAP.md](ROADMAP.md)**.
 

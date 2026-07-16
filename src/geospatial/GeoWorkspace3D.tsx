@@ -3,7 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { SplatRenderer } from "../splat/renderer";
-import { axisAngle, identity3, mat3Mul, type CameraState } from "../splat/camera";
+import { axisAngle, mat3Mul } from "../splat/camera";
 import { FloodPreviewEngine } from "./preview";
 import { aoiIsValid, domainFromAoi } from "./aoi";
 import { buildSatelliteCanvas } from "./imageryTiles";
@@ -22,15 +22,6 @@ import {
 } from "./modelTransform";
 import type { Vec3 } from "./enu";
 
-function syncSplatCamera(from: CameraState, to: CameraState) {
-  to.target = [...from.target] as Vec3;
-  to.distance = from.distance;
-  to.yaw = from.yaw;
-  to.pitch = from.pitch;
-  to.fovY = from.fovY;
-  to.worldUp = [...from.worldUp] as Vec3;
-}
-
 function applyTfToSplat(splat: SplatRenderer, tf: ModelTransform) {
   splat.setModelRotation(rotationToMat3(tf.rotation));
   splat.setModelTranslation(tf.translation);
@@ -39,13 +30,11 @@ function applyTfToSplat(splat: SplatRenderer, tf: ModelTransform) {
 
 /**
  * Primary Geospatial 3D workspace: ENU terrain + depth water + georegistered splat gizmos.
- *
- * Limitation: water and splat render on separate synced canvases (camera-matched overlay),
- * not a single shared depth buffer — water does not occlude individual Gaussians correctly yet.
+ * Terrain, water, and splats share one WebGL2 context and depth buffer so water can
+ * occlude underwater Gaussians (approximate: Gaussian billboards still expand in screen space).
  */
 export default function GeoWorkspace3D() {
   const sceneCanvasRef = useRef<HTMLCanvasElement>(null);
-  const splatCanvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<GeoEnuScene | null>(null);
   const splatRef = useRef<SplatRenderer | null>(null);
   const engineRef = useRef<FloodPreviewEngine | null>(null);
@@ -91,8 +80,7 @@ export default function GeoWorkspace3D() {
 
   useEffect(() => {
     const sceneEl = sceneCanvasRef.current;
-    const splatEl = splatCanvasRef.current;
-    if (!sceneEl || !splatEl) return;
+    if (!sceneEl) return;
 
     const scene = new GeoEnuScene(sceneEl);
     scene.setReducedMotion(reducedMotion);
@@ -101,24 +89,25 @@ export default function GeoWorkspace3D() {
 
     let splat: SplatRenderer | null = null;
     try {
-      splat = new SplatRenderer(splatEl);
-      splat.camera.worldUp = [0, 0, 1];
+      splat = new SplatRenderer(sceneEl, {
+        gl: scene.context,
+        manageLoop: false,
+        clearOnFrame: false,
+        depthTest: true,
+      });
+      // Share the ENU camera object so orbit/pan/zoom stay locked.
+      splat.camera = scene.camera;
       splat.showFrustums = false;
       splat.showCameraPath = false;
       splat.showSparse = false;
       splat.showDense = false;
       splat.showMesh = false;
+      splat.showSplat = useStore.getState().geoLayers.find((l) => l.id === "splat")?.visible !== false;
       splatRef.current = splat;
+      scene.attachSplat(splat);
     } catch {
       setSplatStatus("WebGL2 splat overlay unavailable");
     }
-
-    scene.onFrame = (cam) => {
-      const s = splatRef.current;
-      if (!s) return;
-      syncSplatCamera(cam, s.camera);
-      s.showSplat = useStore.getState().geoLayers.find((l) => l.id === "splat")?.visible !== false;
-    };
 
     const engine = new FloodPreviewEngine({
       lowPower: useStore.getState().geoFloodLowPower,
@@ -140,6 +129,7 @@ export default function GeoWorkspace3D() {
     if (splat) applyTfToSplat(splat, tf);
 
     return () => {
+      scene.attachSplat(null);
       scene.dispose();
       splat?.dispose();
       engine.destroy();
@@ -149,6 +139,11 @@ export default function GeoWorkspace3D() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const splat = splatRef.current;
+    if (splat) splat.showSplat = splatVisible;
+  }, [splatVisible]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -476,11 +471,6 @@ export default function GeoWorkspace3D() {
         onContextMenu={(e) => e.preventDefault()}
         aria-label="Geospatial 3D ENU workspace"
       />
-      <canvas
-        ref={splatCanvasRef}
-        className={`pointer-events-none absolute inset-0 z-[1] h-full w-full ${splatVisible ? "" : "opacity-0"}`}
-        aria-hidden
-      />
 
       <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">
         <div className="pointer-events-auto">
@@ -551,7 +541,7 @@ export default function GeoWorkspace3D() {
             {gizmoMode === "scale" ? "Shift=uniform scale" : "Ctrl=Y · Ctrl+Shift=Z"}
           </div>
           <div className="mt-0.5 opacity-70">
-            Water/splat depth compositing is layered canvases (not shared z-buffer).
+            Shared WebGL depth: water occludes underwater Gaussians (billboard approx).
           </div>
           <div className="mt-0.5 opacity-70">{attribution}</div>
         </div>

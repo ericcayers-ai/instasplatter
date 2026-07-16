@@ -1,7 +1,6 @@
 /**
- * WebGL2 ENU scene: satellite terrain plane, depth-driven water mesh, gizmo lines.
- * Splat compositing is handled by a sibling SplatRenderer canvas synced to this camera
- * (no shared depth buffer yet — water cannot correctly occlude individual Gaussians).
+ * WebGL2 ENU scene: satellite terrain plane, depth-driven water mesh, gizmo lines,
+ * and an optional shared-context splat pass so water can occlude underwater Gaussians.
  */
 
 import {
@@ -13,6 +12,7 @@ import {
   zoomAtCursor,
   type CameraState,
 } from "../../splat/camera";
+import type { SplatRenderer } from "../../splat/renderer";
 import { frameForAoi, type Vec3 } from "../enu";
 import type { AoiWgs84 } from "../aoi";
 import { depthToRgba } from "../preview/raster";
@@ -149,6 +149,7 @@ export class GeoEnuScene {
   private gl: WebGL2RenderingContext;
   private disposed = false;
   private raf = 0;
+  private splat: SplatRenderer | null = null;
 
   private terrainProg: WebGLProgram;
   private waterProg: WebGLProgram;
@@ -202,6 +203,7 @@ export class GeoEnuScene {
       antialias: true,
       alpha: true,
       premultipliedAlpha: true,
+      depth: true,
     });
     if (!gl) throw new Error("WebGL2 is required for the 3D geospatial workspace.");
     this.gl = gl;
@@ -316,6 +318,20 @@ export class GeoEnuScene {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
+    this.splat = null;
+  }
+
+  /** Shared GL context for embedding a SplatRenderer into this scene. */
+  get context(): WebGL2RenderingContext {
+    return this.gl;
+  }
+
+  /**
+   * Attach a splat renderer that was constructed with this scene's GL context.
+   * Draw order becomes terrain → water (depth write) → splat (depth test).
+   */
+  attachSplat(splat: SplatRenderer | null) {
+    this.splat = splat;
   }
 
   setReducedMotion(on: boolean) {
@@ -549,6 +565,11 @@ export class GeoEnuScene {
     gl.viewport(0, 0, w, h);
     gl.clearColor(0.07, 0.1, 0.12, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
     // Terrain
     gl.useProgram(this.terrainProg);
@@ -562,9 +583,9 @@ export class GeoEnuScene {
     gl.uniformMatrix4fv(this.uTerrainView, false, view);
     gl.drawElements(gl.TRIANGLES, this.terrainCount, gl.UNSIGNED_INT, 0);
 
-    // Water (above terrain / splat visually via Z bias + draw order)
+    // Water writes depth so underwater Gaussians fail the shared depth test.
     if (this.waterIndexCount > 0) {
-      gl.depthMask(false);
+      gl.depthMask(true);
       gl.useProgram(this.waterProg);
       gl.bindVertexArray(this.waterVao);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.waterIdx);
@@ -573,7 +594,17 @@ export class GeoEnuScene {
       gl.uniform3f(this.uWaterEye, basis.eye[0], basis.eye[1], basis.eye[2]);
       gl.uniform1f(this.uWaterReduced, this.reducedMotion || this.lowPower ? 1 : 0);
       gl.drawElements(gl.TRIANGLES, this.waterIndexCount, gl.UNSIGNED_INT, 0);
+    }
+
+    // Shared-context splat / stage layers (depth-tested, no depth write).
+    if (this.splat) {
+      this.splat.renderPass(performance.now(), { proj, view, w, h });
+      // Restore host blend/depth defaults after the splat pass mutates GL state.
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
       gl.depthMask(true);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     }
 
     // Gizmo

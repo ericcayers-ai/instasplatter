@@ -300,6 +300,38 @@ export interface GeoReference {
   scaleStatus?: string | null;
 }
 
+export interface GcpPoint {
+  id: string;
+  surveyXyz: [number, number, number];
+  surveyCrs?: string;
+  localXyz?: [number, number, number] | null;
+  imageName?: string | null;
+  pixelUv?: [number, number] | null;
+  covarianceM?: [number, number, number] | null;
+  outlier?: boolean;
+}
+
+export interface GcpResidualReport {
+  scale: number;
+  rotation: number[][];
+  translation: [number, number, number];
+  meanResidualM: number;
+  maxResidualM: number;
+  rmsResidualM: number;
+  inlierIds: string[];
+  outlierIds: string[];
+  perPointM: [string, number][];
+}
+
+export interface RegistrationResult {
+  geoReference: GeoReference;
+  cameraCount: number;
+  telemetryCount: number;
+  matchedFrames: number;
+  warnings: string[];
+  posePriorsPath?: string | null;
+}
+
 export interface FloodScenarioDto {
   id: string;
   name: string;
@@ -399,16 +431,17 @@ export const api = {
   getFloodEngineStatus: () => invoke<FloodEngineStatus>("get_flood_engine_status"),
   planGeoExtent: (input: ExtentPlanInput) => invoke<ExtentPlan>("plan_geo_extent", { input }),
   computeGeoReference: (workspace: string, originLonLatH?: [number, number, number] | null) =>
-    invoke<{
-      geoReference: GeoReference;
-      cameraCount: number;
-      telemetryCount: number;
-      matchedFrames: number;
-      warnings: string[];
-      posePriorsPath?: string | null;
-    }>("compute_geo_reference", {
+    invoke<RegistrationResult>("compute_geo_reference", {
       workspace,
       originLonLatH: originLonLatH ?? null,
+    }),
+  importGeoTelemetry: (workspace: string, paths: string[]) =>
+    invoke<RegistrationResult>("import_geo_telemetry", { workspace, paths }),
+  setGeoGcps: (workspace: string, gcps: GcpPoint[], refine?: boolean) =>
+    invoke<{ geoReference: GeoReference; residualReport: GcpResidualReport }>("set_geo_gcps", {
+      workspace,
+      gcps,
+      refine: refine ?? false,
     }),
   getGeoReference: (workspace: string) =>
     invoke<GeoReference | null>("get_geo_reference", { workspace }),

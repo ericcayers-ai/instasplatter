@@ -129,7 +129,7 @@ experimental hydro engine can be considered for Standard. GPL engines
 
 ## Honest gaps toward v1.0
 
-- **Shared water/splat depth compositing** — 3D geo still uses camera-synced layered canvases; water does not correctly occlude individual Gaussians
+- **Gaussian depth is approximate** — shared WebGL depth compositing occludes underwater splat *centers*; billboard quads still expand in screen space so soft edges can leak slightly through the waterline
 - Full ANUGA analytical suite on real solver (lake-at-rest, dam-break, rainfall-on-slope) against published benchmarks
 - Three drone datasets with RTK/GCP survey truth
 - Site / city / regional performance benchmarks

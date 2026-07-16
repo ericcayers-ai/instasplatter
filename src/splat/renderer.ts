@@ -104,9 +104,12 @@ void main() {
   v_pos = a_corner;
 
   vec2 corner = a_corner * 2.0;
+  // Write real NDC depth so shared-scene compositing can occlude underwater
+  // Gaussians against terrain/water. Billboards still expand in screen space.
+  float ndcZ = pos2d.z / max(pos2d.w, 1e-6);
   gl_Position = vec4(
     pos2d.xy / pos2d.w + (corner.x * major + corner.y * minor) / u_viewport,
-    0.0, 1.0);
+    clamp(ndcZ, -1.0, 1.0), 1.0);
 }
 `;
 
@@ -181,6 +184,26 @@ void main() {
 
 export type PointLayerId = "sparse" | "dense";
 
+/** Options for embedding the splat pass into another WebGL2 scene. */
+export interface SplatRendererOptions {
+  /** Reuse an existing WebGL2 context (must own the same canvas). */
+  gl?: WebGL2RenderingContext;
+  /** When false, the host scene drives frames via `renderPass`. Default true. */
+  manageLoop?: boolean;
+  /** When false, skip clear/resize (host owns the framebuffer). Default true. */
+  clearOnFrame?: boolean;
+  /** Depth-test against the existing depth buffer (shared geo scene). Default false. */
+  depthTest?: boolean;
+}
+
+/** Shared projection/view from a host ENU scene. */
+export interface SharedFrameMatrices {
+  proj: Float32Array;
+  view: Float32Array;
+  w: number;
+  h: number;
+}
+
 /** A solved camera pose, in world space, ready to draw. */
 export interface CameraFrustum {
   apex: Vec3;
@@ -225,6 +248,9 @@ export class SplatRenderer {
   private lastSortVP: Float32Array | null = null;
   private sortPending = false;
   private disposed = false;
+  private manageLoop: boolean;
+  private clearOnFrame: boolean;
+  private depthTest: boolean;
   private uProj: WebGLUniformLocation;
   private uView: WebGLUniformLocation;
   private uModel: WebGLUniformLocation;
@@ -269,12 +295,22 @@ export class SplatRenderer {
   public onStats: ((splats: number) => void) | null = null;
   public onFps: ((fps: number) => void) | null = null;
 
-  constructor(private canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext("webgl2", {
-      antialias: false,
-      alpha: true,
-      premultipliedAlpha: true,
-    });
+  constructor(
+    private canvas: HTMLCanvasElement,
+    opts: SplatRendererOptions = {},
+  ) {
+    this.manageLoop = opts.manageLoop ?? true;
+    this.clearOnFrame = opts.clearOnFrame ?? true;
+    this.depthTest = opts.depthTest ?? false;
+
+    const gl =
+      opts.gl ??
+      canvas.getContext("webgl2", {
+        antialias: false,
+        alpha: true,
+        premultipliedAlpha: true,
+        depth: true,
+      });
     if (!gl) throw new Error("WebGL2 is not available on this system.");
     this.gl = gl;
 
@@ -397,19 +433,26 @@ export class SplatRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-    gl.disable(gl.DEPTH_TEST);
+    if (this.depthTest) {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+    } else {
+      gl.disable(gl.DEPTH_TEST);
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
     this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
     this.worker.onmessage = (e) => this.onWorker(e.data);
 
-    const loop = (now: number) => {
-      if (this.disposed) return;
-      this.frame(now);
+    if (this.manageLoop) {
+      const loop = (now: number) => {
+        if (this.disposed) return;
+        this.frame(now);
+        requestAnimationFrame(loop);
+      };
       requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
+    }
   }
 
   /** Load (or hot-swap to) a splat .ply from raw bytes.
@@ -743,15 +786,30 @@ export class SplatRenderer {
     this.lineVertexCount = n * 16;
   }
 
-  private frame(now: number) {
+  /**
+   * Host-driven draw for a shared WebGL scene. Uses the caller's projection/view
+   * so terrain/water/splat share one depth buffer.
+   */
+  renderPass(now: number, shared: SharedFrameMatrices) {
+    this.frame(now, shared);
+  }
+
+  private frame(now: number, shared?: SharedFrameMatrices) {
     const gl = this.gl;
     const canvas = this.canvas;
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-    const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+    let w: number;
+    let h: number;
+    if (shared) {
+      w = shared.w;
+      h = shared.h;
+    } else {
+      const dpr = window.devicePixelRatio || 1;
+      w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+      h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+      if (this.clearOnFrame && (canvas.width !== w || canvas.height !== h)) {
+        canvas.width = w;
+        canvas.height = h;
+      }
     }
 
     if (this.lastFrameTime > 0) {
@@ -776,18 +834,26 @@ export class SplatRenderer {
       if (t >= 1) this.lerpActive = false;
     }
 
-    gl.viewport(0, 0, w, h);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (!shared) {
+      gl.viewport(0, 0, w, h);
+      if (this.clearOnFrame) {
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+    }
 
     if (this.autoOrbit) this.camera.yaw += 0.002;
 
-    const proj = projectionMatrix(
-      w, h, this.camera.fovY,
-      0.02 * this.camera.distance,
-      100 * this.camera.distance,
-    );
-    const view = viewMatrix(orbitBasis(this.camera));
+    const proj =
+      shared?.proj ??
+      projectionMatrix(
+        w,
+        h,
+        this.camera.fovY,
+        0.02 * this.camera.distance,
+        100 * this.camera.distance,
+      );
+    const view = shared?.view ?? viewMatrix(orbitBasis(this.camera));
     const model = trsModelMatrix(
       this.modelRot,
       this.pivot,
@@ -795,6 +861,15 @@ export class SplatRenderer {
       this.modelScale,
     );
     const focal = h / (2 * Math.tan(this.camera.fovY / 2));
+
+    if (this.depthTest) {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.depthMask(false);
+    }
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
     if (this.showSplat && this.count > 0 && this.sortedCount > 0) {
       gl.useProgram(this.program);
@@ -844,6 +919,10 @@ export class SplatRenderer {
     if (this.showCameraPath) drawLines(this.pathVao, this.pathVertexCount);
     if (this.showMesh) drawLines(this.meshVao, this.meshVertexCount);
     gl.bindVertexArray(null);
+
+    if (this.depthTest) {
+      gl.depthMask(true);
+    }
 
     if (this.count === 0) return;
 
