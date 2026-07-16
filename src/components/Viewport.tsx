@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { SplatRenderer } from "../splat/renderer";
 import { orbitBasis, type Vec3 } from "../splat/camera";
+import { parseMeshWirePly, parseXyzRgbPly } from "../splat/xyzrgb";
 import { api } from "../lib/ipc";
 import { useStore } from "../state/store";
 
@@ -86,6 +87,9 @@ export default function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<SplatRenderer | null>(null);
   const loadedPathRef = useRef<string | null>(null);
+  const loadedSparseRef = useRef<string | null>(null);
+  const loadedDenseRef = useRef<string | null>(null);
+  const loadedMeshRef = useRef<string | null>(null);
   const firstLoadRef = useRef(true);
   const drawnCamerasRef = useRef(0);
 
@@ -95,6 +99,13 @@ export default function Viewport() {
   const cameras = useStore((s) => s.cameras);
   const resultPath = useStore((s) => s.resultPath);
   const workspace = useStore((s) => s.workspace);
+  const sparseCloudPath = useStore((s) => s.sparseCloudPath);
+  const denseCloudPath = useStore((s) => s.denseCloudPath);
+  const latestMeshPath = useStore((s) => s.latestMeshPath);
+  const ingestPath = useStore((s) => s.ingestPath);
+  const ingestFrameCount = useStore((s) => s.ingestFrameCount);
+  const reconLayers = useStore((s) => s.reconLayers);
+  const jobId = useStore((s) => s.jobId);
   const [orientMessage, setOrientMessage] = useState<string | null>(null);
   const [orientOpen, setOrientOpen] = useState(false);
 
@@ -112,6 +123,30 @@ export default function Viewport() {
     };
   }, [setSplatCount, setFps]);
 
+  // New job: drop previous stage layers.
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    r.clearStageLayers();
+    loadedPathRef.current = null;
+    loadedSparseRef.current = null;
+    loadedDenseRef.current = null;
+    loadedMeshRef.current = null;
+    firstLoadRef.current = true;
+    drawnCamerasRef.current = 0;
+  }, [jobId]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    r.showFrustums = reconLayers.cameras;
+    r.showCameraPath = reconLayers.cameraPath;
+    r.showSparse = reconLayers.sparse;
+    r.showDense = reconLayers.dense;
+    r.showSplat = reconLayers.splat;
+    r.showMesh = reconLayers.mesh;
+  }, [reconLayers]);
+
   // Cameras arrive one at a time and only ever grow, so push the new tail
   // rather than rebuilding the whole line buffer on every registration.
   useEffect(() => {
@@ -125,7 +160,90 @@ export default function Viewport() {
       r.addFrustum({ apex: cameras[i].apex, corners: cameras[i].corners });
     }
     drawnCamerasRef.current = cameras.length;
+    // Prefer real camera apexes for the path once SfM starts streaming.
+    if (cameras.length >= 2) {
+      r.setCameraPath(cameras.map((c) => c.apex as Vec3));
+    }
   }, [cameras]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    if (cameras.length >= 2) return;
+    if (ingestPath.length >= 2) {
+      r.setCameraPath(ingestPath as Vec3[]);
+    } else {
+      r.clearCameraPath();
+    }
+  }, [ingestPath, cameras.length]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r || !sparseCloudPath || loadedSparseRef.current === sparseCloudPath) return;
+    loadedSparseRef.current = sparseCloudPath;
+    let stale = false;
+    (async () => {
+      try {
+        const resp = await fetch(convertFileSrc(sparseCloudPath));
+        const buf = await resp.arrayBuffer();
+        if (stale) return;
+        const cloud = parseXyzRgbPly(buf);
+        r.setPointCloud("sparse", cloud.positions, cloud.colors, cloud.count);
+      } catch (err) {
+        console.error("failed to load sparse cloud:", err);
+      }
+    })();
+    return () => {
+      stale = true;
+    };
+  }, [sparseCloudPath]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r || !denseCloudPath || loadedDenseRef.current === denseCloudPath) return;
+    loadedDenseRef.current = denseCloudPath;
+    let stale = false;
+    (async () => {
+      try {
+        const resp = await fetch(convertFileSrc(denseCloudPath));
+        const buf = await resp.arrayBuffer();
+        if (stale) return;
+        const cloud = parseXyzRgbPly(buf);
+        r.setPointCloud("dense", cloud.positions, cloud.colors, cloud.count);
+      } catch (err) {
+        console.error("failed to load dense cloud:", err);
+      }
+    })();
+    return () => {
+      stale = true;
+    };
+  }, [denseCloudPath]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r || !latestMeshPath || loadedMeshRef.current === latestMeshPath) return;
+    if (!/\.ply$/i.test(latestMeshPath)) {
+      // GLB/OBJ: layer toggle is ready; wireframe parse is PLY-only for now.
+      loadedMeshRef.current = latestMeshPath;
+      return;
+    }
+    loadedMeshRef.current = latestMeshPath;
+    let stale = false;
+    (async () => {
+      try {
+        const resp = await fetch(convertFileSrc(latestMeshPath));
+        const buf = await resp.arrayBuffer();
+        if (stale) return;
+        const edges = parseMeshWirePly(buf);
+        if (edges) r.setMeshWire(edges);
+      } catch (err) {
+        console.error("failed to load mesh overlay:", err);
+      }
+    })();
+    return () => {
+      stale = true;
+    };
+  }, [latestMeshPath]);
 
   useEffect(() => {
     const r = rendererRef.current;
@@ -204,6 +322,12 @@ export default function Viewport() {
       />
 
       <AxisGizmo rendererRef={rendererRef} />
+
+      {ingestFrameCount > 0 && !hasModel && cameras.length === 0 && !sparseCloudPath && (
+        <div className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded border border-edge bg-panel/80 px-3 py-1.5 text-xs text-ink-dim">
+          {ingestFrameCount.toLocaleString()} frames ready — camera path preview
+        </div>
+      )}
 
       {hasModel && (
         <div className="absolute right-4 top-4 flex w-44 flex-col gap-2 rounded border border-edge bg-panel/85 p-3 text-xs">

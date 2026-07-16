@@ -524,6 +524,10 @@ pub fn write_init_from_points(
         cloud.len(),
         scale
     ));
+    // Live dense layer for the viewport (XYZRGB), independent of Gaussian init.
+    if let Err(e) = super::preview::emit_dense_stage(ctx, &xyz, &rgb) {
+        ctx.log(format!("[warn] dense preview failed: {e}"));
+    }
     Ok(cloud.len())
 }
 

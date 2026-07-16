@@ -192,5 +192,6 @@ pub async fn ingest(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
     }
 
     ctx.stage_progress("ingest", 1.0, &format!("{} frames ready", selected.len()));
+    super::preview::emit_ingest_preview(ctx, selected.len() as u32);
     Ok(images_dir)
 }

@@ -811,7 +811,21 @@ async fn export_mesh(
         })?;
 
         mesh::export::write(&dest, &m, mesh::export::MeshFormat::from_path(&dest))?;
-        Ok(m.triangle_count())
+        let triangles = m.triangle_count();
+        let job_id = ws
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mesh-export")
+            .to_string();
+        let _ = app.emit(
+            "job://event",
+            pipeline::JobEvent::MeshReady {
+                job_id,
+                path: dest.to_string_lossy().into_owned(),
+                triangle_count: triangles as u32,
+            },
+        );
+        Ok(triangles)
     })
     .await
     .map_err(|e| format!("Mesh extraction did not finish: {e}"))?

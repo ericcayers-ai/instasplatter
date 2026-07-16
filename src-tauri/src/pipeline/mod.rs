@@ -14,6 +14,7 @@ pub mod experimental;
 pub mod gating;
 pub mod gsplat;
 pub mod ingest;
+pub mod preview;
 pub mod sidecars;
 pub mod solver;
 
@@ -39,6 +40,9 @@ pub enum JobEvent {
     },
     #[serde(rename_all = "camelCase")]
     Log { job_id: String, line: String },
+    /// Clear viewport frustums before a batch camera emit (final sparse model).
+    #[serde(rename_all = "camelCase")]
+    CamerasReset { job_id: String },
     /// A camera pose was solved and can be drawn in the viewport.
     #[serde(rename_all = "camelCase")]
     CameraRegistered {
@@ -50,6 +54,35 @@ pub enum JobEvent {
         confidence: f32,
         apex: [f32; 3],
         corners: [[f32; 3]; 4],
+    },
+    /// Ingest finished: frame count + optional path skeleton for the viewport.
+    #[serde(rename_all = "camelCase")]
+    IngestPreview {
+        job_id: String,
+        frame_count: u32,
+        /// Capture-order path markers (replaced by real frustums after SfM).
+        path: Vec<[f32; 3]>,
+    },
+    /// Sparse COLMAP / neural SfM point cloud ready for the live stage viewer.
+    #[serde(rename_all = "camelCase")]
+    SparseCloudReady {
+        job_id: String,
+        path: String,
+        point_count: u32,
+    },
+    /// Dense init cloud (RoMa / MVS / neural fuse) ready for the live stage viewer.
+    #[serde(rename_all = "camelCase")]
+    DenseCloudReady {
+        job_id: String,
+        path: String,
+        point_count: u32,
+    },
+    /// Optional mesh overlay path (surface export / experimental mesh product).
+    #[serde(rename_all = "camelCase")]
+    MeshReady {
+        job_id: String,
+        path: String,
+        triangle_count: u32,
     },
     /// Something worth telling the user plainly, without failing the job.
     #[serde(rename_all = "camelCase")]
@@ -311,6 +344,11 @@ pub async fn run_job(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
 
     ctx.stage_started("sfm", "Solving cameras");
     solve_cameras(ctx, &images_dir).await?;
+    ctx.check_cancel()?;
+    // Stream sparse points (+ COLMAP frustums) before densify / training.
+    if let Err(e) = preview::emit_sparse_stage(ctx) {
+        ctx.log(format!("[warn] sparse preview failed: {e}"));
+    }
     ctx.check_cancel()?;
     // Dense geometry bootstrap: neural sidecar → COLMAP MVS → sparse seed.
     let _ = dense::densify_after_sfm(ctx, &images_dir).await?;

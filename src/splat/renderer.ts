@@ -123,7 +123,7 @@ void main() {
 }
 `;
 
-// Overlay pass: world-space line segments (camera frustums).
+// Overlay pass: world-space line segments (camera frustums / path / mesh).
 const LINE_VS = `#version 300 es
 precision highp float;
 uniform mat4 u_proj;
@@ -147,6 +147,40 @@ void main() {
 }
 `;
 
+// Stage point clouds (sparse / dense XYZRGB).
+const POINT_VS = `#version 300 es
+precision highp float;
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform mat4 u_model;
+uniform float u_pointSize;
+in vec3 a_pos;
+in vec4 a_color;
+out vec4 v_color;
+void main() {
+  v_color = a_color;
+  vec4 clip = u_proj * u_view * u_model * vec4(a_pos, 1.0);
+  gl_Position = clip;
+  float w = max(abs(clip.w), 1e-4);
+  gl_PointSize = clamp(u_pointSize * (240.0 / w), 1.0, 8.0);
+}
+`;
+
+const POINT_FS = `#version 300 es
+precision highp float;
+in vec4 v_color;
+out vec4 fragColor;
+void main() {
+  vec2 p = gl_PointCoord * 2.0 - 1.0;
+  float d = dot(p, p);
+  if (d > 1.0) discard;
+  float a = v_color.a * (1.0 - smoothstep(0.55, 1.0, d));
+  fragColor = vec4(v_color.rgb * a, a);
+}
+`;
+
+export type PointLayerId = "sparse" | "dense";
+
 /** A solved camera pose, in world space, ready to draw. */
 export interface CameraFrustum {
   apex: Vec3;
@@ -161,6 +195,7 @@ export class SplatRenderer {
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
   private lineProgram: WebGLProgram;
+  private pointProgram: WebGLProgram;
   private texture: WebGLTexture;
   private indexBuffer: WebGLBuffer;
   private vao: WebGLVertexArrayObject;
@@ -168,6 +203,22 @@ export class SplatRenderer {
   private linePosBuffer: WebGLBuffer;
   private lineColorBuffer: WebGLBuffer;
   private lineVertexCount = 0;
+  private pathVao: WebGLVertexArrayObject;
+  private pathPosBuffer: WebGLBuffer;
+  private pathColorBuffer: WebGLBuffer;
+  private pathVertexCount = 0;
+  private meshVao: WebGLVertexArrayObject;
+  private meshPosBuffer: WebGLBuffer;
+  private meshColorBuffer: WebGLBuffer;
+  private meshVertexCount = 0;
+  private sparseVao: WebGLVertexArrayObject;
+  private sparsePosBuffer: WebGLBuffer;
+  private sparseColorBuffer: WebGLBuffer;
+  private sparseCount = 0;
+  private denseVao: WebGLVertexArrayObject;
+  private densePosBuffer: WebGLBuffer;
+  private denseColorBuffer: WebGLBuffer;
+  private denseCount = 0;
   private worker: Worker;
   private count = 0;
   private sortedCount = 0;
@@ -183,6 +234,10 @@ export class SplatRenderer {
   private uLineProj: WebGLUniformLocation;
   private uLineView: WebGLUniformLocation;
   private uLineModel: WebGLUniformLocation;
+  private uPointProj: WebGLUniformLocation;
+  private uPointView: WebGLUniformLocation;
+  private uPointModel: WebGLUniformLocation;
+  private uPointSize: WebGLUniformLocation;
 
   private pendingAutoFrame = false;
   /** Row-major 3x3 model rotation, applied about `pivot`. */
@@ -202,6 +257,11 @@ export class SplatRenderer {
   public camera: CameraState = defaultCamera();
   public autoOrbit = false;
   public showFrustums = true;
+  public showCameraPath = true;
+  public showSparse = true;
+  public showDense = true;
+  public showSplat = true;
+  public showMesh = true;
   public onStats: ((splats: number) => void) | null = null;
   public onFps: ((fps: number) => void) | null = null;
 
@@ -234,6 +294,7 @@ export class SplatRenderer {
 
     this.program = link(VS, FS);
     this.lineProgram = link(LINE_VS, LINE_FS);
+    this.pointProgram = link(POINT_VS, POINT_FS);
 
     this.uProj = gl.getUniformLocation(this.program, "u_proj")!;
     this.uView = gl.getUniformLocation(this.program, "u_view")!;
@@ -244,6 +305,10 @@ export class SplatRenderer {
     this.uLineProj = gl.getUniformLocation(this.lineProgram, "u_proj")!;
     this.uLineView = gl.getUniformLocation(this.lineProgram, "u_view")!;
     this.uLineModel = gl.getUniformLocation(this.lineProgram, "u_model")!;
+    this.uPointProj = gl.getUniformLocation(this.pointProgram, "u_proj")!;
+    this.uPointView = gl.getUniformLocation(this.pointProgram, "u_view")!;
+    this.uPointModel = gl.getUniformLocation(this.pointProgram, "u_model")!;
+    this.uPointSize = gl.getUniformLocation(this.pointProgram, "u_pointSize")!;
 
     // Splat VAO.
     this.vao = gl.createVertexArray()!;
@@ -262,7 +327,7 @@ export class SplatRenderer {
     gl.vertexAttribIPointer(aIndex, 1, gl.UNSIGNED_INT, 0, 0);
     gl.vertexAttribDivisor(aIndex, 1);
 
-    // Line VAO.
+    // Line VAO (frustums).
     this.lineVao = gl.createVertexArray()!;
     gl.bindVertexArray(this.lineVao);
     this.linePosBuffer = gl.createBuffer()!;
@@ -275,6 +340,52 @@ export class SplatRenderer {
     const aColor = gl.getAttribLocation(this.lineProgram, "a_color");
     gl.enableVertexAttribArray(aColor);
     gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, 0, 0);
+
+    const makeLineLayer = () => {
+      const vao = gl.createVertexArray()!;
+      gl.bindVertexArray(vao);
+      const pos = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, pos);
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+      const col = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, col);
+      gl.enableVertexAttribArray(aColor);
+      gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, 0, 0);
+      return { vao, pos, col };
+    };
+    const path = makeLineLayer();
+    this.pathVao = path.vao;
+    this.pathPosBuffer = path.pos;
+    this.pathColorBuffer = path.col;
+    const mesh = makeLineLayer();
+    this.meshVao = mesh.vao;
+    this.meshPosBuffer = mesh.pos;
+    this.meshColorBuffer = mesh.col;
+
+    const makePointLayer = () => {
+      const vao = gl.createVertexArray()!;
+      gl.bindVertexArray(vao);
+      const pos = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, pos);
+      const pPos = gl.getAttribLocation(this.pointProgram, "a_pos");
+      gl.enableVertexAttribArray(pPos);
+      gl.vertexAttribPointer(pPos, 3, gl.FLOAT, false, 0, 0);
+      const col = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, col);
+      const pCol = gl.getAttribLocation(this.pointProgram, "a_color");
+      gl.enableVertexAttribArray(pCol);
+      gl.vertexAttribPointer(pCol, 4, gl.FLOAT, false, 0, 0);
+      return { vao, pos, col };
+    };
+    const sparse = makePointLayer();
+    this.sparseVao = sparse.vao;
+    this.sparsePosBuffer = sparse.pos;
+    this.sparseColorBuffer = sparse.col;
+    const dense = makePointLayer();
+    this.denseVao = dense.vao;
+    this.densePosBuffer = dense.pos;
+    this.denseColorBuffer = dense.col;
     gl.bindVertexArray(null);
 
     this.texture = gl.createTexture()!;
@@ -383,6 +494,118 @@ export class SplatRenderer {
 
   get frustumCount(): number {
     return this.frustums.length;
+  }
+
+  /** Ingest / camera-path polyline in world space. */
+  setCameraPath(points: Vec3[]) {
+    const gl = this.gl;
+    if (points.length < 2) {
+      this.pathVertexCount = 0;
+      return;
+    }
+    const nSeg = points.length - 1;
+    const verts = new Float32Array(nSeg * 2 * 3);
+    const colors = new Float32Array(nSeg * 2 * 4);
+    for (let i = 0; i < nSeg; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const t = i / Math.max(1, nSeg - 1);
+      const rgba: [number, number, number, number] = [0.55 + 0.35 * t, 0.72, 0.95, 0.75];
+      verts.set(a, i * 6);
+      verts.set(b, i * 6 + 3);
+      for (let k = 0; k < 2; k++) {
+        colors.set(rgba, i * 8 + k * 4);
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pathPosBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.pathColorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    this.pathVertexCount = nSeg * 2;
+  }
+
+  clearCameraPath() {
+    this.pathVertexCount = 0;
+  }
+
+  setPointCloud(layer: PointLayerId, positions: Float32Array, colors: Float32Array, count: number) {
+    const gl = this.gl;
+    const vao = layer === "sparse" ? this.sparseVao : this.denseVao;
+    const posBuf = layer === "sparse" ? this.sparsePosBuffer : this.densePosBuffer;
+    const colBuf = layer === "sparse" ? this.sparseColorBuffer : this.denseColorBuffer;
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    gl.bindVertexArray(null);
+    if (layer === "sparse") this.sparseCount = count;
+    else this.denseCount = count;
+
+    // Frame empty scenes onto the first point cloud that arrives.
+    if (this.count === 0 && count > 0 && this.sceneRadius <= 0) {
+      this.fitPoints(positions, count);
+    }
+  }
+
+  clearPointCloud(layer: PointLayerId) {
+    if (layer === "sparse") this.sparseCount = 0;
+    else this.denseCount = 0;
+  }
+
+  /** Wireframe edges: flat xyzxyz… line list. */
+  setMeshWire(edgePositions: Float32Array) {
+    const gl = this.gl;
+    const n = Math.floor(edgePositions.length / 3);
+    const colors = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      colors[i * 4] = 0.92;
+      colors[i * 4 + 1] = 0.78;
+      colors[i * 4 + 2] = 0.35;
+      colors[i * 4 + 3] = 0.55;
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshPosBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, edgePositions, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.meshColorBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    this.meshVertexCount = n;
+  }
+
+  clearMeshWire() {
+    this.meshVertexCount = 0;
+  }
+
+  clearStageLayers() {
+    this.clearFrustums();
+    this.clearCameraPath();
+    this.clearPointCloud("sparse");
+    this.clearPointCloud("dense");
+    this.clearMeshWire();
+  }
+
+  private fitPoints(positions: Float32Array, count: number) {
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (let i = 0; i < count; i++) {
+      cx += positions[i * 3];
+      cy += positions[i * 3 + 1];
+      cz += positions[i * 3 + 2];
+    }
+    cx /= count;
+    cy /= count;
+    cz /= count;
+    let r2 = 0;
+    for (let i = 0; i < count; i++) {
+      const dx = positions[i * 3] - cx;
+      const dy = positions[i * 3 + 1] - cy;
+      const dz = positions[i * 3 + 2] - cz;
+      r2 = Math.max(r2, dx * dx + dy * dy + dz * dz);
+    }
+    this.sceneCenter = [cx, cy, cz];
+    this.sceneRadius = Math.sqrt(r2) || 1;
+    this.pivot = [cx, cy, cz];
+    this.frameScene();
   }
 
   /** Frame the whole scene, keeping the current orbit angles. */
@@ -547,7 +770,7 @@ export class SplatRenderer {
     const model = modelMatrix(this.modelRot, this.pivot);
     const focal = h / (2 * Math.tan(this.camera.fovY / 2));
 
-    if (this.count > 0 && this.sortedCount > 0) {
+    if (this.showSplat && this.count > 0 && this.sortedCount > 0) {
       gl.useProgram(this.program);
       gl.bindVertexArray(this.vao);
       gl.activeTexture(gl.TEXTURE0);
@@ -561,20 +784,39 @@ export class SplatRenderer {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.sortedCount);
     }
 
+    // Point clouds under the splat so training can replace densify visually.
+    const drawPoints = (vao: WebGLVertexArrayObject, n: number, size: number) => {
+      if (n <= 0) return;
+      gl.useProgram(this.pointProgram);
+      gl.bindVertexArray(vao);
+      gl.uniformMatrix4fv(this.uPointProj, false, proj);
+      gl.uniformMatrix4fv(this.uPointView, false, view);
+      gl.uniformMatrix4fv(this.uPointModel, false, model);
+      gl.uniform1f(this.uPointSize, size);
+      gl.drawArrays(gl.POINTS, 0, n);
+    };
+    if (this.showSparse) drawPoints(this.sparseVao, this.sparseCount, 2.2);
+    if (this.showDense) drawPoints(this.denseVao, this.denseCount, 1.6);
+
+    const drawLines = (vao: WebGLVertexArrayObject, n: number) => {
+      if (n <= 0) return;
+      gl.useProgram(this.lineProgram);
+      gl.bindVertexArray(vao);
+      gl.uniformMatrix4fv(this.uLineProj, false, proj);
+      gl.uniformMatrix4fv(this.uLineView, false, view);
+      gl.uniformMatrix4fv(this.uLineModel, false, model);
+      gl.drawArrays(gl.LINES, 0, n);
+    };
+
     // Frustums fade in, so keep rebuilding while any of them is still young.
     const animating = this.frustums.some((f) => now - f.addedAt < FRUSTUM_FADE_MS);
     if (this.showFrustums && this.frustums.length > 0 && (this.frustumsDirty || animating)) {
       this.rebuildFrustumBuffers(now);
       this.frustumsDirty = false;
     }
-    if (this.showFrustums && this.lineVertexCount > 0) {
-      gl.useProgram(this.lineProgram);
-      gl.bindVertexArray(this.lineVao);
-      gl.uniformMatrix4fv(this.uLineProj, false, proj);
-      gl.uniformMatrix4fv(this.uLineView, false, view);
-      gl.uniformMatrix4fv(this.uLineModel, false, model);
-      gl.drawArrays(gl.LINES, 0, this.lineVertexCount);
-    }
+    if (this.showFrustums) drawLines(this.lineVao, this.lineVertexCount);
+    if (this.showCameraPath) drawLines(this.pathVao, this.pathVertexCount);
+    if (this.showMesh) drawLines(this.meshVao, this.meshVertexCount);
     gl.bindVertexArray(null);
 
     if (this.count === 0) return;

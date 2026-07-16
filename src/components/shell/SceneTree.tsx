@@ -86,6 +86,38 @@ function CameraList() {
   );
 }
 
+function LayerToggle({
+  label,
+  checked,
+  disabled,
+  detail,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  detail?: string;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      className={`flex cursor-pointer items-center justify-between gap-2 text-xs ${disabled ? "opacity-40" : ""}`}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <input
+          type="checkbox"
+          className="accent-[var(--color-accent,#38b7a6)]"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="truncate">{label}</span>
+      </span>
+      {detail && <span className="shrink-0 tabular-nums text-[10px] text-ink-dim">{detail}</span>}
+    </label>
+  );
+}
+
 export default function SceneTree() {
   const suite = useStore((s) => s.suite);
   const screen = useStore((s) => s.screen);
@@ -97,6 +129,16 @@ export default function SceneTree() {
   const latestIter = useStore((s) => s.latestIter);
   const totalSteps = useStore((s) => s.totalSteps);
   const resultPath = useStore((s) => s.resultPath);
+  const reconLayers = useStore((s) => s.reconLayers);
+  const setReconLayer = useStore((s) => s.setReconLayer);
+  const sparseCloudPath = useStore((s) => s.sparseCloudPath);
+  const denseCloudPath = useStore((s) => s.denseCloudPath);
+  const latestSplatPath = useStore((s) => s.latestSplatPath);
+  const latestMeshPath = useStore((s) => s.latestMeshPath);
+  const sparsePointCount = useStore((s) => s.sparsePointCount);
+  const densePointCount = useStore((s) => s.densePointCount);
+  const ingestFrameCount = useStore((s) => s.ingestFrameCount);
+  const totalCameras = useStore((s) => s.totalCameras);
 
   if (!leftPanelOpen) return null;
 
@@ -131,6 +173,57 @@ export default function SceneTree() {
                 {workspace}
               </div>
             )}
+            {ingestFrameCount > 0 && (
+              <div className="mt-1 text-[10px] text-ink-dim">
+                {ingestFrameCount.toLocaleString()} frames gated
+              </div>
+            )}
+          </Section>
+
+          <Section title="Stage layers">
+            <div className="flex flex-col gap-1.5">
+              <LayerToggle
+                label="Cameras"
+                checked={reconLayers.cameras}
+                disabled={totalCameras === 0}
+                detail={totalCameras > 0 ? String(totalCameras) : undefined}
+                onChange={(v) => setReconLayer("cameras", v)}
+              />
+              <LayerToggle
+                label="Camera path"
+                checked={reconLayers.cameraPath}
+                disabled={ingestFrameCount === 0 && totalCameras === 0}
+                onChange={(v) => setReconLayer("cameraPath", v)}
+              />
+              <LayerToggle
+                label="Sparse cloud"
+                checked={reconLayers.sparse}
+                disabled={!sparseCloudPath}
+                detail={sparsePointCount > 0 ? sparsePointCount.toLocaleString() : undefined}
+                onChange={(v) => setReconLayer("sparse", v)}
+              />
+              <LayerToggle
+                label="Dense cloud"
+                checked={reconLayers.dense}
+                disabled={!denseCloudPath}
+                detail={densePointCount > 0 ? densePointCount.toLocaleString() : undefined}
+                onChange={(v) => setReconLayer("dense", v)}
+              />
+              <LayerToggle
+                label="Splats"
+                checked={reconLayers.splat}
+                disabled={!latestSplatPath}
+                detail={splatCount > 0 ? splatCount.toLocaleString() : undefined}
+                onChange={(v) => setReconLayer("splat", v)}
+              />
+              <LayerToggle
+                label="Mesh"
+                checked={reconLayers.mesh}
+                disabled={!latestMeshPath}
+                detail={latestMeshPath ? "ready" : "export"}
+                onChange={(v) => setReconLayer("mesh", v)}
+              />
+            </div>
           </Section>
 
           <Section title="Cameras">
