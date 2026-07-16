@@ -1,13 +1,13 @@
-# Research stack (v0.8+) — dual suite + dual mode
+# Research stack (v0.9+) — dual suite + dual mode
 
 Evidence-first inventory: **[PAPER-SWEEP-2024+.md](./PAPER-SWEEP-2024+.md)**.
 
-InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Experimental** policy.
+InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Experimental** policy. In-app **About** summarizes stacks, licenses, and attribution (including Esri World Imagery).
 
 | Suite | Default job |
 |---|---|
-| **Reconstruction** | Capture → scored cameras → confidence-fused dense → live splat |
-| **Geospatial** | Georegister → DEM/layers → ANUGA/SWMM + live preview → exports |
+| **Reconstruction** | Capture → scored cameras → confidence-fused dense → **live stages** (frustums / sparse / dense / splat) |
+| **Geospatial** | Draw **AOI anywhere** → **3D ENU workspace** (default) or 2D satellite → ANUGA/SWMM + live preview → exports |
 
 | | **Standard Mode** (default) | **Experimental Mode** (license ack) |
 |---|---|---|
@@ -19,7 +19,7 @@ InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Expe
 | Trainer | gsplat Auto on CUDA else Brush | Force gsplat Max + strategies; Brush Max if no gsplat |
 | Flood | **ANUGA** scientific (+ **SWMM** network); demo fallback labelled non-authoritative | TRITON / Wflow / GeoClaw external permissive; SFINCS/HiPIMS/BG_Flood/Itzï **GPL plugin only** |
 | Preview | WebGPU/CPU soft solver — always “Live preview” until compare gates pass | Same; promotion blocked without `HydroPromotionGates` |
-| UI | Quiet chrome | TitleBar Experimental ON + NC banner + solver chips |
+| UI | Quiet chrome; Geospatial defaults to 3D ENU | TitleBar Experimental ON + discrete NC banner + solver chips |
 
 Weights / PyTorch sidecars stay **user-installed** under
 `%LOCALAPPDATA%/InstaSplatter/engines/sidecars/`. Hydro plugins:
@@ -32,7 +32,9 @@ Weights / PyTorch sidecars stay **user-installed** under
 Video → frame gate
   → capture-aware commercial poses → optional COLMAP BA
       else COLMAP SfM (or live-init → COLMAP)
+  → Live sparse cloud + frustums in 3D viewport
   → RoMa v2 densify ∧ DA3/VGGT-C ∧ COLMAP MVS ∧ sparse → init.ply
+  → Live dense cloud as densify merges
   → gsplat (CUDA) or Brush: progressive ∧ mip ∧ AbsGS opac/scale ∧ MCMC
   → Fixer polish when installed
   → Live PLY lerp viewport → Mesh / SPZ v4 export
@@ -53,18 +55,24 @@ Video → frame gate → detect CaptureProfile
 
 Routing table lives in `src-tauri/src/pipeline/experimental.rs`.
 
-## Geospatial flood path
+## Geospatial flood path (v0.9)
 
 ```
-Telemetry / GCP / EXIF → ENU/ECEF + GeoReference
-  → adaptive extent plan (CRS, DEM LOD, mesh/preview resolution)
+Draw AOI (WGS84) anywhere → commit_flood_aoi
+  → soft-solver domain = AOI (not Wellington-locked)
+  → Esri World Imagery underlay (Carto/OSM low-bandwidth fallback)
+  → optional splat_bounds_enu from latest PLY into extent plan
+  → 3D ENU workspace (default): terrain + depth water + splat gizmos
+      or 2D MapLibre satellite + AOI + flood ImageSource
   → Scientific: ANUGA (+ optional SWMM) → sim:// checkpoints → SimulationRun
       else labelled demo extents (never authoritative)
   → Preview: WebGPU or CPU soft solver → display-rate interp
-      compare vs ANUGA tolerances → keep “Live preview” badge until within gate
+      authority badge: Live preview | Demo | Scientific
   → Exports: COG / GeoPackage / Zarr-meta / residual report + manifest
       authoritative=true only for calibrated ANUGA scientific products
 ```
+
+Basemap attribution (Esri World Imagery) is required and shown in the geo chrome / About.
 
 ## License map (hard constraints)
 
@@ -85,6 +93,7 @@ Telemetry / GCP / EXIF → ENU/ECEF + GeoReference
 | ANUGA | Apache-2.0 | Scientific flood | Scientific flood |
 | EPA SWMM | Public domain | Network exchange | Network exchange |
 | WebGPU/CPU preview | Apache-2.0 | Preview only | Preview only |
+| Esri World Imagery | Esri terms + attribution | Basemap (Standard) | Same |
 | TRITON / Wflow / GeoClaw | permissive (verify) | Never | External hydro install |
 | SFINCS / HiPIMS / BG_Flood / Itzï | **GPL** | Never | External plugin only |
 
@@ -105,18 +114,22 @@ experimental hydro engine can be considered for Standard. GPL engines
 `lakeAtRestMassOk` / `massRelError` hooks for graphics continuity — they do
 **not** count as scientific validation.
 
-## Automated gates that pass in-repo (v0.8)
+## Automated gates that pass in-repo (v0.9)
 
 - Fusion / Sim(3) dense fusion unit tests
 - ENU/ECEF CRS round-trips (`geospatial::transforms`)
 - Project v1→v2 migration + geospatial workspace dirs
+- AOI → ENU domain / `commit_flood_aoi` persistence
+- `model_transform` project round-trip
 - Hydro promotion / GPL refuse-bundle tests
 - Export manifest `authoritative` flags (demo false; calibrated ANUGA only)
 - GCP residual threshold constants + survey/identity residual tests
 - Preview scientific-compare tolerances (mass / depth / wet fraction)
+- Splat AABB helper for extent `splat_bounds_enu`
 
 ## Honest gaps toward v1.0
 
+- **Shared water/splat depth compositing** — 3D geo still uses camera-synced layered canvases; water does not correctly occlude individual Gaussians
 - Full ANUGA analytical suite on real solver (lake-at-rest, dam-break, rainfall-on-slope) against published benchmarks
 - Three drone datasets with RTK/GCP survey truth
 - Site / city / regional performance benchmarks

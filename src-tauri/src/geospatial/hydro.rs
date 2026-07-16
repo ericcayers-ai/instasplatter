@@ -518,6 +518,38 @@ pub fn aoi_wgs84_to_enu_box(aoi: [f64; 4]) -> ([f64; 3], [f64; 4]) {
     ([lon0, lat0, 0.0], [min_e, min_n, max_e, max_n])
 }
 
+/// Optional splat AABB in ENU metres from the project's latest PLY (+ manual TRS).
+/// Used so extent planning can tighten regional mesh around the reconstruction footprint.
+pub fn splat_bounds_enu_from_project(project: &Project) -> Option<[f64; 6]> {
+    let path = project.latest_splat.as_ref()?;
+    let cloud = crate::splat::ply::read_ply(Path::new(path)).ok()?;
+    let mut b = cloud.axis_aligned_bounds()?;
+    if let Some(tf) = project.model_transform.as_ref() {
+        let sx = tf.scale[0].abs().max(1e-4) as f64;
+        let sy = tf.scale[1].abs().max(1e-4) as f64;
+        let sz = tf.scale[2].abs().max(1e-4) as f64;
+        let tx = tf.translation[0] as f64;
+        let ty = tf.translation[1] as f64;
+        let tz = tf.translation[2] as f64;
+        // Conservative AABB under anisotropic scale + translation (rotation ignored).
+        let cx = 0.5 * (b[0] + b[3]);
+        let cy = 0.5 * (b[1] + b[4]);
+        let cz = 0.5 * (b[2] + b[5]);
+        let hx = 0.5 * (b[3] - b[0]) * sx;
+        let hy = 0.5 * (b[4] - b[1]) * sy;
+        let hz = 0.5 * (b[5] - b[2]) * sz;
+        b = [
+            cx - hx + tx,
+            cy - hy + ty,
+            cz - hz + tz,
+            cx + hx + tx,
+            cy + hy + ty,
+            cz + hz + tz,
+        ];
+    }
+    Some(b)
+}
+
 /// Persist AOI on a flood scenario and return an extent plan for soft/scientific solvers.
 pub fn commit_flood_aoi(
     workspace: &Path,
@@ -545,11 +577,12 @@ pub fn commit_flood_aoi(
     }
 
     let (origin, dem_bounds_enu) = aoi_wgs84_to_enu_box(aoi_wgs84);
+    let splat_bounds_enu = splat_bounds_enu_from_project(&project);
     // Seed / refresh geo origin at AOI centre so scientific + preview share a frame.
     let geo = crate::geospatial::registration::compute_geo_reference(workspace, Some(origin))?;
     let extent_input = ExtentPlanInput {
         camera_enu: Vec::new(),
-        splat_bounds_enu: None,
+        splat_bounds_enu,
         dem_bounds_enu: Some(dem_bounds_enu),
         dem_accuracy_m: Some(2.0),
         preview_budget_cells: Some(1024),
@@ -1124,12 +1157,15 @@ pub fn start_scientific_flood(
         .name("flood-anuga-cpu".into())
         .spawn(move || {
             let result = (|| -> Result<(SimulationRun, Option<String>), String> {
+                let splat_bounds_enu = Project::load(&ws_bg)
+                    .ok()
+                    .and_then(|p| splat_bounds_enu_from_project(&p));
                 let extent_input = spec_bg.extent.clone().unwrap_or_else(|| {
                     if let Some(aoi) = scenario_bg.aoi_wgs84 {
                         let (origin, dem_bounds_enu) = aoi_wgs84_to_enu_box(aoi);
                         ExtentPlanInput {
                             camera_enu: Vec::new(),
-                            splat_bounds_enu: None,
+                            splat_bounds_enu: splat_bounds_enu.clone(),
                             dem_bounds_enu: Some(dem_bounds_enu),
                             dem_accuracy_m: Some(2.0),
                             preview_budget_cells: Some(1024),
@@ -1144,7 +1180,7 @@ pub fn start_scientific_flood(
                     } else {
                         ExtentPlanInput {
                             camera_enu: Vec::new(),
-                            splat_bounds_enu: None,
+                            splat_bounds_enu: splat_bounds_enu.clone(),
                             dem_bounds_enu: Some([0.0, 0.0, 400.0, 300.0]),
                             dem_accuracy_m: Some(2.0),
                             preview_budget_cells: Some(1024),
@@ -1463,6 +1499,95 @@ pub fn enqueue_hydro_job(app: AppHandle, spec: HydroJobSpec) -> Result<String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aoi_domain_is_not_wellington_locked() {
+        // Auckland CBD-ish box — centre must follow the AOI, not a Wellington default.
+        let aoi = [174.75, -36.86, 174.78, -36.84];
+        let (origin, bounds) = aoi_wgs84_to_enu_box(aoi);
+        assert!((origin[0] - 174.765).abs() < 1e-6);
+        assert!((origin[1] - (-36.85)).abs() < 1e-6);
+        assert!(bounds[0] < 0.0 && bounds[2] > 0.0);
+        assert!(bounds[1] < 0.0 && bounds[3] > 0.0);
+        let width = bounds[2] - bounds[0];
+        let height = bounds[3] - bounds[1];
+        assert!(width > 1000.0 && width < 5000.0, "width={width}");
+        assert!(height > 1000.0 && height < 5000.0, "height={height}");
+    }
+
+    #[test]
+    fn commit_flood_aoi_persists_domain_and_plans_extent() {
+        use crate::profiler::Preset;
+        use crate::project::Suite;
+        use crate::settings::ResolvedSettings;
+
+        let ws = std::env::temp_dir().join("instasplatter_aoi_commit_test");
+        let _ = fs::remove_dir_all(&ws);
+        fs::create_dir_all(&ws).unwrap();
+        let settings = ResolvedSettings {
+            preset: Preset::Balanced,
+            max_frames: 100,
+            max_resolution: 1280,
+            blur_reject_fraction: 0.15,
+            matcher: "auto".into(),
+            sift_gpu: true,
+            total_steps: 1000,
+            max_splats: 1_000_000,
+            sh_degree: 3,
+            refine_every: 200,
+            ssim_weight: 0.2,
+            export_every: 500,
+            progressive_resolution: false,
+            mip_filter: false,
+            live_init: false,
+            dense_init: true,
+            use_neural_init: true,
+            allow_research_sidecars: false,
+            experimental_mode: false,
+            experimental_license_acked: false,
+            post_polish: true,
+            trainer: "brush".into(),
+            gsplat_strategy: "mcmc".into(),
+            gsplat_absgrad: true,
+            gsplat_antialiased: true,
+            gsplat_appearance: true,
+            gsplat_bilateral_grid: true,
+            roma_quality: "base".into(),
+            strictness: 0.5,
+            export_format: "ply".into(),
+            keep_intermediates: false,
+            opac_loss_weight: 1e-9,
+            scale_loss_weight: 1e-8,
+            mean_noise_weight: 40.0,
+        };
+        let p = Project::new_with_suite(
+            "job_aoi",
+            Path::new("C:/in/survey"),
+            &ws,
+            &settings,
+            Suite::Geospatial,
+        );
+        p.save().unwrap();
+
+        let aoi = [-122.42, 37.77, -122.40, 37.79]; // SF-ish
+        let (scenario, plan, geo) = commit_flood_aoi(&ws, "default", aoi).unwrap();
+        assert_eq!(scenario.aoi_wgs84, Some(aoi));
+        assert!(plan.bounds_enu[2] > plan.bounds_enu[0]);
+        assert!(plan.bounds_enu[3] > plan.bounds_enu[1]);
+        let origin = geo.as_ref().and_then(|g| g.local_origin).unwrap();
+        assert!((origin[0] - (-122.41)).abs() < 1e-3);
+        assert!((origin[1] - 37.78).abs() < 1e-3);
+
+        let back = Project::load(&ws).unwrap();
+        assert_eq!(
+            back.flood_scenarios
+                .iter()
+                .find(|s| s.id == "default")
+                .and_then(|s| s.aoi_wgs84),
+            Some(aoi)
+        );
+        let _ = fs::remove_dir_all(&ws);
+    }
 
     #[test]
     fn mesh_plan_copies_extent() {

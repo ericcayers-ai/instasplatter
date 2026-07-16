@@ -471,6 +471,27 @@ mod tests {
     }
 
     #[test]
+    fn model_transform_persists_on_project() {
+        let ws = temp("model_tf");
+        let mut p = Project::new("job_tf", Path::new("C:/in/clip.mp4"), &ws, &settings());
+        p.model_transform = Some(ModelTransform {
+            translation: [1.5, -2.0, 0.25],
+            rotation: [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            scale: [2.0, 1.0, 0.5],
+        });
+        p.save().unwrap();
+        let back = Project::load(&ws).unwrap();
+        let tf = back.model_transform.expect("model_transform");
+        assert_eq!(tf.translation, [1.5, -2.0, 0.25]);
+        assert_eq!(tf.scale, [2.0, 1.0, 0.5]);
+        assert!((tf.rotation[1] + 1.0).abs() < 1e-6);
+        // Identity helper stays available for resets.
+        let id = ModelTransform::identity();
+        assert_eq!(id.scale, [1.0, 1.0, 1.0]);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
     fn project_roundtrips_through_disk() {
         let ws = temp("roundtrip");
         let mut p = Project::new("job_1", Path::new("C:/in/clip.mp4"), &ws, &settings());

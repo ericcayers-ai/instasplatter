@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.8.1-green)
+![Status](https://img.shields.io/badge/status-v0.9.0-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -17,7 +17,7 @@
 
 ---
 
-> **v0.8.1** ships the **Reconstruction** and **Geospatial** suites side by side. Reconstruction keeps **Standard** (commercially redistributable) vs **Experimental** (NC ack) routing with scored pose fusion, sidecar schema v2, and SPZ v4. Standard densifiers (RoMa, DA3/DAV2, MapAnything, LightGlue, VGGT-Commercial, Fixer) are **installable adapters** that fail clearly without weights — not pretend-ready stubs. Geospatial adds MapLibre viewport, drone georegistration (ENU/ECEF), dual flood engines (ANUGA Domain.evolve when DEM/mesh allow, else labelled demo/scaffold — never authoritative until evolve + calibration), offline exports with explicit authority flags, and experimental hydro adapters behind promotion gates. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.9.0** ships a **worldwide AOI-driven Geospatial suite** with a primary **3D ENU workspace** (Esri World Imagery terrain, depth water, georegistered splat gizmos), optional **2D satellite** map with fixed flood overlays, **live reconstruction stages** (cameras → sparse → dense → splats), grouped Settings, discrete Experimental Mode, and an **About** implementations panel. Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 
@@ -32,9 +32,9 @@ Drop an `.mp4`, a folder of images, or several at once onto the window and the s
 | Suite | Job |
 |---|---|
 | **Reconstruction** | Capture → cameras → dense evidence → live splat / mesh export |
-| **Geospatial** | Georegistered scene → DEM/layers → flood scenarios → timed exports |
+| **Geospatial** | Draw AOI anywhere → ENU 3D workspace / 2D satellite → flood scenarios → timed exports |
 
-Switch suites from the shell. Projects are versioned (`v2`) and can carry either suite; reconstruction projects remain loadable.
+Switch suites from the TitleBar. Geospatial defaults to the **3D workspace**; toggle **2D satellite** to draw or edit an AOI. Projects are versioned (`v2`) and can carry either suite; reconstruction projects remain loadable.
 
 ## Dual mode (Standard vs Experimental)
 
@@ -48,12 +48,13 @@ Applies inside both suites where engines are gated:
 | Preview | WebGPU/CPU soft solver labelled **non-authoritative** | Same preview path; never promoted without gates |
 | License | Commercial-safe defaults | NC research after one-time ack; GPL never bundled |
 
-NC weights and GPL hydro binaries are never shipped in the installer. See [tools/sidecars/README.md](tools/sidecars/README.md).
+Experimental is a single TitleBar control (+ discrete banner). Open **About** for Standard vs Experimental stacks, geospatial engines, sidecars, and license/attribution (including Esri World Imagery). NC weights and GPL hydro binaries are never shipped in the installer. See [tools/sidecars/README.md](tools/sidecars/README.md).
 
 ## Why it is different
 
 - **Two suites, one shell.** Reconstruction and geospatial share queue, engines, diagnostics, and Standard/Experimental policy.
-- **Live, not batch.** Watch the splat form while training; scrub a hydrograph linked to the flood waterline.
+- **Live, not batch.** Watch cameras → sparse → dense → splat stages in 3D; scrub a hydrograph linked to the flood waterline.
+- **AOI anywhere.** Draw a flood domain worldwide; soft-solver and scientific extent rebind off the box (not Wellington-locked).
 - **Metric when possible.** EXIF/DJI/GCP → ENU/ECEF; unscaled scenes stay clearly labelled.
 - **Science vs graphics.** ANUGA/SWMM for authoritative runs after calibration; live preview stays a badge until within tolerances. Demo/uncalibrated exports never claim authority.
 - **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python required for the base install.
@@ -66,11 +67,12 @@ NC weights and GPL hydro binaries are never shipped in the installer. See [tools
 | **Input** | Video, image folders, batch queue; geospatial telemetry/GCP CSV |
 | **Camera solving** | Scored capture-aware routing, COLMAP 4.1 pose priors / BA |
 | **Dense init** | Schema v2 sidecars, Sim(3) fusion, gsplat `init.ply` |
-| **Live reconstruction** | Brush (wgpu) or gsplat (CUDA) → WebGL2 splat viewport |
-| **Geospatial viewport** | MapLibre layers, scenario inspector, hydrograph timeline |
+| **Live reconstruction** | Sparse/dense clouds + frustums + Brush/gsplat PLY hot-swap in one 3D viewport |
+| **Geospatial 3D** | ENU workspace: Esri imagery terrain, depth water, editable splat gizmos |
+| **Geospatial 2D** | MapLibre satellite + AOI draw + flood depth overlay |
 | **Flood** | ANUGA/SWMM scientific path + WebGPU/CPU preview + demo fallback |
 | **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests |
-| **Modes** | Suite switch + Standard / Experimental toggles |
+| **Modes** | Suite switch + Standard / Experimental + About implementations |
 | **Resume** | Project bundles with checkpoint resume |
 
 ## Requirements
@@ -105,29 +107,23 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 ## Usage
 
 1. **Launch** InstaSplatter. It detects your hardware and picks a preset.
-2. Pick a **suite**: Reconstruction or Geospatial.
-3. **Reconstruction** — drag a video or image folder; watch the splat form; export PLY/SPZ/mesh.
-4. **Geospatial** — open/create a geo project, ingest telemetry/GCP as needed, run flood scientific or preview, export products with manifests.
-5. _(Optional)_ Settings for presets, Experimental Mode (NC ack), or individual knobs.
+2. Pick a **suite**: Reconstruction or Geospatial (TitleBar).
+3. **Reconstruction** — drag a video or image folder; watch live stages (cameras / sparse / dense / splat); export PLY/SPZ/mesh.
+4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in the default 3D ENU workspace), run flood scientific or preview, export products with manifests. Check the authority badge (Live preview / Demo / Scientific).
+5. _(Optional)_ Settings groups, Experimental Mode (NC ack), or **About** for stacks and attribution.
 
 ## Roadmap / release gates
 
-- **v0.8** (this release): suites, georeg, viewport, dual flood engines, exports, experimental adapters.
-- **v0.9–v1.0**: large-scene tiling, uncertainty ensembles, full ANUGA validation suite, multi-drone RTK/GCP truth sets, site/city benchmarks, accessibility + installer migration audit.
+- **v0.8**: suites, georeg, viewport, dual flood engines, exports, experimental adapters.
+- **v0.9** (this release): worldwide AOI, Esri imagery, 3D ENU workspace, live recon stages, Settings/About cleanup.
+- **v1.0**: large-scene tiling, uncertainty ensembles, full ANUGA validation suite, multi-drone RTK/GCP truth sets, site/city benchmarks, shared water/splat depth compositing, accessibility + installer migration audit.
 
 See also **[ROADMAP-V2.md](ROADMAP-V2.md)** and **[ROADMAP.md](ROADMAP.md)**.
 
 ## Contributing
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for suite overview, build setup, testing (`cargo test` / `tsc`), and PR expectations. By participating, you agree to follow the **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**.
-Report bugs and features with the [GitHub issue forms](https://github.com/ericcayers-ai/instasplatter/issues/new/choose).
+See [CONTRIBUTING.md](CONTRIBUTING.md). By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-InstaSplatter is licensed under the **[Apache License 2.0](LICENSE)** (Copyright 2026 Eric Ayers). The project prefers Apache/MIT redistributable components for default product paths; see licensing notes in the roadmaps and [docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md).
-
----
-
-<div align="center">
-<sub>InstaSplatter — from capture to splat to flood scene.</sub>
-</div>
+Apache-2.0. Third-party notices and research sidecar licenses are documented in [docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md) and [About](src/components/shell/AboutPanel.tsx) in-app.

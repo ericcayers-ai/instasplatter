@@ -1,6 +1,7 @@
 /**
  * WebGL2 ENU scene: satellite terrain plane, depth-driven water mesh, gizmo lines.
- * Splat compositing is handled by a sibling SplatRenderer canvas synced to this camera.
+ * Splat compositing is handled by a sibling SplatRenderer canvas synced to this camera
+ * (no shared depth buffer yet — water cannot correctly occlude individual Gaussians).
  */
 
 import {

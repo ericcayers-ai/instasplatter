@@ -97,6 +97,23 @@ impl SplatCloud {
         ]
     }
 
+    /// Axis-aligned AABB over all positions: `[min_x, min_y, min_z, max_x, max_y, max_z]`.
+    pub fn axis_aligned_bounds(&self) -> Option<[f64; 6]> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        for p in &self.positions {
+            for k in 0..3 {
+                let v = p[k] as f64;
+                min[k] = min[k].min(v);
+                max[k] = max[k].max(v);
+            }
+        }
+        Some([min[0], min[1], min[2], max[0], max[1], max[2]])
+    }
+
     /// Centroid and the given quantile of the radial distance from it. The
     /// quantile keeps distant floaters from blowing up scene bounds.
     pub fn robust_bounds(&self, quantile: f32) -> ([f32; 3], f32) {
@@ -271,5 +288,21 @@ mod tests {
         assert!(approx(c[1], 0.0, 1e-6));
         assert!(approx(c[2], 0.0, 1e-6));
         assert!(approx(c[4], 0.0, 1e-6));
+    }
+
+    #[test]
+    fn axis_aligned_bounds_covers_positions() {
+        let cloud = SplatCloud {
+            positions: vec![[-1.0, 2.0, 0.5], [3.0, -4.0, 1.5], [0.0, 0.0, 0.0]],
+            ..Default::default()
+        };
+        let b = cloud.axis_aligned_bounds().unwrap();
+        assert!((b[0] - (-1.0)).abs() < 1e-6);
+        assert!((b[1] - (-4.0)).abs() < 1e-6);
+        assert!((b[2] - 0.0).abs() < 1e-6);
+        assert!((b[3] - 3.0).abs() < 1e-6);
+        assert!((b[4] - 2.0).abs() < 1e-6);
+        assert!((b[5] - 1.5).abs() < 1e-6);
+        assert!(SplatCloud::default().axis_aligned_bounds().is_none());
     }
 }

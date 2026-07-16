@@ -39,6 +39,9 @@ function applyTfToSplat(splat: SplatRenderer, tf: ModelTransform) {
 
 /**
  * Primary Geospatial 3D workspace: ENU terrain + depth water + georegistered splat gizmos.
+ *
+ * Limitation: water and splat render on separate synced canvases (camera-matched overlay),
+ * not a single shared depth buffer — water does not occlude individual Gaussians correctly yet.
  */
 export default function GeoWorkspace3D() {
   const sceneCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -546,6 +549,9 @@ export default function GeoWorkspace3D() {
           <div className="mt-0.5 opacity-80">
             Drag orbit · Shift-drag pan · Alt-drag gizmo · Wheel zoom ·{" "}
             {gizmoMode === "scale" ? "Shift=uniform scale" : "Ctrl=Y · Ctrl+Shift=Z"}
+          </div>
+          <div className="mt-0.5 opacity-70">
+            Water/splat depth compositing is layered canvases (not shared z-buffer).
           </div>
           <div className="mt-0.5 opacity-70">{attribution}</div>
         </div>
