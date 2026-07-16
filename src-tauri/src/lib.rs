@@ -975,6 +975,7 @@ pub fn run() {
             set_geo_gcps,
             compute_geo_reference,
             plan_geo_extent,
+            commit_flood_aoi,
             get_geo_reference,
             start_scientific_flood,
             cancel_scientific_flood,
