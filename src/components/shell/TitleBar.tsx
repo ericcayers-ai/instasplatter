@@ -214,6 +214,8 @@ export default function TitleBar() {
   const backHome = useStore((s) => s.backHome);
   const exportSplatAction = useStore((s) => s.exportSplatAction);
   const exportMeshAction = useStore((s) => s.exportMeshAction);
+  const exportSchematicAction = useStore((s) => s.exportSchematicAction);
+  const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
   const rightPanelOpen = useStore((s) => s.rightPanelOpen);
   const toggleRightPanel = useStore((s) => s.toggleRightPanel);
   const leftPanelOpen = useStore((s) => s.leftPanelOpen);
@@ -266,6 +268,15 @@ export default function TitleBar() {
                 <button onClick={() => void exportMeshAction()} className="btn">
                   Export mesh
                 </button>
+                {experimentalOn && (
+                  <button
+                    onClick={() => void exportSchematicAction()}
+                    className="btn"
+                    title="Experimental: voxelize splat to Sponge Schematic v2 (.schem)"
+                  >
+                    Export schematic
+                  </button>
+                )}
                 <button onClick={() => void exportSplatAction()} className="btn btn-primary">
                   Export splat
                 </button>

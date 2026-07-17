@@ -245,6 +245,8 @@ interface AppStore {
   setReconLayer: (id: keyof AppStore["reconLayers"], visible: boolean) => void;
   exportSplatAction: (rotation?: number[] | null) => Promise<void>;
   exportMeshAction: () => Promise<void>;
+  /** Experimental Mode: splat → Sponge Schematic v2 `.schem`. */
+  exportSchematicAction: (rotation?: number[] | null) => Promise<void>;
   exportDiagnosticsAction: () => Promise<void>;
 }
 
@@ -1198,6 +1200,46 @@ export const useStore = create<AppStore>((set, get) => ({
       set({ meshStatus: String(err) });
     } finally {
       unlisten();
+    }
+  },
+
+  exportSchematicAction: async (rotation) => {
+    const { resultPath, workspace, resolved } = get();
+    if (!resultPath) return;
+    if (!resolved?.experimentalMode) {
+      set({
+        meshStatus:
+          "Minecraft schematic export needs Experimental Mode (TitleBar toggle).",
+      });
+      return;
+    }
+    const dest = await save({
+      title: "Export Minecraft schematic (experimental)",
+      defaultPath: "scene.schem",
+      filters: [{ name: "Sponge Schematic v2", extensions: ["schem"] }],
+    });
+    if (!dest) return;
+    set({ meshStatus: "Voxelizing splat → Minecraft schematic…" });
+    try {
+      const result = await api.exportMinecraftSchematic(resultPath, dest, {
+        workspace,
+        rotation: rotation ?? null,
+      });
+      set({
+        meshStatus: `Schematic ${result.width}×${result.height}×${result.length} (${result.occupied.toLocaleString()} blocks) → ${result.path}`,
+        pipelineChips: {
+          ...get().pipelineChips,
+          export: `Export: schematic ${result.width}×${result.height}×${result.length}`,
+        },
+      });
+    } catch (err) {
+      set({
+        meshStatus: String(err),
+        pipelineChips: {
+          ...get().pipelineChips,
+          export: "Export: schematic failed",
+        },
+      });
     }
   },
 

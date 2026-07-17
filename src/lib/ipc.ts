@@ -415,6 +415,16 @@ export type SimEvent =
       label?: string | null;
     };
 
+export interface SchematicExportResult {
+  path: string;
+  width: number;
+  height: number;
+  length: number;
+  occupied: number;
+  paletteSize: number;
+  metresPerBlock: number;
+}
+
 export const api = {
   getHardwareProfile: () => invoke<HardwareProfile>("get_hardware_profile"),
   getSettings: () => invoke<Settings>("get_settings"),
@@ -517,6 +527,29 @@ export const api = {
    */
   exportSplat: (resultPath: string, destPath: string, workspace?: string | null, rotation?: Mat3 | null) =>
     invoke<void>("export_splat", { resultPath, destPath, workspace: workspace ?? null, rotation: rotation ?? null }),
+
+  /**
+   * Experimental: voxelize the finished splat into a Sponge Schematic v2 `.schem`.
+   * Requires Experimental Mode. Destination must end in `.schem`.
+   */
+  exportMinecraftSchematic: (
+    resultPath: string,
+    destPath: string,
+    opts?: {
+      workspace?: string | null;
+      rotation?: Mat3 | null;
+      maxExtent?: number | null;
+      opacityMin?: number | null;
+    },
+  ) =>
+    invoke<SchematicExportResult>("export_minecraft_schematic", {
+      resultPath,
+      destPath,
+      workspace: opts?.workspace ?? null,
+      rotation: opts?.rotation ?? null,
+      maxExtent: opts?.maxExtent ?? null,
+      opacityMin: opts?.opacityMin ?? null,
+    }),
 
   /** Returns the triangle count. Long running; listen to `onMeshProgress`. */
   exportMesh: (
