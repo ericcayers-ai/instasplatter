@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../../state/store";
 
 function StageDot({ state }: { state: "pending" | "active" | "done" }) {
@@ -6,32 +7,38 @@ function StageDot({ state }: { state: "pending" | "active" | "done" }) {
       className={`inline-block h-1.5 w-1.5 rounded-full ${
         state === "done" ? "bg-accent" : state === "active" ? "bg-accent2" : "bg-edge"
       }`}
+      aria-hidden
     />
+  );
+}
+
+function PanelIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <rect x="1.5" y="2" width="11" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.25" />
+      <path d={open ? "M5 2v10" : "M9 2v10"} stroke="currentColor" strokeWidth="1.25" />
+    </svg>
   );
 }
 
 function ThemeToggle() {
   const themePreference = useStore((s) => s.themePreference);
   const setThemePreference = useStore((s) => s.setThemePreference);
-  const options: { id: "system" | "light" | "dark"; label: string }[] = [
-    { id: "system", label: "Auto" },
-    { id: "light", label: "Light" },
-    { id: "dark", label: "Dark" },
-  ];
+  const cycle = () => {
+    const order: Array<"system" | "light" | "dark"> = ["system", "light", "dark"];
+    const i = order.indexOf(themePreference);
+    setThemePreference(order[(i + 1) % order.length]);
+  };
+  const label = themePreference === "system" ? "Auto" : themePreference === "light" ? "Light" : "Dark";
   return (
-    <div className="flex overflow-hidden rounded border border-edge">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          onClick={() => setThemePreference(o.id)}
-          className={`px-2 py-1 text-[11px] transition ${
-            themePreference === o.id ? "bg-accent/15 text-accent" : "text-ink-dim hover:text-ink"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <button
+      type="button"
+      onClick={cycle}
+      className="btn btn-ghost px-2 py-1 text-[11px]"
+      title={`Theme: ${label}. Click to cycle.`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -40,11 +47,11 @@ function ExperimentalToggle() {
   const resolved = useStore((s) => s.resolved);
   const requestExperimental = useStore((s) => s.requestExperimental);
   const updateSettings = useStore((s) => s.updateSettings);
-  // Effective mode only — raw settings.experimentalMode without ack must not light up.
   const on = !!(resolved?.experimentalMode);
 
   return (
     <button
+      type="button"
       onClick={() => {
         if (on) {
           void updateSettings({ experimentalMode: false, allowResearchSidecars: false });
@@ -53,9 +60,7 @@ function ExperimentalToggle() {
         }
       }}
       className={`btn px-2.5 py-1 text-[11px] font-semibold tracking-wide ${
-        on
-          ? "border-danger/60 bg-danger/20 text-danger shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-danger)_35%,transparent)]"
-          : "text-ink-dim hover:text-ink"
+        on ? "border-danger/55 bg-danger/15 text-danger" : "btn-ghost"
       }`}
       title={
         on
@@ -64,8 +69,9 @@ function ExperimentalToggle() {
             ? "Enable Experimental Mode (NC research models)"
             : "Enable Experimental Mode (requires one-time NC license ack)"
       }
+      aria-pressed={on}
     >
-      {on ? "Experimental ON" : "Experimental"}
+      {on ? "Exp ON" : "Exp"}
     </button>
   );
 }
@@ -76,23 +82,19 @@ function SuiteSwitch() {
   const screen = useStore((s) => s.screen);
   const busy = screen === "processing";
   const options: { id: "reconstruction" | "geospatial"; label: string }[] = [
-    { id: "reconstruction", label: "Reconstruction" },
-    { id: "geospatial", label: "Geospatial" },
+    { id: "reconstruction", label: "Recon" },
+    { id: "geospatial", label: "Geo" },
   ];
   return (
-    <div className="flex overflow-hidden rounded border border-edge" title="Product suite">
+    <div className="seg" role="group" aria-label="Product suite">
       {options.map((o) => (
         <button
           key={o.id}
+          type="button"
           disabled={busy && o.id !== suite}
+          aria-pressed={suite === o.id}
           onClick={() => void setSuite(o.id)}
-          className={`px-2.5 py-1 text-[11px] font-medium transition ${
-            suite === o.id
-              ? o.id === "geospatial"
-                ? "bg-[color-mix(in_srgb,var(--color-hydro)_18%,transparent)] text-[var(--color-hydro)]"
-                : "bg-accent/15 text-accent"
-              : "text-ink-dim hover:text-ink disabled:opacity-40"
-          }`}
+          title={o.id === "reconstruction" ? "Reconstruction suite" : "Geospatial suite"}
         >
           {o.label}
         </button>
@@ -103,17 +105,12 @@ function SuiteSwitch() {
 
 function ReconStageStrip() {
   const stages = useStore((s) => s.stages);
-  const pipelineChips = useStore((s) => s.pipelineChips);
 
   return (
-    <div className="ml-2 hidden items-center gap-2.5 sm:flex">
+    <div className="ml-1 hidden items-center gap-2.5 md:flex" aria-label="Reconstruction stages">
       {stages.map((s) => {
         const pct =
-          s.state === "active" && s.progress > 0
-            ? ` ${Math.round(s.progress * 100)}%`
-            : s.state === "done"
-              ? ""
-              : "";
+          s.state === "active" && s.progress > 0 ? ` ${Math.round(s.progress * 100)}%` : "";
         return (
           <span
             key={s.id}
@@ -123,27 +120,11 @@ function ReconStageStrip() {
             title={s.detail || s.label}
           >
             <StageDot state={s.state} />
-            {s.label}
+            <span className="hidden lg:inline">{s.label}</span>
             {pct && <span className="tabular-nums text-accent2">{pct.trim()}</span>}
           </span>
         );
       })}
-      {(pipelineChips.cameras || pipelineChips.init || pipelineChips.trainer) && (
-        <span className="ml-1 hidden items-center gap-1 lg:flex">
-          {[pipelineChips.cameras, pipelineChips.init, pipelineChips.trainer]
-            .filter(Boolean)
-            .slice(0, 2)
-            .map((c) => (
-              <span
-                key={c}
-                className="max-w-36 truncate rounded border border-edge bg-panel2/80 px-1.5 py-0.5 text-[9px] text-ink-dim"
-                title={c}
-              >
-                {c!.replace(/^(Cameras|Init|Polish|Trainer):\s*/i, "")}
-              </span>
-            ))}
-        </span>
-      )}
     </div>
   );
 }
@@ -167,7 +148,7 @@ function GeoStageStrip() {
     : "pending";
 
   return (
-    <div className="ml-2 hidden items-center gap-2.5 sm:flex">
+    <div className="ml-1 hidden items-center gap-2.5 md:flex" aria-label="Geospatial stages">
       <span
         className={`flex items-center gap-1.5 text-[11px] ${
           floodState === "active" ? "text-ink" : "text-ink-dim"
@@ -188,16 +169,89 @@ function GeoStageStrip() {
       </span>
       {preview && (
         <span className="rounded border border-edge bg-panel2/80 px-1.5 py-0.5 text-[9px] text-ink-dim">
-          Preview · {preview.backend}
+          {preview.backend}
         </span>
       )}
-      {pipelineChips.flood && (
-        <span
-          className="max-w-40 truncate rounded border border-[var(--color-hydro)]/30 bg-panel2/80 px-1.5 py-0.5 text-[9px] text-ink-dim"
-          title={pipelineChips.flood}
-        >
-          {pipelineChips.flood.replace(/^Flood:\s*/i, "")}
+    </div>
+  );
+}
+
+function ExportMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const exportSplatAction = useStore((s) => s.exportSplatAction);
+  const exportMeshAction = useStore((s) => s.exportMeshAction);
+  const exportSchematicAction = useStore((s) => s.exportSchematicAction);
+  const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        className="btn btn-primary"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((v) => !v)}
+      >
+        Export
+        <span className="text-[10px] opacity-80" aria-hidden>
+          ▾
         </span>
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              void exportSplatAction();
+            }}
+          >
+            Splat
+            <span className="hint">PLY · SPZ · .splat</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              void exportMeshAction();
+            }}
+          >
+            Mesh
+            <span className="hint">GLB · OBJ · PLY</span>
+          </button>
+          {experimentalOn && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                void exportSchematicAction();
+              }}
+            >
+              Schematic
+              <span className="hint">Minecraft .schem</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -212,10 +266,6 @@ export default function TitleBar() {
   const jobError = useStore((s) => s.jobError);
   const cancelJob = useStore((s) => s.cancelJob);
   const backHome = useStore((s) => s.backHome);
-  const exportSplatAction = useStore((s) => s.exportSplatAction);
-  const exportMeshAction = useStore((s) => s.exportMeshAction);
-  const exportSchematicAction = useStore((s) => s.exportSchematicAction);
-  const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
   const rightPanelOpen = useStore((s) => s.rightPanelOpen);
   const toggleRightPanel = useStore((s) => s.toggleRightPanel);
   const leftPanelOpen = useStore((s) => s.leftPanelOpen);
@@ -228,78 +278,74 @@ export default function TitleBar() {
   const showGeoChrome = suite === "geospatial";
 
   return (
-    <div className="flex h-10 shrink-0 items-center justify-between border-b border-edge bg-panel px-3">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-edge bg-panel px-3">
+      <div className="flex min-w-0 items-center gap-2.5">
         <button
+          type="button"
           onClick={() => setLeftPanelOpen(!leftPanelOpen)}
-          className="btn"
-          title={leftPanelOpen ? "Hide the scene panel" : "Show the scene panel"}
+          className={`btn btn-icon ${leftPanelOpen ? "btn-active" : "btn-ghost"}`}
+          title={leftPanelOpen ? "Hide side panel (Ctrl+B)" : "Show side panel (Ctrl+B)"}
+          aria-pressed={leftPanelOpen}
+          aria-label={leftPanelOpen ? "Hide side panel" : "Show side panel"}
         >
-          {leftPanelOpen ? "◀" : "▶"}
+          <PanelIcon open={leftPanelOpen} />
         </button>
-        <div className="font-display text-[14px] font-bold tracking-tight">InstaSplatter</div>
+
+        <div className="flex min-w-0 items-baseline gap-2">
+          <div className="font-display text-[15px] font-bold tracking-tight text-ink">InstaSplatter</div>
+          {showReconChrome && name && (
+            <>
+              <span className="text-ink-dim" aria-hidden>
+                /
+              </span>
+              <span className="max-w-40 truncate text-xs text-ink-dim" title={name}>
+                {name}
+              </span>
+            </>
+          )}
+        </div>
+
         <SuiteSwitch />
-        {showReconChrome && (
-          <>
-            <span className="text-ink-dim">/</span>
-            <span className="max-w-56 truncate text-xs text-ink-dim">{name}</span>
-            <ReconStageStrip />
-          </>
-        )}
+        {showReconChrome && <ReconStageStrip />}
         {showGeoChrome && <GeoStageStrip />}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1.5">
         <ExperimentalToggle />
         {showReconChrome && (
           <>
             {running && (
-              <button onClick={cancelJob} className="btn btn-danger">
+              <button type="button" onClick={cancelJob} className="btn btn-danger">
                 Cancel
               </button>
             )}
             {!running && (
-              <button onClick={backHome} className="btn">
-                New scene
+              <button type="button" onClick={backHome} className="btn">
+                New
               </button>
             )}
-            {resultPath && (
-              <>
-                <button onClick={() => void exportMeshAction()} className="btn">
-                  Export mesh
-                </button>
-                {experimentalOn && (
-                  <button
-                    onClick={() => void exportSchematicAction()}
-                    className="btn"
-                    title="Experimental: voxelize splat to Sponge Schematic v2 (.schem)"
-                  >
-                    Export schematic
-                  </button>
-                )}
-                <button onClick={() => void exportSplatAction()} className="btn btn-primary">
-                  Export splat
-                </button>
-              </>
-            )}
+            {resultPath && <ExportMenu />}
           </>
         )}
         <ThemeToggle />
         <button
+          type="button"
           onClick={() => setAboutOpen(true)}
-          className="btn"
+          className="btn btn-ghost px-2 py-1 text-[11px]"
           title="About implementations, licenses, and docs"
         >
           About
         </button>
         <button
+          type="button"
           onClick={toggleRightPanel}
           className={`btn ${rightPanelOpen ? "btn-active" : ""}`}
-          title="Settings"
+          title="Settings (Ctrl+,)"
+          aria-pressed={rightPanelOpen}
         >
           Settings
         </button>
       </div>
-    </div>
+    </header>
   );
 }

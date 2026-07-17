@@ -138,11 +138,18 @@ export default function PropertiesPanel() {
     JSON.stringify(jobSettingsSnapshot) !== JSON.stringify(resolved);
 
   return (
-    <div className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-edge bg-panel">
+    <aside
+      className="shell-panel flex w-72 shrink-0 flex-col overflow-y-auto border-l border-edge bg-panel"
+      aria-label="Settings"
+    >
       <div className="flex items-center justify-between border-b border-edge px-3 py-2">
-        <div className="text-xs font-semibold">Settings</div>
+        <div className="flex items-center gap-2">
+          <div className="text-xs font-semibold">Settings</div>
+          <span className="kbd">⌃,</span>
+        </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() =>
               set({
                 preset: null, maxFrames: null, maxResolution: null,
@@ -396,9 +403,11 @@ export default function PropertiesPanel() {
         </Row>
       </CollapsibleSection>
 
-      <div className="p-3 text-center text-[10px] text-ink-dim">
-        Every setting defaults to Auto, resolved from your hardware profile at job start.
+      <div className="p-3 text-center text-[10px] leading-relaxed text-ink-dim">
+        Every setting defaults to Auto, resolved from your hardware at job start.
+        Shortcuts: <span className="kbd">⌃B</span> panel · <span className="kbd">⌃,</span> settings ·{" "}
+        <span className="kbd">⌃L</span> log · <span className="kbd">Esc</span> close
       </div>
-    </div>
+    </aside>
   );
 }

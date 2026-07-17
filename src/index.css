@@ -1,22 +1,18 @@
 @import "tailwindcss";
 
-/* InstaSplatter palette (named for the splatter / capture workflow):
-   Ink #0b0d12, Slate #12151d, Panel #171b26, Edge #232939,
-   Splatter #38b7a6 (primary pigment), Trace #8b7cf6 (live progress),
-   Paper #e8ecf4, Graphite #8b93a7, Ember #e5654f
-
-   Geospatial tokens (suite overlay): Basin Ink, Survey Slate, Contour,
-   Hydro Cyan, Gauge Amber, Critical Rose. */
+/* InstaSplatter — capture-bay product palette.
+   Teal pigment = brand. Warm brass = live progress. Surfaces stay quiet. */
 @theme {
-  --color-bg: #0b0d12;
-  --color-panel: #12151d;
-  --color-panel2: #171b26;
-  --color-edge: #232939;
-  --color-accent: #38b7a6;
-  --color-accent2: #8b7cf6;
-  --color-ink: #e8ecf4;
-  --color-ink-dim: #8b93a7;
+  --color-bg: #0a0c10;
+  --color-panel: #11151c;
+  --color-panel2: #171c26;
+  --color-edge: #2a3140;
+  --color-accent: #2fc4b0;
+  --color-accent2: #e0a34a;
+  --color-ink: #e9edf5;
+  --color-ink-dim: #8e96a8;
   --color-danger: #e5654f;
+  --color-success: #3dba7a;
   --color-basin: #08121d;
   --color-survey: #152536;
   --color-contour: #36516a;
@@ -26,18 +22,27 @@
   --font-display: "Syne", "Segoe UI", system-ui, sans-serif;
   --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "Cascadia Mono", "Consolas", monospace;
+  --z-panel: 10;
+  --z-banner: 20;
+  --z-dropdown: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration: 220ms;
 }
 
 :root[data-theme="dark"] {
-  --color-bg: #0b0d12;
-  --color-panel: #12151d;
-  --color-panel2: #171b26;
-  --color-edge: #232939;
-  --color-accent: #38b7a6;
-  --color-accent2: #8b7cf6;
-  --color-ink: #e8ecf4;
-  --color-ink-dim: #8b93a7;
+  --color-bg: #0a0c10;
+  --color-panel: #11151c;
+  --color-panel2: #171c26;
+  --color-edge: #2a3140;
+  --color-accent: #2fc4b0;
+  --color-accent2: #e0a34a;
+  --color-ink: #e9edf5;
+  --color-ink-dim: #8e96a8;
   --color-danger: #e5654f;
+  --color-success: #3dba7a;
   --color-basin: #08121d;
   --color-survey: #152536;
   --color-contour: #36516a;
@@ -48,15 +53,16 @@
 }
 
 :root[data-theme="light"] {
-  --color-bg: #f3f3f3;
+  --color-bg: #f5f6f8;
   --color-panel: #ffffff;
-  --color-panel2: #f7f7f8;
-  --color-edge: #d8dbe0;
-  --color-accent: #0f7d70;
-  --color-accent2: #6d28d9;
+  --color-panel2: #f0f2f5;
+  --color-edge: #d5dae3;
+  --color-accent: #0e7a6d;
+  --color-accent2: #b8781a;
   --color-ink: #14161b;
-  --color-ink-dim: #63676f;
+  --color-ink-dim: #5c6370;
   --color-danger: #b3341f;
+  --color-success: #1f8a52;
   --color-basin: #e8eef3;
   --color-survey: #d5e0ea;
   --color-contour: #5a738a;
@@ -66,7 +72,6 @@
   color-scheme: light;
 }
 
-/* Geospatial suite: pull shell surfaces toward the survey palette. */
 :root[data-suite="geospatial"][data-theme="dark"] {
   --color-bg: var(--color-basin);
   --color-panel: var(--color-survey);
@@ -104,26 +109,33 @@ body,
   font-family: var(--font-display);
 }
 
-/* Signature splatter motif: restrained ink drops behind the drop zone only. */
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Atmosphere — home drop field (edge-to-edge, not a floating card). */
 .splatter-field {
   position: relative;
   isolation: isolate;
+  background:
+    radial-gradient(ellipse 55% 40% at 50% 0%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 70%),
+    radial-gradient(ellipse 40% 35% at 85% 75%, color-mix(in srgb, var(--color-accent2) 8%, transparent), transparent 72%),
+    var(--color-bg);
 }
 .splatter-field::before {
   content: "";
   position: absolute;
-  inset: -12%;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
-  opacity: 0.55;
+  opacity: 0.7;
   background:
-    radial-gradient(ellipse 28% 22% at 18% 72%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 70%),
-    radial-gradient(ellipse 20% 16% at 78% 28%, color-mix(in srgb, var(--color-accent2) 18%, transparent), transparent 72%),
-    radial-gradient(ellipse 14% 12% at 62% 78%, color-mix(in srgb, var(--color-accent) 14%, transparent), transparent 68%),
-    radial-gradient(ellipse 10% 8% at 34% 38%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 65%);
+    radial-gradient(ellipse 22% 18% at 16% 78%, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 70%),
+    radial-gradient(ellipse 16% 14% at 74% 32%, color-mix(in srgb, var(--color-accent2) 14%, transparent), transparent 72%),
+    radial-gradient(ellipse 12% 10% at 58% 82%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 68%);
 }
 :root[data-theme="light"] .splatter-field::before {
-  opacity: 0.35;
+  opacity: 0.4;
 }
 
 .geo-field {
@@ -162,19 +174,95 @@ body,
 @keyframes float-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: none;
   }
 }
+@keyframes pulse-ring {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 .float-in {
-  animation: float-in 0.2s ease-out both;
+  animation: float-in var(--duration) var(--ease-out) both;
+}
+.float-in-delay-1 {
+  animation-delay: 40ms;
+}
+.float-in-delay-2 {
+  animation-delay: 80ms;
+}
+.float-in-delay-3 {
+  animation-delay: 120ms;
+}
+
+.loading-ring {
+  position: relative;
+  width: 2.5rem;
+  height: 2.5rem;
+}
+.loading-ring::before,
+.loading-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  border-top-color: var(--color-accent);
+}
+.loading-ring::after {
+  inset: 4px;
+  border-top-color: var(--color-accent2);
+  animation: pulse-ring 1.4s var(--ease-out) infinite;
+}
+.loading-ring::before {
+  animation: pulse-ring 1.4s var(--ease-out) 0.2s infinite;
+}
+
+.progress-bar {
+  height: 2px;
+  width: 100%;
+  background: var(--color-edge);
+  overflow: hidden;
+  border-radius: 1px;
+}
+.progress-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent2));
+  background-size: 200% 100%;
+  animation: shimmer 2.4s linear infinite;
+  transform-origin: left center;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .float-in {
+  .float-in,
+  .float-in-delay-1,
+  .float-in-delay-2,
+  .float-in-delay-3 {
+    animation: none;
+  }
+  .loading-ring::before,
+  .loading-ring::after,
+  .progress-bar > span {
     animation: none;
   }
   *,
@@ -189,19 +277,25 @@ body,
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.4em;
   border: 1px solid var(--color-edge);
   background: var(--color-panel2);
   color: var(--color-ink);
-  border-radius: 4px;
-  padding: 0.4em 0.75em;
+  border-radius: 5px;
+  padding: 0.45em 0.8em;
   font-size: 12px;
   line-height: 1.2;
-  transition: border-color 0.12s, color 0.12s, background-color 0.12s;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
   white-space: nowrap;
+  cursor: pointer;
 }
 .btn:hover {
-  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-edge));
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-edge));
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-panel2));
 }
 .btn:focus-visible {
   outline: 2px solid var(--color-accent);
@@ -214,25 +308,178 @@ body,
 .btn-primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #05100e;
+  color: #041210;
   font-weight: 600;
 }
 .btn-primary:hover {
-  filter: brightness(1.08);
+  filter: brightness(1.07);
+  background: var(--color-accent);
 }
 .btn-danger:hover {
   border-color: var(--color-danger);
   color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-panel2));
 }
 .btn-active {
   border-color: var(--color-accent);
   color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 12%, var(--color-panel2));
 }
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-ink-dim);
+}
+.btn-ghost:hover {
+  color: var(--color-ink);
+  background: color-mix(in srgb, var(--color-ink) 6%, transparent);
+  border-color: transparent;
+}
+.btn-icon {
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+}
 
 .panel {
   background: var(--color-panel);
   border: 1px solid var(--color-edge);
+}
+
+.seg {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--color-edge);
+  border-radius: 5px;
+  background: var(--color-panel2);
+}
+.seg button {
+  padding: 0.35rem 0.7rem;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-ink-dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+.seg button:hover:not(:disabled) {
+  color: var(--color-ink);
+}
+.seg button[aria-pressed="true"] {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.seg button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.seg button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.status-pill[data-tone="idle"] {
+  color: var(--color-ink-dim);
+  background: color-mix(in srgb, var(--color-ink-dim) 12%, transparent);
+}
+.status-pill[data-tone="live"] {
+  color: var(--color-accent2);
+  background: color-mix(in srgb, var(--color-accent2) 16%, transparent);
+}
+.status-pill[data-tone="ok"] {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+}
+.status-pill[data-tone="err"] {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--z-dropdown);
+  min-width: 11rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-edge);
+  border-radius: 6px;
+  background: var(--color-panel);
+  box-shadow: 0 12px 32px color-mix(in srgb, #000 35%, transparent);
+}
+.menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.menu button:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+.menu button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+.menu .hint {
+  color: var(--color-ink-dim);
+  font-size: 10px;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--color-edge);
+  border-radius: 3px;
+  background: var(--color-panel2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--color-ink-dim);
+}
+
+.drop-plane {
+  width: min(40rem, 100%);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-edge));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-panel) 82%, transparent);
+  backdrop-filter: blur(8px);
+  transition:
+    border-color var(--duration) var(--ease-out),
+    background-color var(--duration) var(--ease-out),
+    box-shadow var(--duration) var(--ease-out);
+}
+.drop-plane[data-hover="true"] {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-panel));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+.shell-panel {
+  /* Side panels: mount/unmount without width transitions. */
 }
 
 input[type="range"] {
@@ -261,7 +508,7 @@ input[type="text"],
 select {
   background: var(--color-panel2);
   border: 1px solid var(--color-edge);
-  border-radius: 4px;
+  border-radius: 5px;
   color: var(--color-ink);
 }
 input:focus-visible,
@@ -270,12 +517,12 @@ select:focus-visible {
   outline-offset: 1px;
 }
 
-/* ——— Geospatial viewport / flood graphics hooks ——— */
 .geo-viewport {
   --geo-wet: 0.3;
   --geo-depth: 0.5;
 }
 .geo-map {
+  position: relative;
   background: var(--color-basin);
 }
 .geo-map .maplibregl-ctrl-group {
@@ -302,7 +549,6 @@ select:focus-visible {
   border-radius: 2px;
 }
 
-/* Depth / hazard / contour legend swatches (color-blind-safe patterns on hazard). */
 .geo-legend__swatch {
   height: 10px;
   border-radius: 2px;
@@ -335,7 +581,6 @@ select:focus-visible {
   background-color: color-mix(in srgb, var(--color-hydro) 18%, transparent);
 }
 
-/* Water surface styling hooks driven by data-water-style / scrub CSS vars. */
 .geo-viewport[data-water-style="depth"] .geo-map::after {
   content: "";
   pointer-events: none;
@@ -367,10 +612,6 @@ select:focus-visible {
 }
 .geo-viewport[data-water-style="contour"] .geo-map::after {
   content: none;
-}
-
-.geo-map {
-  position: relative;
 }
 
 @media (prefers-reduced-motion: reduce) {
