@@ -1374,6 +1374,71 @@ fn pick_run<'a>(project: &'a Project, run_id: Option<&str>) -> Result<&'a Simula
         })
 }
 
+/// Create a labelled preview run so DEM-only workspaces can export without a splat or ANUGA job.
+fn ensure_dem_only_preview_run(
+    project: &mut Project,
+    workspace: &Path,
+) -> Result<SimulationRun, String> {
+    let scenario_id = project
+        .flood_scenarios
+        .first()
+        .map(|s| s.id.clone())
+        .unwrap_or_else(|| "draft-site-rain".into());
+    if project.flood_scenarios.is_empty() {
+        project.flood_scenarios.push(FloodScenario {
+            id: scenario_id.clone(),
+            name: "Flood lab — DEM-only".into(),
+            validation_state: Some("draft".into()),
+            ..Default::default()
+        });
+    }
+    let run_id = format!("preview_dem_{}", now_unix_export());
+    let run_dir = workspace.join("geo").join("runs").join(&run_id);
+    fs::create_dir_all(run_dir.join("checkpoints")).map_err(|e| e.to_string())?;
+    fs::write(
+        run_dir.join("hydrograph.json"),
+        r#"{"samples":[{"hours":0,"stageM":0.4,"dischargeCms":2.0},{"hours":6,"stageM":1.2,"dischargeCms":20.0},{"hours":12,"stageM":0.5,"dischargeCms":4.0}],"note":"DEM-only preview hydrograph — non-authoritative"}"#,
+    )
+    .map_err(|e| e.to_string())?;
+    let dem_note = workspace.join("geo").join("derived").join("dtm_flood.meta.json");
+    let dem_synthetic = fs::read_to_string(&dem_note)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("synthetic").and_then(|s| s.as_bool()))
+        .unwrap_or(true);
+    let mode = if dem_synthetic { "demo" } else { "preview" };
+    let run = SimulationRun {
+        id: run_id,
+        scenario_id,
+        engine: Some("preview".into()),
+        engine_version: None,
+        grid_or_mesh: Some("dem-only soft/HAND preview".into()),
+        timestep_s: None,
+        cfl: None,
+        mass_balance: None,
+        result_paths: vec![run_dir
+            .join("hydrograph.json")
+            .to_string_lossy()
+            .into_owned()],
+        checkpoint_paths: Vec::new(),
+        hardware: Some("cpu".into()),
+        reproducibility_hash: None,
+        created_unix: now_unix_export(),
+        status: Some("done".into()),
+        mode: Some(mode.into()),
+    };
+    project.simulation_runs.push(run.clone());
+    project.save().map_err(|e| e.to_string())?;
+    Ok(run)
+}
+
+fn now_unix_export() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 fn preview_discrepancy_fields(run: &SimulationRun) -> serde_json::Value {
     // Without a live preview sample, emit structural fields + a note.
     let scientific = PreviewCheckpoint {
@@ -1401,14 +1466,24 @@ fn preview_discrepancy_fields(run: &SimulationRun) -> serde_json::Value {
 }
 
 /// Export the full flood product bundle for a run into `geo/exports/<runId>/`.
+///
+/// DEM-only workspaces (no splat, optionally no prior scientific run) still
+/// produce depth/hazard rasters + scenario manifest labelled non-authoritative.
 pub fn export_flood_products(
     workspace: &Path,
     run_id: Option<&str>,
 ) -> Result<FloodExportResult, String> {
     crate::project::ensure_geo_workspace(workspace)
         .map_err(|e| format!("ensure_geo_workspace: {e}"))?;
-    let project =
+    let mut project =
         Project::load(workspace).map_err(|e| format!("load project: {e}"))?;
+
+    // DEM-only / preview: synthesise a labelled preview run when none exist.
+    if project.simulation_runs.is_empty() {
+        let preview_run = ensure_dem_only_preview_run(&mut project, workspace)?;
+        let _ = preview_run;
+    }
+
     let run = pick_run(&project, run_id)?.clone();
     let scenario = project
         .flood_scenarios
@@ -1455,8 +1530,11 @@ pub fn export_flood_products(
             "Raster synthesised from run extent when full ANUGA grids are absent.".into(),
             authoritative_note(run.mode.as_deref()),
         ];
-        if run.mode.as_deref() == Some("demo") {
-            notes.push("Demo-mode field — illustrative only.".into());
+        if run.mode.as_deref() == Some("demo") || run.mode.as_deref() == Some("preview") {
+            notes.push("Demo/preview-mode field — illustrative only.".into());
+        }
+        if project.latest_splat.is_none() {
+            notes.push("DEM-only workspace — no splat required for this product.".into());
         }
         let (path, writer, mut extra) = export_raster(&dest, &grid, &gdal, true)
             .map_err(|e| format!("raster {file}: {e}"))?;
@@ -1892,6 +1970,46 @@ mod tests {
             .find(|a| a.kind == "cogDepth")
             .unwrap();
         assert!(Path::new(&depth.path).exists());
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn export_dem_only_workspace_without_splat_or_prior_run() {
+        let ws = temp_ws("dem_only");
+        let mut proj =
+            Project::new_with_suite("job_dem", Path::new("input"), &ws, &settings(), Suite::Geospatial);
+        // No splat, no simulation runs — DEM-only flood path.
+        proj.latest_splat = None;
+        proj.flood_scenarios.push(FloodScenario {
+            id: "draft-site-rain".into(),
+            name: "Flood lab".into(),
+            validation_state: Some("draft".into()),
+            aoi_wgs84: Some([-122.5, 37.7, -122.3, 37.85]),
+            ..Default::default()
+        });
+        fs::create_dir_all(ws.join("geo").join("derived")).unwrap();
+        fs::write(
+            ws.join("geo").join("derived").join("dtm_flood.meta.json"),
+            r#"{"synthetic":false,"conditioned":true}"#,
+        )
+        .unwrap();
+        proj.save().unwrap();
+
+        let result = export_flood_products(&ws, None).unwrap();
+        assert!(!result.authoritative);
+        assert!(result.artifacts.iter().any(|a| a.kind == "cogDepth"));
+        assert!(result.artifacts.iter().any(|a| a.kind == "cogHazard"));
+        assert!(Path::new(&result.manifest_path).exists());
+        let depth = result
+            .artifacts
+            .iter()
+            .find(|a| a.kind == "cogDepth")
+            .unwrap();
+        assert!(
+            depth.notes.iter().any(|n| n.contains("DEM-only")),
+            "{:?}",
+            depth.notes
+        );
         let _ = fs::remove_dir_all(&ws);
     }
 

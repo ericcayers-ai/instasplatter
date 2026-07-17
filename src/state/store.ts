@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { save } from "@tauri-apps/plugin-dialog";
 import type {
   CameraRegistered,
+  DemProduct,
+  DemSampleGrid,
   EngineStatus,
   FloodEngineStatus,
   GeoEvent,
@@ -23,6 +25,7 @@ import {
   normalizeModelTransform,
   type ModelTransform,
 } from "../geospatial/modelTransform";
+import { setLocalDemTerrainUrl } from "../geospatial/globe/terrain";
 import type {
   GeoBasemapMode,
   GeoLayer,
@@ -34,6 +37,7 @@ import type {
   GeoWaterStyle,
 } from "../geospatial/types";
 import type { ExtentPlan } from "../lib/ipc";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 export type Screen = "home" | "processing";
 export type ThemePreference = "system" | "light" | "dark";
@@ -194,6 +198,14 @@ interface AppStore {
   geoAoiRevision: number;
   /** Manual splat TRS in ENU (persisted as modelTransform on project). */
   geoModelTransform: ModelTransform;
+  /** Staged DEM product (synthetic or real). */
+  geoDemProduct: DemProduct | null;
+  /** Soft-preview / HAND bed samples from staged DEM. */
+  geoDemSample: DemSampleGrid | null;
+  /** Catalog overlay GeoJSON paths keyed by layer id (nfhl, hydrosheds, gauges, waterways). */
+  geoOverlayPaths: Record<string, string>;
+  /** Bumped when DEM bed / overlays change so map engines can refresh. */
+  geoDemRevision: number;
 
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
@@ -208,6 +220,10 @@ interface AppStore {
   /** Draw/edit commit: persist AOI, plan extent, rebind soft-solver domain. */
   commitGeoAoi: (aoi: AoiWgs84) => Promise<void>;
   clearGeoAoi: () => void;
+  /** Stage DEM + sample bed for soft/HAND; wire Globe terrain URL when tiles exist. */
+  prepareGeoDemForAoi: () => Promise<void>;
+  /** Fetch catalog overlay (nfhl / hydrosheds / gauges / osm-waterways) into layer tree. */
+  fetchGeoOverlayLayer: (layerId: string) => Promise<void>;
   startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
   cancelScientificFlood: () => Promise<void>;
   exportFloodProducts: () => Promise<void>;
@@ -340,6 +356,10 @@ export const useStore = create<AppStore>((set, get) => ({
   geoExtentPlan: null,
   geoAoiRevision: 0,
   geoModelTransform: identityModelTransform(),
+  geoDemProduct: null,
+  geoDemSample: null,
+  geoOverlayPaths: {},
+  geoDemRevision: 0,
 
   init: async () => {
     // React StrictMode double-invokes effects in dev; init exactly once.
@@ -455,10 +475,14 @@ export const useStore = create<AppStore>((set, get) => ({
   setGeoBasemapMode: (mode) => set({ geoBasemapMode: mode }),
 
   clearGeoAoi: () => {
+    setLocalDemTerrainUrl(null);
     set({
       geoAoiWgs84: null,
       geoExtentPlan: null,
       geoAoiRevision: get().geoAoiRevision + 1,
+      geoDemProduct: null,
+      geoDemSample: null,
+      geoDemRevision: get().geoDemRevision + 1,
       geoScenario: {
         ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
         aoiWgs84: null,
@@ -525,6 +549,154 @@ export const useStore = create<AppStore>((set, get) => ({
       geoInspectHint: `${persistNote} · ${domain.cols}×${domain.rows} @ ${domain.dxM.toFixed(1)} m`,
       geoFloodPlaying: false,
     });
+
+    // Stage DEM + sample bed for soft/HAND (non-blocking).
+    void get().prepareGeoDemForAoi();
+  },
+
+  prepareGeoDemForAoi: async () => {
+    const aoi = get().geoAoiWgs84;
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? null;
+    }
+    if (!workspace || !aoiIsValid(aoi)) return;
+
+    const domain = domainFromAoi(aoi!, get().geoFloodLowPower);
+    const plan = get().geoExtentPlan;
+    const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
+
+    try {
+      // Prefer USGS 3DEP when AOI looks US-local; otherwise stage whatever is on disk.
+      try {
+        await api.fetchGeoCatalogAsset(workspace, "usgs-3dep", {
+          aoiWgs84: aoi,
+          cellSizeM: cell,
+        });
+      } catch {
+        // Network / coverage — dem stage will fall back to catalog files or synthetic.
+      }
+
+      const dem = await api.prepareGeoDem(workspace, {
+        aoiWgs84: aoi,
+        cellSizeM: cell,
+        crs: "EPSG:4326",
+      });
+
+      // Globe: only set terrain URL when quantized-mesh/heightmap layer.json exists.
+      if (dem.terrainTilesUrl) {
+        try {
+          setLocalDemTerrainUrl(convertFileSrc(dem.terrainTilesUrl));
+        } catch {
+          setLocalDemTerrainUrl(null);
+        }
+      } else {
+        setLocalDemTerrainUrl(null);
+      }
+
+      const sample = await api.sampleGeoDem(workspace, domain.cols, domain.rows, aoi);
+      const bedNote = dem.synthetic
+        ? "Synthetic DEM bed — Demo / Live preview only"
+        : sample.bedSource === "real"
+          ? "DEM bed sampled for soft + HAND preview"
+          : "DEM staged; preview using undulation proxy";
+
+      set({
+        workspace,
+        geoDemProduct: dem,
+        geoDemSample: sample,
+        geoDemRevision: get().geoDemRevision + 1,
+        geoLayers: get().geoLayers.map((l) =>
+          l.id === "dtm"
+            ? {
+                ...l,
+                status: dem.synthetic ? "empty" : "ready",
+                placeholder: dem.synthetic,
+                visible: !dem.synthetic,
+              }
+            : l,
+        ),
+        geoInspectHint: bedNote,
+        geoScenario: {
+          ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+          authority: dem.synthetic ? "demo" : "live-preview",
+          note: dem.synthetic
+            ? "Synthetic DEM — soft/HAND stay Live preview; Demo until a real DEM is fetched."
+            : "Real DEM bed feeding soft preview + HAND (Live preview / non-authoritative until ANUGA validates).",
+        },
+      });
+    } catch (err) {
+      set({
+        geoInspectHint: `DEM stage: ${String(err)}`,
+      });
+    }
+  },
+
+  fetchGeoOverlayLayer: async (layerId) => {
+    const aoi = get().geoAoiWgs84;
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? null;
+    }
+    if (!workspace || !aoiIsValid(aoi)) {
+      set({ geoInspectHint: "Draw an AOI before fetching overlay layers" });
+      return;
+    }
+
+    const connectorByLayer: Record<string, string> = {
+      nfhl: "fema-nfhl",
+      hydrosheds: "hydrosheds",
+      gauges: "usgs-nwis-gauges",
+      waterways: "osm-waterways",
+      dtm: "usgs-3dep",
+    };
+    const entryId = connectorByLayer[layerId];
+    if (!entryId) return;
+
+    set({
+      geoLayers: get().geoLayers.map((l) =>
+        l.id === layerId ? { ...l, status: "hook", placeholder: true } : l,
+      ),
+      geoInspectHint: `Fetching ${entryId}…`,
+    });
+
+    try {
+      const entry = await api.fetchGeoCatalogAsset(workspace, entryId, { aoiWgs84: aoi });
+      const path = entry.localPath ?? "";
+      if (layerId === "dtm") {
+        await get().prepareGeoDemForAoi();
+        return;
+      }
+      set({
+        workspace,
+        geoOverlayPaths: { ...get().geoOverlayPaths, [layerId]: path },
+        geoLayers: get().geoLayers.map((l) =>
+          l.id === layerId
+            ? {
+                ...l,
+                visible: true,
+                placeholder: false,
+                status: "ready",
+              }
+            : l,
+        ),
+        geoDemRevision: get().geoDemRevision + 1,
+        geoInspectHint: entry.notes ?? `Fetched ${entry.title}`,
+      });
+    } catch (err) {
+      set({
+        geoLayers: get().geoLayers.map((l) =>
+          l.id === layerId ? { ...l, status: "ready", placeholder: true } : l,
+        ),
+        geoInspectHint: `Overlay fetch failed: ${String(err)}`,
+      });
+    }
   },
 
   startScientificFlood: async (opts) => {
@@ -548,11 +720,18 @@ export const useStore = create<AppStore>((set, get) => ({
       return;
     }
     const scenarioId = get().geoScenario?.id ?? PLACEHOLDER_SCENARIO.id;
+    const demPath = get().geoDemProduct?.dtmPath ?? null;
     try {
+      // Ensure DEM is staged with AOI before ANUGA.
+      if (!get().geoDemProduct) {
+        await get().prepareGeoDemForAoi();
+      }
       const st = await api.startScientificFlood(workspace, scenarioId, {
         allowDemo: opts?.allowDemo ?? true,
         enableSwmm: opts?.enableSwmm ?? false,
+        demPath: get().geoDemProduct?.dtmPath ?? demPath,
       });
+      const demSynthetic = get().geoDemProduct?.synthetic ?? true;
       set({
         workspace,
         geoScientificRun: {
@@ -560,14 +739,19 @@ export const useStore = create<AppStore>((set, get) => ({
           state: st.state,
           progress: st.progress,
           detail: st.detail,
-          mode: st.mode,
+          mode: st.mode ?? (demSynthetic ? "demo" : undefined),
           label: st.label,
           massBalance: st.massBalance,
         },
         geoScenario: {
           ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
-          engineLabel: "ANUGA scientific (starting…)",
-          note: "Streaming scientific checkpoints over sim://event.",
+          engineLabel: demSynthetic
+            ? "Demo (synthetic DEM)…"
+            : "ANUGA scientific (starting…)",
+          note: demSynthetic
+            ? "Synthetic DEM — Demo badge until a real DEM is staged."
+            : "Streaming scientific checkpoints over sim://event.",
+          authority: demSynthetic ? "demo" : "scientific",
         },
       });
     } catch (err) {

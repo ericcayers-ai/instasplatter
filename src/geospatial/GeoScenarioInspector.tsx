@@ -1,6 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "../state/store";
-import { PLACEHOLDER_SCENARIO } from "./defaults";
+import {
+  FLOOD_LAB_HYETOGRAPHS,
+  FLOOD_LAB_MANNING,
+  FLOOD_LAB_OUTLET_BC,
+  PLACEHOLDER_SCENARIO,
+} from "./defaults";
 import { floodSnapshotFromTime, hazardClassLabel } from "./floodPreview";
 import CollapsibleSection from "../components/shell/CollapsibleSection";
 
@@ -21,20 +26,34 @@ export default function GeoScenarioInspector() {
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const scientific = useStore((s) => s.geoScientificRun);
   const floodEngine = useStore((s) => s.geoFloodEngine);
+  const dem = useStore((s) => s.geoDemProduct);
   const startScientificFlood = useStore((s) => s.startScientificFlood);
   const cancelScientificFlood = useStore((s) => s.cancelScientificFlood);
   const exportFloodProducts = useStore((s) => s.exportFloodProducts);
+  const prepareDem = useStore((s) => s.prepareGeoDemForAoi);
   const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
   const aoi = useStore((s) => s.geoAoiWgs84);
   const setTool = useStore((s) => s.setGeoTool);
   const preview = useStore((s) => s.geoPreview);
+  const [hyetoId, setHyetoId] = useState(
+    () => scenario?.rainfallTemplate ?? PLACEHOLDER_SCENARIO.rainfallTemplate ?? "chicago_6h",
+  );
+  const [manningId, setManningId] = useState(
+    () => scenario?.manningPreset ?? PLACEHOLDER_SCENARIO.manningPreset ?? "mixed_urban",
+  );
+  const [outletId, setOutletId] = useState("south_stage");
+
   const snap = useMemo(
     () => floodSnapshotFromTime(floodTime, preview, scenario?.durationHours),
     [floodTime, preview, scenario?.durationHours],
   );
   const meta = scenario ?? PLACEHOLDER_SCENARIO;
   const running = scientific?.state === "running";
-  const demoMode = scientific?.mode === "demo" || meta.engineLabel.includes("Demo");
+  const demoMode =
+    scientific?.mode === "demo" ||
+    meta.engineLabel.includes("Demo") ||
+    meta.authority === "demo" ||
+    !!dem?.synthetic;
 
   return (
     <div className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-edge bg-panel">
@@ -64,7 +83,13 @@ export default function GeoScenarioInspector() {
           <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">{meta.note}</p>
           {demoMode && (
             <p className="mt-2 rounded border border-[var(--color-gauge)]/40 bg-[var(--color-gauge)]/10 px-2 py-1.5 text-[10px] leading-snug text-[var(--color-gauge)]">
-              Demo mode — extents are synthetic. Not scientifically authoritative.
+              Demo mode — DEM missing or synthetic. Soft/HAND = Live preview (non-authoritative). Not
+              scientifically authoritative.
+            </p>
+          )}
+          {!demoMode && dem && !dem.synthetic && (
+            <p className="mt-2 rounded border border-[var(--color-hydro)]/30 bg-[var(--color-hydro)]/10 px-2 py-1.5 text-[10px] leading-snug text-ink-dim">
+              Real DEM staged · soft + HAND remain Live preview until ANUGA compare gates pass.
             </p>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -76,6 +101,15 @@ export default function GeoScenarioInspector() {
             >
               {aoi ? "Edit AOI" : "Draw AOI"}
             </button>
+            <button
+              type="button"
+              className="btn px-2 py-1 text-[11px]"
+              disabled={!aoi}
+              onClick={() => void prepareDem()}
+              title="Fetch/stage DEM for soft preview, HAND, and ANUGA"
+            >
+              Stage DEM
+            </button>
             {aoi && (
               <span className="font-mono text-[9px] text-ink-dim">
                 [{aoi.map((v) => v.toFixed(4)).join(", ")}]
@@ -85,6 +119,67 @@ export default function GeoScenarioInspector() {
           <p className="mt-2 text-[10px] leading-snug text-ink-dim">
             AOI binds the flood domain. Esri World Imagery is the default basemap — attribution
             required (see About).
+          </p>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Flood lab" defaultOpen badge="draft">
+        <div className="space-y-2 py-2 text-[11px]">
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+              Rainfall hyetograph
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {FLOOD_LAB_HYETOGRAPHS.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  className={`btn px-2 py-0.5 text-[10px] ${hyetoId === h.id ? "btn-active" : ""}`}
+                  onClick={() => setHyetoId(h.id)}
+                  title={`${h.authority} — not calibrated`}
+                >
+                  {h.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+              Manning n
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {FLOOD_LAB_MANNING.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`btn px-2 py-0.5 text-[10px] ${manningId === m.id ? "btn-active" : ""}`}
+                  onClick={() => setManningId(m.id)}
+                >
+                  {m.label} ({m.n})
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+              Outlet BC
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {FLOOD_LAB_OUTLET_BC.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  className={`btn px-2 py-0.5 text-[10px] ${outletId === o.id ? "btn-active" : ""}`}
+                  onClick={() => setOutletId(o.id)}
+                  title={o.detail}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="text-[9px] leading-snug text-[var(--color-gauge)]">
+            Authority: draft templates — Live preview / non-authoritative until ANUGA validates.
           </p>
         </div>
       </CollapsibleSection>
@@ -120,7 +215,7 @@ export default function GeoScenarioInspector() {
             type="button"
             className="btn px-2 py-1 text-[11px]"
             disabled={running}
-            title="Write COG/GeoTIFF, GeoJSON, time series, SPZ, and scenario manifest under geo/exports"
+            title="Write COG/GeoTIFF, GeoJSON, time series, and scenario manifest (DEM-only OK)"
             onClick={() => void exportFloodProducts()}
           >
             Export products
@@ -130,6 +225,7 @@ export default function GeoScenarioInspector() {
           <div className="pb-2 font-mono text-[10px] text-ink-dim">
             ANUGA {floodEngine.anugaReady ? "launcher found" : "not installed"} · SWMM{" "}
             {floodEngine.swmmReady ? "scaffold ready" : "scaffold"}
+            {dem ? ` · DEM ${dem.synthetic ? "synthetic" : "real"}` : ""}
           </div>
         )}
         {scientific && (
@@ -216,6 +312,7 @@ export default function GeoScenarioInspector() {
             [
               { id: "2d" as const, label: "2D map" },
               { id: "3d" as const, label: "3D workspace" },
+              { id: "globe" as const, label: "Globe" },
             ] as const
           ).map((m) => (
             <button
@@ -259,8 +356,10 @@ export default function GeoScenarioInspector() {
           </button>
         </div>
         <p className="pb-2 text-[10px] leading-snug text-ink-dim">
-          Scientific ANUGA runs stream on the CPU lane via <span className="font-mono">sim://event</span>.
-          Live preview stays labelled until validation tolerances pass.
+          Soft + HAND = Live preview. Scientific ANUGA streams on the CPU lane via{" "}
+          <span className="font-mono">sim://event</span>. Globe uses ellipsoid + flood overlay until
+          local terrain tiles (<span className="font-mono">layer.json</span>) are staged — ion stays
+          blank on Standard.
         </p>
       </CollapsibleSection>
 
@@ -273,13 +372,18 @@ export default function GeoScenarioInspector() {
         <div className="space-y-2 py-2 text-[10px] leading-snug text-ink-dim">
           <p>
             Standard flood path: <span className="text-ink">ANUGA</span> (scientific) +{" "}
-            <span className="text-ink">SWMM</span> network + soft preview. Demo extents are never
+            <span className="text-ink">SWMM</span> network + soft/HAND preview. Demo extents are never
             authoritative.
           </p>
           <p>
             Experimental hydro (TRITON / Wflow / GeoClaw external; GPL plugins only outside the
             installer) requires Experimental Mode from the TitleBar and must clear promotion gates
             before any Standard claim.
+          </p>
+          <p>
+            Multi-hazard stubs (quake / wildfire / landslide / tsunami) are GDACS / USGS feed cards
+            or STAC links in the left Hazards palette — <span className="text-ink">no</span>{" "}
+            authoritative physics and no fake solvers.
           </p>
           <p className="font-mono text-[9px]">
             ANUGA {floodEngine?.anugaReady ? "ready" : "missing"} · SWMM{" "}

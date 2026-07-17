@@ -101,6 +101,23 @@ export interface PreviewEngineOptions {
   /** Disable particle motion / continuous play animation aids. */
   reducedMotion?: boolean;
   waterStyle?: GeoWaterStyle;
+  /**
+   * Soft-solver bed: DEM samples (row-major metres). When absent, synthetic
+   * undulation is used and the UI should keep Demo / Live preview labels.
+   */
+  demBed?: {
+    z: Float32Array | number[];
+    cols: number;
+    rows: number;
+    bedSource?: "real" | "synthetic" | "proxy";
+  } | null;
+  /**
+   * When true, blend HAND rapid inundation into the depth field (Live preview /
+   * non-authoritative until ANUGA compare gates pass).
+   */
+  useHand?: boolean;
+  /** Peak HAND stage (m) for rapid inundation path. */
+  handPeakStageM?: number;
 }
 
 export interface PreviewCapabilities {

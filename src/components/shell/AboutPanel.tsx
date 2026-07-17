@@ -120,6 +120,18 @@ export default function AboutPanel() {
           </div>
 
           <h3 className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-ink">
+            Hazard policy (non-claims)
+          </h3>
+          <p className="mt-1.5 text-[10px] leading-snug">
+            <span className="text-ink">Flood</span> is the only hazard with simulated physics
+            (soft preview / HAND / ANUGA when installed). Earthquake, wildfire, landslide, and
+            tsunami appear as <span className="text-ink">Experimental stubs</span> — GDACS / USGS
+            feed cards or Earth Search STAC links in the Hazards palette. They are{" "}
+            <span className="text-ink">not</span> solvers, not calibrated products, and never
+            claim scientific authority.
+          </p>
+
+          <h3 className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-ink">
             Reconstruction sidecars
           </h3>
           <div className="mt-1 divide-y divide-edge/50">

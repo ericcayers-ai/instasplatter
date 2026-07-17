@@ -19,6 +19,7 @@ const PROJECT_VERSION: u32 = 2;
 /// Relative paths under a workspace used by the geospatial suite.
 pub const GEO_WORKSPACE_DIRS: &[&str] = &[
     "geo/sources",
+    "geo/catalog",
     "geo/derived",
     "geo/tiles",
     "geo/scenarios",

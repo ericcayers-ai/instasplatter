@@ -6,8 +6,8 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.9.2-green)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
+![Status](https://img.shields.io/badge/status-v0.10.0-green)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
 [![Contributing](https://img.shields.io/badge/contributing-guide-informational)](CONTRIBUTING.md)
@@ -23,7 +23,7 @@
 
 ---
 
-> **v0.9.2** revamps the **shell UX** for clearer navigation and installs **Impeccable** and **Bencium Controlled UX Designer** skills app-wide. **v0.9.1** adds an **Experimental Minecraft schematic** export (Sponge v2 `.schem` from finished splats). **v0.9.0** shipped a **worldwide AOI-driven Geospatial suite** with a primary **3D ENU workspace** (Esri World Imagery terrain, depth water, georegistered splat gizmos), optional **2D satellite** map with fixed flood overlays, **live reconstruction stages** (cameras → sparse → dense → splats), grouped Settings, discrete Experimental Mode, and an **About** implementations panel. Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.10.0** adds a CesiumJS **Globe** view, real DEM/catalog connectors, DEM-backed flood preview, and Experimental multi-hazard **data** stubs — see **[RELEASE.md](RELEASE.md)** and verify evidence in **[docs/E2E-GEO-V010.md](docs/E2E-GEO-V010.md)** / **[docs/assets/verify/v0.10/](docs/assets/verify/v0.10/)**. **v0.9.2** revamped shell UX and design skills. **v0.9.1** added Experimental Minecraft `.schem` export. **v0.9.0** shipped the worldwide AOI geospatial suite (ENU + 2D satellite). Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 
@@ -47,7 +47,7 @@ flowchart LR
 | Suite | Job |
 |---|---|
 | **Reconstruction** | Capture → cameras → dense evidence → live splat / mesh export |
-| **Geospatial** | Draw AOI anywhere → ENU 3D workspace / 2D satellite → flood scenarios → timed exports |
+| **Geospatial** | Draw AOI anywhere → ENU 3D / MapLibre 2D / Cesium Globe → flood scenarios → timed exports |
 
 Switch suites from the TitleBar. Geospatial defaults to the **3D workspace**; toggle **2D satellite** to draw or edit an AOI. Projects are versioned (`v2`) and can carry either suite; reconstruction projects remain loadable.
 
@@ -94,13 +94,13 @@ flowchart LR
 **AOI → flood → export**
 
 1. Open or create a geo project; switch suite to **Geospatial**.
-2. **Draw an AOI** in 2D satellite (or work in the default **3D ENU** workspace with Esri World Imagery terrain).
+2. **Draw an AOI** in 2D satellite (or work in **3D ENU** / **Globe** with DEM terrain and imagery).
 3. **Run flood** — scientific (ANUGA/SWMM when installed) or labelled preview / demo. Check the authority badge: Live preview / Demo / Scientific.
 4. **Export** COG / GeoPackage / Zarr metadata and manifests.
 
 ```mermaid
 flowchart LR
-  A["Draw AOI"] --> B["3D ENU / 2D satellite"]
+  A["Draw AOI"] --> B["ENU / 2D / Globe"]
   B --> C["Flood run"]
   C --> D{"Authority badge"}
   D -->|Scientific| E["ANUGA / SWMM"]
@@ -120,6 +120,7 @@ Applies inside both suites where engines are gated:
 | Reconstruction cameras | Capture-aware commercial chain (VGGT-C, MapAnything, COLMAP) | Profile-matched NC research hypotheses, scored then fused |
 | Dense / polish | RoMa v2 ∧ DA3 ∧ MVS; Fixer | Confidence-fuse densifiers; Difix then Fixer |
 | Flood | ANUGA Domain.evolve when installed+DEM (+ SWMM network); labelled demo/scaffold otherwise | TRITON / Wflow / GeoClaw external; GPL engines plugin-only |
+| Other hazards | Flood-only simulation on Standard | Quake / fire / landslide / tsunami = feed/STAC stubs only (no fake physics) |
 | Preview | WebGPU/CPU soft solver labelled **non-authoritative** | Same preview path; never promoted without gates |
 | License | Commercial-safe defaults | NC research after one-time ack; GPL never bundled |
 
@@ -148,8 +149,9 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 | **Dense init** | Schema v2 sidecars, Sim(3) fusion, gsplat `init.ply` |
 | **Live reconstruction** | Sparse/dense clouds + frustums + Brush/gsplat PLY hot-swap in one 3D viewport |
 | **Geospatial 3D** | ENU workspace: Esri imagery terrain, depth water, editable splat gizmos |
+| **Geospatial Globe** | CesiumJS globe with local DEM terrain + flood overlay (no ion required on Standard) |
 | **Geospatial 2D** | MapLibre satellite + AOI draw + flood depth overlay |
-| **Flood** | ANUGA/SWMM scientific path + WebGPU/CPU preview + demo fallback |
+| **Flood** | ANUGA/SWMM scientific path + DEM-backed preview / HAND + demo fallback |
 | **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests; Experimental Minecraft `.schem` |
 | **Modes** | Suite switch + Standard / Experimental + About implementations |
 | **Resume** | Project bundles with checkpoint resume |
@@ -160,8 +162,8 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 
 | | Minimum | Recommended |
 |---|---|---|
-| **OS** | Windows 10/11 (64-bit) | Windows 11 (64-bit) |
-| **GPU** | Any Vulkan/DX12-capable GPU | Dedicated GPU with 6+ GB VRAM |
+| **OS** | Windows 10/11 (64-bit) primary; Linux / macOS best-effort via CI | Windows 11 (64-bit) |
+| **GPU** | Any Vulkan/DX12/Metal-capable GPU | Dedicated GPU with 6+ GB VRAM |
 | **RAM** | 16 GB | 32 GB |
 | **Disk** | A few GB free for cache | SSD recommended |
 
@@ -169,7 +171,9 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 
 ## Installation
 
-Installers are published on [GitHub Releases](https://github.com/ericcayers-ai/instasplatter/releases). COLMAP and Brush download automatically on first run (~200 MB). Video input needs FFmpeg on `PATH`:
+Installers are published on [GitHub Releases](https://github.com/ericcayers-ai/instasplatter/releases) after a tagged CI run (see **[RELEASE.md](RELEASE.md)**). **Windows NSIS** is the primary supported package; Linux AppImage/`.deb` and macOS `.dmg` are best-effort. For v0.10, macOS dmgs are **unsigned / ad-hoc** (no notarization secrets) — right-click → Open on first launch if Gatekeeper blocks.
+
+COLMAP and Brush download automatically on first run (~200 MB). Video input needs FFmpeg on `PATH`:
 
 ```
 winget install ffmpeg
@@ -179,13 +183,29 @@ Optional scientific flood: install the ANUGA/SWMM workers under the engines path
 
 ### Building from source
 
-Prereqs: **Rust** (stable, MSVC), **Node.js 20+**, **FFmpeg** on PATH, Windows 10/11.
+Prereqs: **Rust** (stable), **Node.js 20+**, **FFmpeg** on PATH. On Windows use the MSVC toolchain.
 
 ```bash
 npm install
 npm run tauri dev      # development
-npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
+npm run tauri build    # bundles under src-tauri/target/release/bundle
 ```
+
+**Linux (Debian/Ubuntu):** install WebKitGTK 4.1 and related deps before building:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  patchelf \
+  libssl-dev \
+  libgtk-3-dev \
+  xdg-utils
+```
+
+Multi-platform CI matrix: [`.github/workflows/release.yml`](.github/workflows/release.yml) (`workflow_dispatch` or tag `v*`). Details and publish gates: **[RELEASE.md](RELEASE.md)**.
 
 ---
 
@@ -194,7 +214,7 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 1. **Launch** InstaSplatter. It detects your hardware and picks a preset.
 2. Pick a **suite**: Reconstruction or Geospatial (TitleBar).
 3. **Reconstruction** — drag a video or image folder; watch live stages (cameras / sparse / dense / splat); export PLY/SPZ/mesh. With Experimental Mode on, export a Minecraft `.schem` schematic from the finished splat.
-4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in the default 3D ENU workspace), run flood scientific or preview, export products with manifests. Check the authority badge (Live preview / Demo / Scientific).
+4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in ENU / Globe), run flood scientific or preview, export products with manifests. Check the authority badge (Live preview / Demo / Scientific).
 5. _(Optional)_ Settings groups, Experimental Mode (NC ack), or **About** for stacks and attribution.
 
 ---
@@ -202,7 +222,8 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 ## Roadmap / release gates
 
 - **v0.8**: suites, georeg, viewport, dual flood engines, exports, experimental adapters.
-- **v0.9** (this release): worldwide AOI, Esri imagery, 3D ENU workspace, live recon stages, Settings/About cleanup, shell QOL (v0.9.2).
+- **v0.9**: worldwide AOI, Esri imagery, 3D ENU workspace, live recon stages, Settings/About cleanup, shell QOL (v0.9.2).
+- **v0.10** (this release): Cesium Globe, real DEM/catalog connectors, flood realism, multi-platform installer CI; tag/publish blocked until MANUAL verify captures or waiver — see [`docs/assets/verify/v0.10/VERIFY-SUMMARY.md`](docs/assets/verify/v0.10/VERIFY-SUMMARY.md).
 - **v1.0**: large-scene tiling, uncertainty ensembles, full ANUGA validation suite, multi-drone RTK/GCP truth sets, site/city benchmarks, accessibility + installer migration audit.
 
 See also **[ROADMAP-V2.md](ROADMAP-V2.md)** and **[ROADMAP.md](ROADMAP.md)**.

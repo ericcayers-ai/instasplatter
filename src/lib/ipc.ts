@@ -229,10 +229,68 @@ export interface QueueSnapshot {
   paused: boolean;
 }
 
+export interface GeoCatalogEntry {
+  id: string;
+  title: string;
+  provider: string;
+  format: string;
+  license?: string | null;
+  bounds?: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  } | null;
+  resolutionM?: number | null;
+  url?: string | null;
+  stale: boolean;
+  localPath?: string | null;
+  connectorId?: string | null;
+  attribution?: string | null;
+  notes?: string | null;
+}
+
 export interface GeoCatalogInfo {
   connectors: string[];
+  entries?: GeoCatalogEntry[];
   formats: { id: string; label: string }[];
   exports: { id: string; label: string; worksOffline?: boolean }[];
+}
+
+export interface DemProduct {
+  dtmPath?: string | null;
+  dsmPath?: string | null;
+  orthomosaicPath?: string | null;
+  cellSizeM?: number | null;
+  crs?: string | null;
+  synthetic: boolean;
+  notes: string[];
+  aoiWgs84?: [number, number, number, number] | null;
+  conditioned?: boolean;
+  nodata?: number | null;
+  previewGridPath?: string | null;
+  /** Local Cesium terrain root when layer.json exists. */
+  terrainTilesUrl?: string | null;
+  /** real | synthetic | proxy */
+  bedSource?: string | null;
+}
+
+export interface DemSampleGrid {
+  cols: number;
+  rows: number;
+  bounds: [number, number, number, number];
+  z: number[];
+  synthetic: boolean;
+  bedSource: string;
+  notes: string[];
+  sourcePath?: string | null;
+}
+
+export interface CatalogFetchOpts {
+  aoiWgs84?: [number, number, number, number] | null;
+  cellSizeM?: number | null;
+  userFile?: string | null;
+  apiKey?: string | null;
 }
 
 export interface FloodRunStatus {
@@ -437,6 +495,54 @@ export const api = {
   getSuite: () => invoke<Suite>("get_suite"),
   setSuite: (suite: Suite) => invoke<Suite>("set_suite", { suite }),
   getGeoCatalogInfo: () => invoke<GeoCatalogInfo>("get_geo_catalog_info"),
+  listGeoCatalog: (workspace?: string | null, aoiWgs84?: [number, number, number, number] | null) =>
+    invoke<GeoCatalogEntry[]>("list_geo_catalog", {
+      workspace: workspace ?? null,
+      aoiWgs84: aoiWgs84 ?? null,
+    }),
+  fetchGeoCatalogAsset: (
+    workspace: string,
+    entryId: string,
+    opts?: CatalogFetchOpts,
+  ) =>
+    invoke<GeoCatalogEntry>("fetch_geo_catalog_asset", {
+      workspace,
+      entryId,
+      aoiWgs84: opts?.aoiWgs84 ?? null,
+      cellSizeM: opts?.cellSizeM ?? null,
+      userFile: opts?.userFile ?? null,
+      apiKey: opts?.apiKey ?? null,
+    }),
+  prepareGeoDem: (
+    workspace: string,
+    opts?: {
+      sourcePath?: string | null;
+      aoiWgs84?: [number, number, number, number] | null;
+      cellSizeM?: number | null;
+      crs?: string | null;
+      nodata?: number | null;
+    },
+  ) =>
+    invoke<DemProduct>("prepare_geo_dem", {
+      workspace,
+      sourcePath: opts?.sourcePath ?? null,
+      aoiWgs84: opts?.aoiWgs84 ?? null,
+      cellSizeM: opts?.cellSizeM ?? null,
+      crs: opts?.crs ?? null,
+      nodata: opts?.nodata ?? null,
+    }),
+  sampleGeoDem: (
+    workspace: string,
+    cols: number,
+    rows: number,
+    aoiWgs84?: [number, number, number, number] | null,
+  ) =>
+    invoke<DemSampleGrid>("sample_geo_dem", {
+      workspace,
+      cols,
+      rows,
+      aoiWgs84: aoiWgs84 ?? null,
+    }),
 
   getFloodEngineStatus: () => invoke<FloodEngineStatus>("get_flood_engine_status"),
   planGeoExtent: (input: ExtentPlanInput) => invoke<ExtentPlan>("plan_geo_extent", { input }),

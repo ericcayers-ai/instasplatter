@@ -13,6 +13,7 @@ import {
   type Particle,
 } from "./raster";
 import {
+  buildBedFromDemSamples,
   buildSyntheticBed,
   cloneState,
   computeStats,
@@ -22,6 +23,7 @@ import {
   resolveDomain,
   softStep,
 } from "./softSolver";
+import { handInundate, handStageFromTime01 } from "./handInundation";
 import type {
   PreviewBackend,
   PreviewCapabilities,
@@ -46,6 +48,8 @@ export interface PreviewRenderArtifacts {
 }
 
 type Listener = (artifacts: PreviewRenderArtifacts) => void;
+
+type DemBedSpec = NonNullable<PreviewEngineOptions["demBed"]>;
 
 /**
  * Live flood preview: CFL soft-step physics, display-frame interpolation,
@@ -87,6 +91,12 @@ export class FloodPreviewEngine {
   private initPromise: Promise<void>;
   private bound = false;
 
+  private demBed: DemBedSpec | null = null;
+  private bedFromDem = false;
+  private useHand = true;
+  private handPeakStageM = 1.5;
+  private manningN = 0.035;
+
   constructor(opts: PreviewEngineOptions = {}) {
     this.lowPower = !!opts.lowPower;
     this.capabilities = detectPreviewCapabilities({ lowPower: this.lowPower });
@@ -97,10 +107,13 @@ export class FloodPreviewEngine {
     this.cfl = opts.cfl ?? (this.lowPower ? 0.25 : 0.4);
     this.waterStyle = opts.waterStyle ?? "depth";
     this.keyframeEveryS = this.lowPower ? 1800 : 900;
+    this.demBed = opts.demBed ?? null;
+    this.useHand = opts.useHand !== false;
+    this.handPeakStageM = opts.handPeakStageM ?? 1.5;
 
     const { cols, rows, dxM } = this.domain;
     this.state = createEmptyState(cols, rows, dxM, 0);
-    this.state.z = buildSyntheticBed(cols, rows);
+    this.applyBed(cols, rows);
     this.prev = cloneState(this.state);
     this.curr = cloneState(this.state);
     this.display = cloneState(this.state);
@@ -112,6 +125,11 @@ export class FloodPreviewEngine {
   /** True once the engine has been rebound to a user AOI (or constructed with one). */
   hasBoundDomain(): boolean {
     return this.bound;
+  }
+
+  /** Whether the soft-solver bed came from staged DEM samples. */
+  hasDemBed(): boolean {
+    return this.bedFromDem;
   }
 
   /** Drop AOI binding (hides flood until a new domain is committed). */
@@ -137,7 +155,7 @@ export class FloodPreviewEngine {
     this.keyframeEveryS = this.lowPower ? 1800 : 900;
     const { cols, rows, dxM } = this.domain;
     this.state = createEmptyState(cols, rows, dxM, 0);
-    this.state.z = buildSyntheticBed(cols, rows);
+    this.applyBed(cols, rows);
     this.prev = cloneState(this.state);
     this.curr = cloneState(this.state);
     this.display = cloneState(this.state);
@@ -149,6 +167,45 @@ export class FloodPreviewEngine {
     this.lastCompare = null;
     this.validation = "live";
     this.captureKeyframe();
+  }
+
+  /**
+   * Inject DEM bed samples (from `sample_geo_dem` / staged GeoTIFF).
+   * Rebinds grids when domain is already committed.
+   */
+  setDemBed(bed: DemBedSpec | null): void {
+    this.demBed = bed;
+    if (!this.bound) {
+      const { cols, rows } = this.domain;
+      this.applyBed(cols, rows);
+      return;
+    }
+    this.rebindDomain(this.domain);
+  }
+
+  setHandEnabled(on: boolean): void {
+    this.useHand = on;
+  }
+
+  setManningN(n: number): void {
+    this.manningN = Math.max(0.01, n);
+  }
+
+  private applyBed(cols: number, rows: number): void {
+    if (this.demBed?.z) {
+      const built = buildBedFromDemSamples(
+        cols,
+        rows,
+        this.demBed.z,
+        this.demBed.cols,
+        this.demBed.rows,
+      );
+      this.state.z = built.z;
+      this.bedFromDem = built.fromDem && this.demBed.bedSource !== "synthetic";
+    } else {
+      this.state.z = buildSyntheticBed(cols, rows);
+      this.bedFromDem = false;
+    }
   }
 
   /** Per-pixel depth/velocity sample under a WGS84 click. */
@@ -249,6 +306,20 @@ export class FloodPreviewEngine {
     const alpha = Math.max(0, Math.min(1, (targetS - this.prev.timeS) / span));
     lerpStates(this.prev, this.curr, alpha, this.display);
     this.display.timeS = targetS;
+    // Blend HAND rapid inundation (Live preview / non-authoritative).
+    if (this.useHand) {
+      const stage = handStageFromTime01(targetS / this.durationS, this.handPeakStageM);
+      const hand = handInundate(this.display.z, this.display.cols, this.display.rows, {
+        stageM: stage,
+      });
+      const n = this.display.cols * this.display.rows;
+      for (let i = 0; i < n; i++) {
+        // Soft-solver owns dynamics; HAND fills extent where soft is still dry.
+        if (this.display.h[i] < hand.h[i] * 0.55) {
+          this.display.h[i] = Math.max(this.display.h[i], hand.h[i] * 0.85);
+        }
+      }
+    }
     this.lastStats = computeStats(this.display, this.lastDt, this.lastCfl);
     this.runCompare();
     return this.emit();
@@ -268,7 +339,7 @@ export class FloodPreviewEngine {
     return {
       rainfallMmHr: 2 + intensity * 38,
       inflowCms: Math.max(0, dischargeCms * 0.35),
-      manningN: 0.035,
+      manningN: this.manningN,
       infiltrationMmHr: 1.5 + (1 - intensity) * 2,
     };
   }

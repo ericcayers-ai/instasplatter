@@ -339,11 +339,90 @@ fn get_geo_catalog_info() -> serde_json::Value {
             })
         })
         .collect();
+    let entries = geospatial::catalog::list_entries(None);
     serde_json::json!({
         "connectors": geospatial::catalog::connector_names(),
+        "entries": entries,
         "formats": formats,
         "exports": exports,
     })
+}
+
+/// List built-in connectors (+ cached local assets) for a workspace AOI.
+#[tauri::command]
+fn list_geo_catalog(
+    workspace: Option<String>,
+    aoi_wgs84: Option<[f64; 4]>,
+) -> Result<Vec<geospatial::catalog::CatalogEntry>, String> {
+    let mut entries = geospatial::catalog::list_entries(aoi_wgs84);
+    if let Some(ws) = workspace {
+        let root = PathBuf::from(&ws).join("geo");
+        for sub in ["catalog", "sources"] {
+            let dir = root.join(sub);
+            if dir.is_dir() {
+                entries.extend(geospatial::catalog::list_cached(&dir.to_string_lossy()));
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Fetch a catalog connector asset into `workspace/geo/catalog`.
+#[tauri::command]
+fn fetch_geo_catalog_asset(
+    workspace: String,
+    entry_id: String,
+    aoi_wgs84: Option<[f64; 4]>,
+    cell_size_m: Option<f64>,
+    user_file: Option<String>,
+    api_key: Option<String>,
+) -> Result<geospatial::catalog::CatalogEntry, String> {
+    let dest = PathBuf::from(&workspace).join("geo").join("catalog");
+    geospatial::prepare_workspace(Path::new(&workspace))?;
+    let opts = geospatial::catalog::CatalogFetchOpts {
+        aoi_wgs84,
+        cell_size_m,
+        user_file,
+        api_key,
+    };
+    geospatial::catalog::fetch_asset_with_opts(&entry_id, &dest.to_string_lossy(), &opts)
+}
+
+/// Stage + basic-condition a flood DEM (real catalog/source preferred; synthetic fallback).
+#[tauri::command]
+fn prepare_geo_dem(
+    workspace: String,
+    source_path: Option<String>,
+    aoi_wgs84: Option<[f64; 4]>,
+    cell_size_m: Option<f64>,
+    crs: Option<String>,
+    nodata: Option<f64>,
+) -> Result<geospatial::dem::DemProduct, String> {
+    let ws = PathBuf::from(&workspace);
+    geospatial::prepare_workspace(&ws)?;
+    geospatial::dem::prepare_flood_dem_with_opts(
+        &ws,
+        &geospatial::dem::DemStageOpts {
+            source: source_path,
+            cell_size_m,
+            crs,
+            aoi_wgs84,
+            nodata,
+        },
+    )
+}
+
+/// Sample staged DEM (or synthetic undulation) onto a soft-preview / HAND grid.
+#[tauri::command]
+fn sample_geo_dem(
+    workspace: String,
+    cols: u32,
+    rows: u32,
+    aoi_wgs84: Option<[f64; 4]>,
+) -> Result<geospatial::dem::DemSampleGrid, String> {
+    let ws = PathBuf::from(&workspace);
+    geospatial::prepare_workspace(&ws)?;
+    geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)
 }
 
 /// Import flight / survey telemetry into a project and write pose priors.
@@ -1086,6 +1165,10 @@ pub fn run() {
             get_suite,
             set_suite,
             get_geo_catalog_info,
+            list_geo_catalog,
+            fetch_geo_catalog_asset,
+            prepare_geo_dem,
+            sample_geo_dem,
             import_geo_telemetry,
             set_geo_gcps,
             compute_geo_reference,

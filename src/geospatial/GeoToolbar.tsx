@@ -17,6 +17,7 @@ export default function GeoToolbar() {
   const modes: { id: GeoViewMode; label: string; title: string }[] = [
     { id: "3d", label: "3D", title: "ENU 3D workspace (terrain, water, splat)" },
     { id: "2d", label: "2D", title: "2D satellite MapLibre (AOI draw, flood overlay)" },
+    { id: "globe", label: "Globe", title: "CesiumJS globe (DEM terrain + flood; splat stays in 3D)" },
   ];
   const tools: { id: GeoTool; label: string; title: string }[] = [
     { id: "pan", label: "Pan", title: "Pan and zoom the map" },

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl, { type Map as MapLibreMap, type StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useStore } from "../state/store";
 import { api, type SimEvent } from "../lib/ipc";
 import {
@@ -34,6 +35,8 @@ const PARTICLES_SRC = "geo-flood-particles";
 const PARTICLES_LAYER = "flood-particles";
 const WATERWAYS_SRC = "geo-waterways";
 const GAUGES_SRC = "geo-gauges";
+const NFHL_SRC = "geo-nfhl";
+const HYDROSHEDS_SRC = "geo-hydrosheds";
 const AOI_SRC = "geo-aoi";
 const AOI_FILL = "geo-aoi-fill";
 const AOI_LINE = "geo-aoi-line";
@@ -198,6 +201,36 @@ function ensureStaticSources(map: MapLibreMap, aoi: AoiWgs84 | null) {
       },
     });
   }
+  if (!map.getSource(NFHL_SRC)) {
+    map.addSource(NFHL_SRC, { type: "geojson", data: emptyFc() });
+  }
+  if (!map.getLayer("nfhl-fill")) {
+    map.addLayer({
+      id: "nfhl-fill",
+      type: "fill",
+      source: NFHL_SRC,
+      paint: {
+        "fill-color": "#3B6FA0",
+        "fill-opacity": 0.35,
+        "fill-outline-color": "#1E3A5F",
+      },
+    });
+  }
+  if (!map.getSource(HYDROSHEDS_SRC)) {
+    map.addSource(HYDROSHEDS_SRC, { type: "geojson", data: emptyFc() });
+  }
+  if (!map.getLayer("hydrosheds-line")) {
+    map.addLayer({
+      id: "hydrosheds-line",
+      type: "line",
+      source: HYDROSHEDS_SRC,
+      paint: {
+        "line-color": "#8B6B4A",
+        "line-width": 1.5,
+        "line-opacity": 0.8,
+      },
+    });
+  }
   ensureAoiLayers(map);
 }
 
@@ -326,6 +359,9 @@ export default function GeoMap({ className }: GeoMapProps) {
   const basemapMode = useStore((s) => s.geoBasemapMode);
   const aoi = useStore((s) => s.geoAoiWgs84);
   const aoiRevision = useStore((s) => s.geoAoiRevision);
+  const demRevision = useStore((s) => s.geoDemRevision);
+  const demSample = useStore((s) => s.geoDemSample);
+  const overlayPaths = useStore((s) => s.geoOverlayPaths);
   const setInspectHint = useStore((s) => s.setGeoInspectHint);
   const setGeoPreview = useStore((s) => s.setGeoPreview);
   const setFloodTime = useStore((s) => s.setGeoFloodTime);
@@ -572,6 +608,8 @@ export default function GeoMap({ className }: GeoMapProps) {
       setLayerVis(map, PARTICLES_LAYER, !!byId.flood_velocity?.visible);
       setLayerVis(map, "waterways-line", !!byId.waterways?.visible);
       setLayerVis(map, "gauges-circle", !!byId.gauges?.visible);
+      setLayerVis(map, "nfhl-fill", !!byId.nfhl?.visible);
+      setLayerVis(map, "hydrosheds-line", !!byId.hydrosheds?.visible);
     } else {
       (map.getSource(AOI_SRC) as maplibregl.GeoJSONSource)?.setData(emptyFc());
       engine.clearBoundDomain();
@@ -580,9 +618,71 @@ export default function GeoMap({ className }: GeoMapProps) {
       setLayerVis(map, PARTICLES_LAYER, false);
       setLayerVis(map, "waterways-line", false);
       setLayerVis(map, "gauges-circle", false);
+      setLayerVis(map, "nfhl-fill", false);
+      setLayerVis(map, "hydrosheds-line", false);
       setGeoPreview(null);
     }
   }, [aoi, aoiRevision, lowPower, setGeoPreview]);
+
+  // DEM sample → soft-solver bed (real GeoTIFF samples when staged).
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || !demSample) return;
+    engine.setDemBed({
+      z: demSample.z,
+      cols: demSample.cols,
+      rows: demSample.rows,
+      bedSource: (demSample.bedSource as "real" | "synthetic" | "proxy") || "synthetic",
+    });
+    if (engine.hasBoundDomain()) {
+      const art = engine.seek(useStore.getState().geoFloodTime);
+      if (mapRef.current && canvasRef.current && readyRef.current) {
+        ensurePreviewLayers(mapRef.current, art, canvasRef.current);
+      }
+      setGeoPreview({
+        backend: art.frame.backend,
+        validation: art.frame.validation,
+        maxDepthM: art.frame.stats.maxDepthM,
+        wetFraction: art.frame.stats.wetFraction,
+        massM3: art.frame.stats.massM3,
+        maxSpeedMs: art.frame.stats.maxSpeedMs,
+        hazardClass: art.frame.stats.hazardClass,
+        cfl: art.frame.stats.cfl,
+      });
+    }
+  }, [demSample, demRevision, setGeoPreview]);
+
+  // Catalog overlay GeoJSON (NFHL / HydroSHEDS / gauges / OSM waterways).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+
+    const loadOverlay = async (
+      srcId: string,
+      path: string | undefined,
+      fallback: GeoJSON.FeatureCollection,
+    ) => {
+      const src = map.getSource(srcId) as maplibregl.GeoJSONSource | undefined;
+      if (!src) return;
+      if (!path) {
+        src.setData(fallback);
+        return;
+      }
+      try {
+        const resp = await fetch(convertFileSrc(path));
+        const json = (await resp.json()) as GeoJSON.FeatureCollection;
+        src.setData(json?.type === "FeatureCollection" ? json : fallback);
+      } catch {
+        src.setData(fallback);
+      }
+    };
+
+    const net = aoiIsValid(aoi) ? networkFeaturesForAoi(aoi) : null;
+    void loadOverlay(WATERWAYS_SRC, overlayPaths.waterways, net?.waterways ?? emptyFc());
+    void loadOverlay(GAUGES_SRC, overlayPaths.gauges, net?.gauges ?? emptyFc());
+    void loadOverlay(NFHL_SRC, overlayPaths.nfhl, emptyFc());
+    void loadOverlay(HYDROSHEDS_SRC, overlayPaths.hydrosheds, emptyFc());
+  }, [overlayPaths, aoi, demRevision]);
 
   // Layer visibility / opacity.
   useEffect(() => {
@@ -625,6 +725,18 @@ export default function GeoMap({ className }: GeoMapProps) {
 
     const gauges = byId.gauges;
     setLayerVis(map, "gauges-circle", hasDomain && !!gauges?.visible);
+
+    const nfhl = byId.nfhl;
+    setLayerVis(map, "nfhl-fill", hasDomain && !!nfhl?.visible);
+    if (nfhl && map.getLayer("nfhl-fill")) {
+      map.setPaintProperty("nfhl-fill", "fill-opacity", nfhl.opacity * 0.35);
+    }
+
+    const basins = byId.hydrosheds;
+    setLayerVis(map, "hydrosheds-line", hasDomain && !!basins?.visible);
+    if (basins && map.getLayer("hydrosheds-line")) {
+      map.setPaintProperty("hydrosheds-line", "line-opacity", basins.opacity);
+    }
   }, [layers, waterStyle]);
 
   // Scrub / water style → seek preview (throttled while playing to avoid React thrash).

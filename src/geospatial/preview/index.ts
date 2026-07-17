@@ -20,4 +20,10 @@ export {
   type PreviewRenderArtifacts,
 } from "./engine";
 export { createGpuAccelerator } from "./webgpuSolver";
-export { H_DRY, DEFAULT_DOMAIN, downsampleDepth } from "./softSolver";
+export { H_DRY, DEFAULT_DOMAIN, downsampleDepth, buildBedFromDemSamples, buildSyntheticBed } from "./softSolver";
+export {
+  handInundate,
+  handStageFromTime01,
+  handInundationSmokeOk,
+  HAND_AUTHORITY_LABEL,
+} from "./handInundation";

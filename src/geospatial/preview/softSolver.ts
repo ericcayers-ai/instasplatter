@@ -76,6 +76,55 @@ export function buildSyntheticBed(cols: number, rows: number): Float32Array {
   return z;
 }
 
+/**
+ * Build soft-solver bed from DEM samples (bilinear resample if size differs).
+ * Falls back to synthetic undulation when samples are missing / wrong length.
+ */
+export function buildBedFromDemSamples(
+  cols: number,
+  rows: number,
+  samples: Float32Array | number[] | null | undefined,
+  sampleCols?: number,
+  sampleRows?: number,
+): { z: Float32Array; fromDem: boolean } {
+  if (!samples || samples.length === 0) {
+    return { z: buildSyntheticBed(cols, rows), fromDem: false };
+  }
+  const sc = sampleCols ?? cols;
+  const sr = sampleRows ?? rows;
+  if (sc === cols && sr === rows && samples.length === cols * rows) {
+    const z = samples instanceof Float32Array ? samples.slice() : Float32Array.from(samples);
+    return { z, fromDem: true };
+  }
+  // Bilinear resample from sample grid → solver grid.
+  const src = samples instanceof Float32Array ? samples : Float32Array.from(samples);
+  const z = new Float32Array(cols * rows);
+  if (sc < 2 || sr < 2 || src.length < sc * sr) {
+    return { z: buildSyntheticBed(cols, rows), fromDem: false };
+  }
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const u = (i + 0.5) / cols;
+      const v = (j + 0.5) / rows;
+      const x = Math.min(sc - 1, Math.max(0, u * (sc - 1)));
+      const y = Math.min(sr - 1, Math.max(0, v * (sr - 1)));
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const x1 = Math.min(sc - 1, x0 + 1);
+      const y1 = Math.min(sr - 1, y0 + 1);
+      const fx = x - x0;
+      const fy = y - y0;
+      const z00 = src[y0 * sc + x0] ?? 0;
+      const z10 = src[y0 * sc + x1] ?? 0;
+      const z01 = src[y1 * sc + x0] ?? 0;
+      const z11 = src[y1 * sc + x1] ?? 0;
+      z[j * cols + i] =
+        z00 * (1 - fx) * (1 - fy) + z10 * fx * (1 - fy) + z01 * (1 - fx) * fy + z11 * fx * fy;
+    }
+  }
+  return { z, fromDem: true };
+}
+
 export function resolveDomain(partial?: Partial<PreviewDomain>, lowPower = false): PreviewDomain {
   // Prefer caller-supplied bounds/grid; DEFAULT_DOMAIN is only the cold-start fallback.
   const base: PreviewDomain = {

@@ -7,7 +7,7 @@ InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Expe
 | Suite | Default job |
 |---|---|
 | **Reconstruction** | Capture → scored cameras → confidence-fused dense → **live stages** (frustums / sparse / dense / splat) |
-| **Geospatial** | Draw **AOI anywhere** → **3D ENU workspace** (default) or 2D satellite → ANUGA/SWMM + live preview → exports |
+| **Geospatial** | Draw **AOI anywhere** → **3D ENU workspace** (default), 2D satellite, or optional **CesiumJS Globe** (v0.10) → ANUGA/SWMM + live preview → exports |
 
 | | **Standard Mode** (default) | **Experimental Mode** (license ack) |
 |---|---|---|
@@ -19,7 +19,7 @@ InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Expe
 | Trainer | gsplat Auto on CUDA else Brush | Force gsplat Max + strategies; Brush Max if no gsplat |
 | Flood | **ANUGA** scientific (+ **SWMM** network); demo fallback labelled non-authoritative | TRITON / Wflow / GeoClaw external permissive; SFINCS/HiPIMS/BG_Flood/Itzï **GPL plugin only** |
 | Preview | WebGPU/CPU soft solver — always “Live preview” until compare gates pass | Same; promotion blocked without `HydroPromotionGates` |
-| UI | Quiet chrome; Geospatial defaults to 3D ENU | TitleBar Experimental ON + discrete NC banner + solver chips |
+| UI | Quiet chrome; Geospatial defaults to 3D ENU (+ optional Globe in v0.10) | TitleBar Experimental ON + discrete NC banner + solver chips |
 
 Weights / PyTorch sidecars stay **user-installed** under
 `%LOCALAPPDATA%/InstaSplatter/engines/sidecars/`. Hydro plugins:
@@ -64,24 +64,33 @@ Gzip NBT Sponge Schematic **v2** (WorldEdit / FAWE compatible). Standard Mode
 never offers the action; the IPC command refuses when Experimental is off.
 Design notes: `docs/superpowers/specs/2026-07-17-minecraft-schematic-export-design.md`.
 
-## Geospatial flood path (v0.9)
+## Geospatial flood path (v0.9 → v0.10)
 
 ```
 Draw AOI (WGS84) anywhere → commit_flood_aoi
   → soft-solver domain = AOI (not Wellington-locked)
   → Esri World Imagery underlay (Carto/OSM low-bandwidth fallback)
   → optional splat_bounds_enu from latest PLY into extent plan
-  → 3D ENU workspace (default): terrain + depth water + splat gizmos
-      or 2D MapLibre satellite + AOI + flood ImageSource
+  → Catalog DEM (USGS 3DEP / Copernicus GLO-30 / user GeoTIFF) → dem stage+condition
+  → Views (shared store; dual-viewer — not ENU replacement):
+      3D ENU (default): terrain + depth water + splat gizmos
+      2D MapLibre: satellite + AOI + flood ImageSource
+      Globe (v0.10): CesiumJS + local DEM terrain (quantized-mesh/heightmap)
+        — blank ion on Standard; never MapLibre canvas-drape→Cesium
+  → Flood P0 aids: HAND (NOAA-OWP inundation-mapping) + NFHL + HydroSHEDS
+      + gauges + OSM waterways (overlays; HAND = Live preview only)
   → Scientific: ANUGA (+ optional SWMM) → sim:// checkpoints → SimulationRun
       else labelled demo extents (never authoritative)
   → Preview: WebGPU or CPU soft solver → display-rate interp
       authority badge: Live preview | Demo | Scientific
+  → Other hazards (quake / fire / landslide / tsunami): Experimental data stubs only
   → Exports: COG / GeoPackage / Zarr-meta / residual report + manifest
-      authoritative=true only for calibrated ANUGA scientific products
+      DEM-only workspaces supported; authoritative=true only for calibrated ANUGA
 ```
 
 Basemap attribution (Esri World Imagery) is required and shown in the geo chrome / About.
+OSM-derived layers require ODbL attribution. Cesium ion traffic must be zero on the
+Standard path. Design: `docs/superpowers/specs/2026-07-17-geo-disaster-cesium-design.md`.
 
 ## License map (hard constraints)
 
@@ -102,6 +111,20 @@ Basemap attribution (Esri World Imagery) is required and shown in the geo chrome
 | ANUGA | Apache-2.0 | Scientific flood | Scientific flood |
 | EPA SWMM | Public domain | Network exchange | Network exchange |
 | WebGPU/CPU preview | Apache-2.0 | Preview only | Preview only |
+| CesiumJS (`cesium` / `@cesium/engine`) | **Apache-2.0** | Globe view; self-host Workers/Assets; **blank ion token**; no ion World Terrain / Bing / Google hard deps | Same engine; optional **user ion token** (Commercial ToS if used; Community = NC/eval only) |
+| Resium (optional React wrapper) | Apache-2.0 | Optional; thin wrapper preferred for Tauri CSP | Same |
+| geotiff.js / local GeoTIFF DEM | MIT (verify pin) | DEM sample / heightmap path | Same |
+| tumgis cesium-terrain-builder (CTB) | Apache-2.0 (verify image/tool) | AOI DEM → quantized-mesh (Standard terrain) | Same |
+| NOAA-OWP inundation-mapping (HAND) | **Apache-2.0** | Rapid inundation; **Live preview / non-authoritative** until promotion gates | Same |
+| USGS 3DEP / elevation | Public domain / USGS | DEM connector (US AOIs) | Same |
+| Copernicus DEM GLO-30 | Copernicus licence + cite | Worldwide DEM connector | Same |
+| OpenTopography | API ToS (key optional) | High-res DEM when key present | Same |
+| FEMA NFHL | US public | Flood-zone **overlay** (not simulation) | Same |
+| HydroSHEDS / HydroBASINS | Cite HydroSHEDS | Catchments / flow layers | Same |
+| NOAA / USGS gauges (NWIS) | Public | Hydrograph forcing | Same |
+| OSM waterways | **ODbL** (+ attribution) | Waterway overlay | Same |
+| Earth Search STAC | STAC / open | Optional flood-extent imagery | Same |
+| AWS Mapzen Terrain Tiles | Per-source attribution | Optional terrain tiles (not ion) | Same |
 | Esri World Imagery | Esri terms + attribution | Basemap (Standard) | Same |
 | TRITON / Wflow / GeoClaw | permissive (verify) | Never | External hydro install |
 | SFINCS / HiPIMS / BG_Flood / Itzï | **GPL** | Never | External plugin only |
@@ -139,7 +162,11 @@ experimental hydro engine can be considered for Standard. GPL engines
 ## Honest gaps toward v1.0
 
 - **Gaussian depth is approximate** — shared WebGL depth compositing occludes underwater splat *centers*; billboard quads still expand in screen space so soft edges can leak slightly through the waterline
+- Catalog `fetch_asset` / DEM connectors still stubbed on main until v0.10 Phase B–C land
+- Cesium Globe not shipped until v0.10; ENU remains the splat-editing workspace (not replaced)
+- HAND rapid inundation is preview-only until ANUGA compare gates pass
 - Full ANUGA analytical suite on real solver (lake-at-rest, dam-break, rainfall-on-slope) against published benchmarks
+- Authoritative wildfire / quake / tsunami / landslide solvers (v0.10 = Experimental stubs only)
 - Three drone datasets with RTK/GCP survey truth
 - Site / city / regional performance benchmarks
 - Windows installer upgrade + accessibility audit pass

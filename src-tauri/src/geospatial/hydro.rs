@@ -487,18 +487,62 @@ pub fn validate_for_scientific(
 }
 
 fn default_scenario(id: &str) -> FloodScenario {
+    // Flood lab defaults — labelled draft / non-authoritative until calibrated.
     FloodScenario {
         id: id.to_string(),
-        name: "Draft site rain".into(),
+        name: "Flood lab — site rain".into(),
         terrain_layer_id: None,
-        rainfall: Some(serde_json::json!({ "rateMmPerHour": 25.0 })),
-        inflows: None,
-        infiltration: Some(serde_json::json!({ "rateMmPerHour": 2.0 })),
-        roughness: Some(serde_json::json!({ "manningN": 0.035 })),
+        rainfall: Some(serde_json::json!({
+            "template": "chicago_6h",
+            "rateMmPerHour": 25.0,
+            "hyetograph": [
+                { "hours": 0.0, "mmPerHour": 2.0 },
+                { "hours": 1.0, "mmPerHour": 8.0 },
+                { "hours": 2.0, "mmPerHour": 28.0 },
+                { "hours": 3.0, "mmPerHour": 42.0 },
+                { "hours": 4.0, "mmPerHour": 22.0 },
+                { "hours": 5.0, "mmPerHour": 10.0 },
+                { "hours": 6.0, "mmPerHour": 4.0 },
+                { "hours": 12.0, "mmPerHour": 1.0 }
+            ],
+            "authority": "draft-template"
+        })),
+        inflows: Some(serde_json::json!({
+            "northEdgeCms": 12.0,
+            "note": "Distributed north-edge inflow proxy for Flood lab"
+        })),
+        infiltration: Some(serde_json::json!({
+            "rateMmPerHour": 2.0,
+            "method": "constant"
+        })),
+        roughness: Some(serde_json::json!({
+            "preset": "mixed_urban",
+            "manningN": 0.035,
+            "presets": {
+                "channel": 0.03,
+                "floodplain": 0.045,
+                "mixed_urban": 0.035,
+                "forest": 0.08
+            }
+        })),
         structures: None,
         drains: None,
-        boundary_conditions: None,
-        solver_settings: Some(serde_json::json!({ "cfl": 0.9, "durationHours": 12.0 })),
+        boundary_conditions: Some(serde_json::json!({
+            "outlet": {
+                "type": "stage",
+                "stageM": 0.4,
+                "edge": "south",
+                "note": "Open outlet stage BC — draft Flood lab default"
+            },
+            "walls": "reflective"
+        })),
+        solver_settings: Some(serde_json::json!({
+            "cfl": 0.9,
+            "durationHours": 12.0,
+            "handStageM": 1.5,
+            "previewPath": "soft+hand",
+            "authority": "draft"
+        })),
         validation_state: Some("draft".into()),
         aoi_wgs84: None,
     }
@@ -1196,15 +1240,32 @@ pub fn start_scientific_flood(
                     s.detail = "Preparing DEM…".into();
                 });
                 let dem_src = spec_bg.dem_path.as_ref().map(PathBuf::from);
-                let dem: DemProduct = dem::prepare_flood_dem(
+                let aoi_for_dem = scenario_bg.aoi_wgs84;
+                let dem: DemProduct = dem::prepare_flood_dem_with_opts(
                     &ws_bg,
-                    dem_src.as_deref(),
-                    mesh.dem_resolution_m.max(1.0),
-                    geo_ref
-                        .as_ref()
-                        .and_then(|g| g.working_crs.as_deref())
-                        .or(Some("local-ENU-m")),
+                    &dem::DemStageOpts {
+                        source: dem_src.map(|p| p.to_string_lossy().into_owned()),
+                        cell_size_m: Some(mesh.dem_resolution_m.max(1.0)),
+                        crs: geo_ref
+                            .as_ref()
+                            .and_then(|g| g.working_crs.clone())
+                            .or_else(|| Some("local-ENU-m".into())),
+                        aoi_wgs84: aoi_for_dem,
+                        nodata: Some(-9999.0),
+                    },
                 )?;
+                // Honest Demo when DEM is synthetic even if ANUGA is present.
+                if dem.synthetic {
+                    emit_geo(
+                        &app_bg,
+                        GeoEvent::EngineMissing {
+                            engine: "dem".into(),
+                            message: "No real DEM staged — scientific path will label Demo extents when falling back; fetch USGS 3DEP / Copernicus first."
+                                .into(),
+                            demo_available: true,
+                        },
+                    );
+                }
 
                 let ensemble = spec_bg.ensemble.clone().unwrap_or(EnsembleSpec {
                     realizations: 1,
@@ -1219,12 +1280,13 @@ pub fn start_scientific_flood(
                     "runId": run_id_bg,
                     "workspace": ws_bg.to_string_lossy(),
                     "outputDir": out_bg.to_string_lossy(),
-                    "demoMode": spec_bg.allow_demo,
+                    "demoMode": spec_bg.allow_demo || dem.synthetic,
                     "dem": {
                         "path": dem.dtm_path,
                         "crs": dem.crs,
                         "cellSizeM": dem.cell_size_m.unwrap_or(mesh.dem_resolution_m),
-                        "synthetic": dem.synthetic
+                        "synthetic": dem.synthetic,
+                        "bedSource": dem.bed_source
                     },
                     "extent": {
                         "boundsEnu": mesh.bounds_enu,
@@ -1260,7 +1322,7 @@ pub fn start_scientific_flood(
                     "checkpointEveryS": 600
                 });
 
-                let (paths, mass, mode, version_or_label) =
+                let (paths, mass, mut mode, mut version_or_label) =
                     if let Some(launch) = resolve_geo_sidecar("anuga") {
                         match invoke_anuga_sidecar(
                             &app_bg,
@@ -1333,6 +1395,15 @@ pub fn start_scientific_flood(
                                 .into(),
                         );
                     };
+
+                // Real DEM required for Scientific badge — synthetic bed stays Demo.
+                if dem.synthetic && mode != "demo" {
+                    mode = "demo".into();
+                    version_or_label = Some(
+                        "Demo mode — DEM is synthetic; fetch USGS 3DEP / Copernicus for scientific bed."
+                            .into(),
+                    );
+                }
 
                 let mut all_paths = paths;
                 if spec_bg.enable_swmm || scenario_bg.drains.is_some() {

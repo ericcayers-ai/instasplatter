@@ -154,7 +154,7 @@ export default function SceneTree() {
           <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-hydro)]">
             Layers
           </div>
-          <div className="mt-0.5 text-[11px] text-ink-dim">Basemap, terrain, flood</div>
+          <div className="mt-0.5 text-[11px] text-ink-dim">Basemap, flood, hazard stubs</div>
         </div>
         <GeoLayerTree />
       </aside>

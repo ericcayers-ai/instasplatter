@@ -9,15 +9,28 @@ export type GeoLayerKind =
   | "buildings"
   | "waterways"
   | "gauges"
+  | "nfhl"
+  | "hydrosheds"
   | "forcing"
   | "flood_depth"
   | "flood_velocity"
   | "flood_hazard"
-  | "flood_uncertainty";
+  | "flood_uncertainty"
+  /** Experimental multi-hazard stubs — feed/STAC cards only, never physics. */
+  | "hazard_quake"
+  | "hazard_fire"
+  | "hazard_landslide"
+  | "hazard_tsunami";
 
-export type GeoLayerGroup = "basemap" | "terrain" | "survey" | "network" | "flood";
+export type GeoLayerGroup =
+  | "basemap"
+  | "terrain"
+  | "survey"
+  | "network"
+  | "flood"
+  | "hazards";
 
-export type GeoViewMode = "2d" | "3d";
+export type GeoViewMode = "2d" | "3d" | "globe";
 
 export type GeoWaterStyle = "depth" | "hazard" | "contour";
 
@@ -91,6 +104,16 @@ export interface GeoScenarioMeta {
   note: string;
   /** Committed AOI when set (mirrors FloodScenario.aoiWgs84). */
   aoiWgs84?: AoiWgs84 | null;
+  /** Flood lab rainfall template id. */
+  rainfallTemplate?: string;
+  /** Manning n preset id. */
+  manningPreset?: string;
+  /** Manning n value. */
+  manningN?: number;
+  /** Outlet BC summary for inspector. */
+  outletBc?: string;
+  /** Authority label: draft | live-preview | demo | scientific. */
+  authority?: string;
 }
 
 /** Scientific / demo flood run feed for the inspector and map. */

@@ -7,11 +7,12 @@ import BatchQueue from "../components/BatchQueue";
 import GeoMap from "./GeoMap";
 import GeoToolbar from "./GeoToolbar";
 import GeoWorkspace3D from "./GeoWorkspace3D";
+import { CesiumGlobe } from "./globe";
 import HydrographTimeline from "./HydrographTimeline";
 import { PreviewBadge } from "./PreviewBadge";
 
 /**
- * Geospatial suite viewport: default 3D ENU workspace, optional 2D satellite MapLibre.
+ * Geospatial suite viewport: default 3D ENU, optional 2D MapLibre, optional Cesium Globe.
  */
 export default function GeoViewport() {
   const enqueueJobs = useStore((s) => s.enqueueJobs);
@@ -19,6 +20,7 @@ export default function GeoViewport() {
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const preview = useStore((s) => s.geoPreview);
   const scientific = useStore((s) => s.geoScientificRun);
+  const dem = useStore((s) => s.geoDemProduct);
   const aoi = useStore((s) => s.geoAoiWgs84);
   const setTool = useStore((s) => s.setGeoTool);
   const viewMode = useStore((s) => s.geoViewMode);
@@ -61,21 +63,23 @@ export default function GeoViewport() {
   };
 
   const authority =
-    scientific?.mode === "anuga"
+    scientific?.mode === "anuga" && !dem?.synthetic
       ? "Scientific"
-      : scientific?.mode === "demo"
+      : scientific?.mode === "demo" || dem?.synthetic
         ? "Demo"
         : "Live preview";
 
   const is2d = viewMode === "2d";
+  const isGlobe = viewMode === "globe";
+  const showMapChrome = is2d;
 
   return (
     <div className="geo-viewport geo-field flex h-full min-h-0 flex-col" data-water-style="depth">
       <div className="relative min-h-0 flex-1">
-        {is2d ? <GeoMap /> : <GeoWorkspace3D />}
+        {is2d ? <GeoMap /> : isGlobe ? <CesiumGlobe /> : <GeoWorkspace3D />}
         <GeoToolbar />
 
-        {is2d && (
+        {showMapChrome && (
           <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">
             <div className="pointer-events-auto">
               <PreviewBadge validation={preview?.validation ?? "live"} backend={preview?.backend} />
@@ -126,7 +130,7 @@ export default function GeoViewport() {
             <div className="pointer-events-auto float-in rounded border border-edge bg-panel/95 p-3 text-[11px] shadow-sm backdrop-blur-sm">
               <p className="leading-relaxed text-ink-dim">
                 Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Draw an AOI on the 2D satellite map,
-                then scrub the live preview in the 3D workspace (ANUGA scientific from the scenario panel).
+                scrub the live preview in the 3D ENU workspace or Globe, and run ANUGA from the scenario panel.
               </p>
               {catalog && (
                 <div className="mt-2 space-y-1 text-ink-dim">
