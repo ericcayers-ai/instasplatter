@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.9.1-green)
+![Status](https://img.shields.io/badge/status-v0.9.2-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -17,7 +17,7 @@
 
 ---
 
-> **v0.9.1** adds an **Experimental Minecraft schematic** export (Sponge v2 `.schem` from finished splats). **v0.9.0** shipped a **worldwide AOI-driven Geospatial suite** with a primary **3D ENU workspace** (Esri World Imagery terrain, depth water, georegistered splat gizmos), optional **2D satellite** map with fixed flood overlays, **live reconstruction stages** (cameras → sparse → dense → splats), grouped Settings, discrete Experimental Mode, and an **About** implementations panel. Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.9.2** revamps the **shell UX** for clearer navigation and installs **Impeccable** and **Bencium Controlled UX Designer** skills app-wide. **v0.9.1** adds an **Experimental Minecraft schematic** export (Sponge v2 `.schem` from finished splats). **v0.9.0** shipped a **worldwide AOI-driven Geospatial suite** with a primary **3D ENU workspace** (Esri World Imagery terrain, depth water, georegistered splat gizmos), optional **2D satellite** map with fixed flood overlays, **live reconstruction stages** (cameras → sparse → dense → splats), grouped Settings, discrete Experimental Mode, and an **About** implementations panel. Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 

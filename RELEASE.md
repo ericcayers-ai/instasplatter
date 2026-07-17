@@ -5,7 +5,7 @@
 Download the latest installer from [GitHub Releases](https://github.com/ericcayers-ai/instasplatter/releases), or build locally:
 
 ```
-src-tauri/target/release/bundle/nsis/InstaSplatter_0.9.1_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InstaSplatter_0.9.2_x64-setup.exe
 ```
 
 Run it, then launch InstaSplatter from the Start menu. To skip the installer:
@@ -44,6 +44,10 @@ node --experimental-strip-types src/splat/camera.ts
 ```
 
 Rust unit tests cover linear algebra, COLMAP and PLY readers and writers, the SPZ encoder, the incremental camera solver, the mesh extractor, and the Experimental Minecraft schematic (Sponge v2) writer. The camera-control maths in `src/splat/camera.ts` has its own numeric checks.
+
+## What is new in v0.9.2
+
+**Shell QOL + design skills.** Clearer TitleBar, StatusBar, panels, and drop/processing surfaces; design tokens and copy tightened for scanability. Ships Impeccable and Bencium Controlled UX Designer as app-wide Cursor skills (`.agents` / `.cursor`) plus PRODUCT/DESIGN notes.
 
 ## What is new in v0.9.1
 
