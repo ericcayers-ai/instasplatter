@@ -29,7 +29,6 @@ export default function ExperimentalBanner() {
     chips.unshift(`Flood ${Math.round(scientific.progress * 100)}%`);
   }
 
-  // Fallback: installed research engines when a job has not reported yet.
   if (chips.length === 0 && engineStatus) {
     const ready: string[] = [];
     if (engineStatus.vggtOmega) ready.push("VGGT-Ω");
@@ -39,18 +38,21 @@ export default function ExperimentalBanner() {
     if (engineStatus.romaV2) ready.push("RoMa");
     if (engineStatus.difix) ready.push("Difix");
     if (engineStatus.fixer) ready.push("Fixer");
-    if (ready.length) chips.push(`Ready: ${ready.join(" · ")}`);
+    if (ready.length) chips.push(ready.slice(0, 4).join(" · "));
   }
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-danger/35 bg-danger/10 px-3 py-1.5 text-[11px]">
-      <span className="font-semibold tracking-wide text-danger">
-        Experimental Mode — NC research stack
-      </span>
-      {chips.map((c) => (
+    <div
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-danger/30 bg-danger/[0.07] px-3 py-1 text-[11px]"
+      role="status"
+      aria-live="polite"
+    >
+      <span className="font-semibold tracking-wide text-danger">Experimental</span>
+      <span className="text-ink-dim">NC research stack</span>
+      {chips.slice(0, 3).map((c) => (
         <span
           key={c}
-          className="rounded border border-danger/30 bg-panel/60 px-1.5 py-0.5 text-[10px] text-ink"
+          className="rounded border border-danger/25 bg-panel/50 px-1.5 py-0.5 text-[10px] text-ink"
         >
           {c.replace(/^(Cameras|Init|Polish|Trainer|Flood|Export):\s*/i, "")}
         </span>

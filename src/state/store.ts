@@ -116,6 +116,7 @@ interface AppStore {
   logs: LogLine[];
   /** Plain statements the pipeline made that are not failures. */
   notices: string[];
+  clearNotices: () => void;
   /** Status chips emitted by the pipeline (Cameras / Init / Polish / Trainer / Flood / Export). */
   pipelineChips: {
     cameras?: string;
@@ -287,6 +288,7 @@ export const useStore = create<AppStore>((set, get) => ({
   stages: freshStages(),
   logs: [],
   notices: [],
+  clearNotices: () => set({ notices: [] }),
   pipelineChips: {},
   cameras: [],
   registeredCameras: 0,

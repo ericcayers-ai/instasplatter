@@ -16,43 +16,45 @@ function RecentProjects() {
   const deleteProjectEntry = useStore((s) => s.deleteProjectEntry);
 
   if (projects.length === 0) {
-    return <div className="text-xs text-ink-dim">No saved projects yet.</div>;
+    return (
+      <div className="text-xs leading-relaxed text-ink-dim">
+        No saved projects yet. Drop a video or folder to create one — runs resume from the last checkpoint.
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-0.5">
       {projects.map((p) => (
         <div
           key={p.workspace}
-          className="group flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs hover:bg-panel2"
+          className="group flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-panel2"
         >
-          <div className="min-w-0">
-            <div className="truncate">{p.inputName}</div>
+          <button
+            type="button"
+            className="min-w-0 flex-1 text-left"
+            onClick={() => void resumeProject(p.workspace)}
+            disabled={!p.resumable && !p.completed}
+            title={p.workspace}
+          >
+            <div className="truncate font-medium text-ink">{p.inputName}</div>
             <div className="text-[10px] text-ink-dim">
               {p.completed
-                ? "Complete"
+                ? "Complete — open"
                 : p.resumable
-                  ? `Resumable, step ${p.latestIter.toLocaleString()} / ${p.totalSteps.toLocaleString()}`
+                  ? `Resume · step ${p.latestIter.toLocaleString()} / ${p.totalSteps.toLocaleString()}`
                   : "Incomplete"}
             </div>
-          </div>
-          <div className="flex shrink-0 gap-1 opacity-0 group-hover:opacity-100">
-            {p.resumable && (
-              <button
-                onClick={() => void resumeProject(p.workspace)}
-                className="btn px-1.5 py-0.5 text-[10px]"
-              >
-                Resume
-              </button>
-            )}
-            <button
-              onClick={() => void deleteProjectEntry(p.workspace)}
-              className="btn btn-danger px-1.5 py-0.5 text-[10px]"
-              title="Delete this project"
-            >
-              ✕
-            </button>
-          </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteProjectEntry(p.workspace)}
+            className="btn btn-ghost btn-danger px-1.5 py-0.5 text-[10px] opacity-0 group-hover:opacity-100 focus:opacity-100"
+            title="Delete this project"
+            aria-label={`Delete ${p.inputName}`}
+          >
+            Delete
+          </button>
         </div>
       ))}
     </div>
@@ -144,7 +146,10 @@ export default function SceneTree() {
 
   if (suite === "geospatial") {
     return (
-      <div className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">
+      <aside
+        className="shell-panel flex w-60 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel"
+        aria-label="Geospatial layers"
+      >
         <div className="border-b border-edge px-3 py-2.5">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-hydro)]">
             Layers
@@ -152,12 +157,15 @@ export default function SceneTree() {
           <div className="mt-0.5 text-[11px] text-ink-dim">Basemap, terrain, flood</div>
         </div>
         <GeoLayerTree />
-      </div>
+      </aside>
     );
   }
 
   return (
-    <div className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel">
+    <aside
+      className="shell-panel flex w-60 shrink-0 flex-col overflow-y-auto border-r border-edge bg-panel"
+      aria-label="Scene and projects"
+    >
       {screen === "home" && (
         <Section title="Recent projects">
           <RecentProjects />
@@ -251,6 +259,6 @@ export default function SceneTree() {
           </Section>
         </>
       )}
-    </div>
+    </aside>
   );
 }
