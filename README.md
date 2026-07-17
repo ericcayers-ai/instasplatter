@@ -13,6 +13,12 @@
 [![Contributing](https://img.shields.io/badge/contributing-guide-informational)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-blueviolet)](CODE_OF_CONDUCT.md)
 
+<br />
+
+![Illustrative hero: InstaSplatter midnight capture-bay shell with teal pigment splat viewport and brass Live progress](docs/assets/hero-capture-bay.jpg)
+
+<sub>Illustrative capture-bay concept — teal pigment brand, brass for live progress. Not a product screenshot.</sub>
+
 </div>
 
 ---
@@ -27,7 +33,16 @@ InstaSplatter turns ordinary captures into photorealistic **3D Gaussian splats**
 
 Drop an `.mp4`, a folder of images, or several at once onto the window and the scene materializes in the viewport while it trains. Resolution, frame count, iteration budget, and quality trade-offs are **automatically tuned to your PC**. Power users can open Settings and override every knob; everyone else never has to.
 
-## Product suites
+```mermaid
+flowchart LR
+  subgraph Shell["One shell"]
+    R["Reconstruction"]
+    G["Geospatial"]
+  end
+  R --> Q["Shared queue · engines · diagnostics"]
+  G --> Q
+  Q --> X["Export · project resume"]
+```
 
 | Suite | Job |
 |---|---|
@@ -35,6 +50,66 @@ Drop an `.mp4`, a folder of images, or several at once onto the window and the s
 | **Geospatial** | Draw AOI anywhere → ENU 3D workspace / 2D satellite → flood scenarios → timed exports |
 
 Switch suites from the TitleBar. Geospatial defaults to the **3D workspace**; toggle **2D satellite** to draw or edit an AOI. Projects are versioned (`v2`) and can carry either suite; reconstruction projects remain loadable.
+
+---
+
+## Example flow — Reconstruction
+
+<div align="center">
+
+![Illustrative reconstruction workflow: Drop → Cameras → Dense → Export PLY on a dark capture-bay panel with teal and brass accents](docs/assets/flow-reconstruction.jpg)
+
+<sub>Illustrative pipeline strip — Drop → live stages → export. Not a product screenshot.</sub>
+
+</div>
+
+**Drop → live stages → export**
+
+1. **Drop** a video or image folder onto the home capture plane.
+2. Watch **live stages** in the 3D viewport: cameras → sparse → dense → splat (brass marks Live progress).
+3. **Export** PLY / SPZ v4 / mesh from the consolidated Export menu. With Experimental Mode on, optionally export a Minecraft `.schem` from the finished splat.
+
+```mermaid
+flowchart LR
+  A["Drop capture"] --> B["Cameras"]
+  B --> C["Sparse"]
+  C --> D["Dense"]
+  D --> E["Splat"]
+  E --> F["Export PLY / SPZ / mesh"]
+  E -.->|Experimental| G[".schem"]
+```
+
+---
+
+## Example flow — Geospatial
+
+<div align="center">
+
+![Illustrative geospatial workflow: Draw AOI → 3D ENU workspace → Flood run → Export products on a dark capture-bay panel](docs/assets/flow-geospatial.jpg)
+
+<sub>Illustrative AOI → flood → export strip. Not a product screenshot.</sub>
+
+</div>
+
+**AOI → flood → export**
+
+1. Open or create a geo project; switch suite to **Geospatial**.
+2. **Draw an AOI** in 2D satellite (or work in the default **3D ENU** workspace with Esri World Imagery terrain).
+3. **Run flood** — scientific (ANUGA/SWMM when installed) or labelled preview / demo. Check the authority badge: Live preview / Demo / Scientific.
+4. **Export** COG / GeoPackage / Zarr metadata and manifests.
+
+```mermaid
+flowchart LR
+  A["Draw AOI"] --> B["3D ENU / 2D satellite"]
+  B --> C["Flood run"]
+  C --> D{"Authority badge"}
+  D -->|Scientific| E["ANUGA / SWMM"]
+  D -->|Preview / Demo| F["Labelled non-authoritative"]
+  E --> G["Export products"]
+  F --> G
+```
+
+---
 
 ## Dual mode (Standard vs Experimental)
 
@@ -50,6 +125,8 @@ Applies inside both suites where engines are gated:
 
 Experimental is a single TitleBar control (+ discrete banner). Open **About** for Standard vs Experimental stacks, geospatial engines, sidecars, and license/attribution (including Esri World Imagery). NC weights and GPL hydro binaries are never shipped in the installer. See [tools/sidecars/README.md](tools/sidecars/README.md).
 
+---
+
 ## Why it is different
 
 - **Two suites, one shell.** Reconstruction and geospatial share queue, engines, diagnostics, and Standard/Experimental policy.
@@ -59,6 +136,8 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 - **Science vs graphics.** ANUGA/SWMM for authoritative runs after calibration; live preview stays a badge until within tolerances. Demo/uncalibrated exports never claim authority.
 - **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python required for the base install.
 - **Local and private.** All processing runs on your machine.
+
+---
 
 ## Features
 
@@ -75,6 +154,8 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 | **Modes** | Suite switch + Standard / Experimental + About implementations |
 | **Resume** | Project bundles with checkpoint resume |
 
+---
+
 ## Requirements
 
 | | Minimum | Recommended |
@@ -83,6 +164,8 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 | **GPU** | Any Vulkan/DX12-capable GPU | Dedicated GPU with 6+ GB VRAM |
 | **RAM** | 16 GB | 32 GB |
 | **Disk** | A few GB free for cache | SSD recommended |
+
+---
 
 ## Installation
 
@@ -104,6 +187,8 @@ npm run tauri dev      # development
 npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 ```
 
+---
+
 ## Usage
 
 1. **Launch** InstaSplatter. It detects your hardware and picks a preset.
@@ -112,13 +197,17 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in the default 3D ENU workspace), run flood scientific or preview, export products with manifests. Check the authority badge (Live preview / Demo / Scientific).
 5. _(Optional)_ Settings groups, Experimental Mode (NC ack), or **About** for stacks and attribution.
 
+---
+
 ## Roadmap / release gates
 
 - **v0.8**: suites, georeg, viewport, dual flood engines, exports, experimental adapters.
-- **v0.9** (this release): worldwide AOI, Esri imagery, 3D ENU workspace, live recon stages, Settings/About cleanup.
+- **v0.9** (this release): worldwide AOI, Esri imagery, 3D ENU workspace, live recon stages, Settings/About cleanup, shell QOL (v0.9.2).
 - **v1.0**: large-scene tiling, uncertainty ensembles, full ANUGA validation suite, multi-drone RTK/GCP truth sets, site/city benchmarks, accessibility + installer migration audit.
 
 See also **[ROADMAP-V2.md](ROADMAP-V2.md)** and **[ROADMAP.md](ROADMAP.md)**.
+
+---
 
 ## Contributing
 
