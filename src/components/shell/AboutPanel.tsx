@@ -92,7 +92,8 @@ export default function AboutPanel() {
               </div>
               <p className="mt-1.5 text-[10px] leading-snug">
                 NC research stack after TitleBar ack: VGGT-Ω, MASt3R, DUSt3R, Difix, profiled pose
-                chains, experimental hydro adapters behind promotion gates.
+                chains, experimental hydro adapters behind promotion gates, and Minecraft schematic
+                (`.schem`) export from finished splats.
               </p>
             </div>
           </div>

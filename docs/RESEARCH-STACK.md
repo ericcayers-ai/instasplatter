@@ -1,4 +1,4 @@
-# Research stack (v0.9+) — dual suite + dual mode
+# Research stack (v0.9.1+) — dual suite + dual mode
 
 Evidence-first inventory: **[PAPER-SWEEP-2024+.md](./PAPER-SWEEP-2024+.md)**.
 
@@ -51,9 +51,18 @@ Video → frame gate → detect CaptureProfile
   → Difix then Fixer
   → gsplat Max (MCMC **or** AbsGrad, exclusive; +AA+appearance+bilagrid) or Brush Max
   → Live PLY lerp viewport → Mesh / SPZ v4 export
+  → Experimental: Minecraft Sponge Schematic v2 (`.schem`) from splat voxels
 ```
 
 Routing table lives in `src-tauri/src/pipeline/experimental.rs`.
+
+### Minecraft schematic export (v0.9.1, Experimental)
+
+Splat PLY → robust bounds → metres-per-block scale (default max axis 128) →
+opacity-weighted voxel stamps → nearest vanilla **concrete** palette →
+Gzip NBT Sponge Schematic **v2** (WorldEdit / FAWE compatible). Standard Mode
+never offers the action; the IPC command refuses when Experimental is off.
+Design notes: `docs/superpowers/specs/2026-07-17-minecraft-schematic-export-design.md`.
 
 ## Geospatial flood path (v0.9)
 

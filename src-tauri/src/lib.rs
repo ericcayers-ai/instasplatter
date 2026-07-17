@@ -15,7 +15,7 @@ use pipeline::{JobCtx, JobEvent, JobHandle};
 use profiler::HardwareProfile;
 use project::{Project, ProjectSummary, Suite};
 use settings::{ResolvedSettings, Settings};
-use splat::{export, ply, transform};
+use splat::{export, ply, schematic, transform};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -791,6 +791,101 @@ fn export_splat(
     export::write(&dest, &cloud, format)
 }
 
+/// Experimental: voxelize a finished splat into a Sponge Schematic v2 `.schem`
+/// for WorldEdit / Litematica-class paste tools. Requires Experimental Mode.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchematicExportResult {
+    path: String,
+    width: u32,
+    height: u32,
+    length: u32,
+    occupied: u32,
+    palette_size: u32,
+    metres_per_block: f64,
+}
+
+#[tauri::command]
+fn export_minecraft_schematic(
+    result_path: String,
+    dest_path: String,
+    workspace: Option<String>,
+    rotation: Option<[f32; 9]>,
+    max_extent: Option<u32>,
+    opacity_min: Option<f32>,
+) -> Result<SchematicExportResult, String> {
+    let resolved = settings::resolve(&Settings::load(), cached_profile());
+    if !resolved.experimental_mode {
+        return Err(
+            "Minecraft schematic export is Experimental. Enable Experimental Mode in the TitleBar first."
+                .into(),
+        );
+    }
+
+    let src = PathBuf::from(&result_path);
+    let dest = PathBuf::from(&dest_path);
+    if dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("schem"))
+        != Some(true)
+    {
+        return Err("Destination must use the .schem extension (Sponge Schematic v2).".into());
+    }
+
+    let rotation = rotation.or_else(|| {
+        workspace
+            .as_deref()
+            .and_then(|ws| Project::load(Path::new(ws)).ok())
+            .and_then(|p| p.model_rotation)
+    });
+    let identity = |r: &[f32; 9]| {
+        const I: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        r.iter().zip(I).all(|(a, b)| (a - b).abs() < 1e-6)
+    };
+    let rot = rotation.filter(|r| !identity(r));
+
+    let mut cloud = ply::read_ply(&src)?;
+    if let Some(r) = rot {
+        let m = [
+            [r[0] as f64, r[1] as f64, r[2] as f64],
+            [r[3] as f64, r[4] as f64, r[5] as f64],
+            [r[6] as f64, r[7] as f64, r[8] as f64],
+        ];
+        let (c, _) = cloud.robust_bounds(0.95);
+        transform::rotate_cloud(&mut cloud, m, [c[0] as f64, c[1] as f64, c[2] as f64])?;
+    }
+
+    let name = workspace
+        .as_deref()
+        .and_then(|ws| Path::new(ws).file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("InstaSplatter")
+        .to_string();
+
+    let mut opts = schematic::SchematicOptions {
+        name,
+        ..schematic::SchematicOptions::default()
+    };
+    if let Some(e) = max_extent {
+        opts.max_extent = e;
+    }
+    if let Some(o) = opacity_min {
+        opts.opacity_min = o;
+    }
+
+    let grid = schematic::export_schematic(&cloud, &dest, &opts)?;
+    Ok(SchematicExportResult {
+        path: dest.to_string_lossy().into_owned(),
+        width: grid.width,
+        height: grid.height,
+        length: grid.length,
+        occupied: grid.occupied,
+        palette_size: grid.palette.len() as u32,
+        metres_per_block: grid.metres_per_block,
+    })
+}
+
 /// Progress of a mesh extraction, which runs long enough to need reporting.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1012,6 +1107,7 @@ pub fn run() {
             estimate_up_axis,
             list_export_formats,
             export_splat,
+            export_minecraft_schematic,
             export_mesh,
             export_diagnostics,
         ])

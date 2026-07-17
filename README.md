@@ -6,7 +6,7 @@
 
 **Zero-config by default. Every setting exposed underneath.**
 
-![Status](https://img.shields.io/badge/status-v0.9.0-green)
+![Status](https://img.shields.io/badge/status-v0.9.1-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![GPU](https://img.shields.io/badge/GPU-cross--vendor%20wgpu-38B7A6)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -17,7 +17,7 @@
 
 ---
 
-> **v0.9.0** ships a **worldwide AOI-driven Geospatial suite** with a primary **3D ENU workspace** (Esri World Imagery terrain, depth water, georegistered splat gizmos), optional **2D satellite** map with fixed flood overlays, **live reconstruction stages** (cameras → sparse → dense → splats), grouped Settings, discrete Experimental Mode, and an **About** implementations panel. Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.9.1** adds an **Experimental Minecraft schematic** export (Sponge v2 `.schem` from finished splats). **v0.9.0** shipped a **worldwide AOI-driven Geospatial suite** with a primary **3D ENU workspace** (Esri World Imagery terrain, depth water, georegistered splat gizmos), optional **2D satellite** map with fixed flood overlays, **live reconstruction stages** (cameras → sparse → dense → splats), grouped Settings, discrete Experimental Mode, and an **About** implementations panel. Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 
@@ -71,7 +71,7 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 | **Geospatial 3D** | ENU workspace: Esri imagery terrain, depth water, editable splat gizmos |
 | **Geospatial 2D** | MapLibre satellite + AOI draw + flood depth overlay |
 | **Flood** | ANUGA/SWMM scientific path + WebGPU/CPU preview + demo fallback |
-| **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests |
+| **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests; Experimental Minecraft `.schem` |
 | **Modes** | Suite switch + Standard / Experimental + About implementations |
 | **Resume** | Project bundles with checkpoint resume |
 
@@ -108,7 +108,7 @@ npm run tauri build    # NSIS installer in src-tauri/target/release/bundle
 
 1. **Launch** InstaSplatter. It detects your hardware and picks a preset.
 2. Pick a **suite**: Reconstruction or Geospatial (TitleBar).
-3. **Reconstruction** — drag a video or image folder; watch live stages (cameras / sparse / dense / splat); export PLY/SPZ/mesh.
+3. **Reconstruction** — drag a video or image folder; watch live stages (cameras / sparse / dense / splat); export PLY/SPZ/mesh. With Experimental Mode on, export a Minecraft `.schem` schematic from the finished splat.
 4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in the default 3D ENU workspace), run flood scientific or preview, export products with manifests. Check the authority badge (Live preview / Demo / Scientific).
 5. _(Optional)_ Settings groups, Experimental Mode (NC ack), or **About** for stacks and attribution.
 

@@ -7,6 +7,7 @@
 pub mod export;
 pub mod mipfilter;
 pub mod ply;
+pub mod schematic;
 pub mod transform;
 
 /// Zeroth-order spherical-harmonic basis constant.

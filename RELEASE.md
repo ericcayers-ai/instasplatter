@@ -5,7 +5,7 @@
 Download the latest installer from [GitHub Releases](https://github.com/ericcayers-ai/instasplatter/releases), or build locally:
 
 ```
-src-tauri/target/release/bundle/nsis/InstaSplatter_0.3.1_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InstaSplatter_0.9.1_x64-setup.exe
 ```
 
 Run it, then launch InstaSplatter from the Start menu. To skip the installer:
@@ -43,41 +43,24 @@ npx tsc --noEmit
 node --experimental-strip-types src/splat/camera.ts
 ```
 
-168 Rust unit tests cover the linear algebra, the COLMAP and PLY readers and writers, the SPZ encoder, the incremental camera solver, and the mesh extractor. The camera-control maths in `src/splat/camera.ts` has its own numeric checks.
+Rust unit tests cover linear algebra, COLMAP and PLY readers and writers, the SPZ encoder, the incremental camera solver, the mesh extractor, and the Experimental Minecraft schematic (Sponge v2) writer. The camera-control maths in `src/splat/camera.ts` has its own numeric checks.
 
-## What is new in v0.3.1
+## What is new in v0.9.1
 
-**Research proof.** `docs/PAPER-SWEEP-2024+.md` inventories 45 post-2024 papers/repos with license, status, and greppable integration points.
+**Experimental Minecraft schematic.** With Experimental Mode on and a finished reconstruction, **Export schematic** writes a Sponge Schematic v2 `.schem` (Gzip NBT) that WorldEdit-class tools can paste. The splat is voxelized with a robust AABB, opacity filter, and vanilla concrete colour palette. Standard Mode is unchanged.
 
-**Composed dense init.** Neural densifiers (DAV2 / VGGT-commercial) now **merge** with COLMAP MVS and sparse points instead of short-circuiting each other.
+## What is new in v0.9.0
 
-**Fixer polish.** NVIDIA Fixer (commercial Open Model License) runs after training when `engines/sidecars/fixer` is installed (`postPolish` default ON). Difix remains research-only.
-
-**Mesh.** Higher default TSDF resolution (768 / 1024 render) with stronger cleanup.
-
-**Brush custom.** `brush-custom` override is auto-detected and reported in engine status; fork scaffolding under `tools/brush-fork/`.
-
-## What is new in v0.2.0
-
-**Interface.** Distinctive InstaSplatter identity: Syne display type, IBM Plex body and mono, a restrained splatter motif on the home screen, light and dark themes, and keyboard focus rings.
-
-**Viewport.** Orbit, pan and zoom were rewritten. Rotation no longer flips near the poles, panning tracks the cursor at any zoom distance, zoom moves toward the cursor rather than the screen centre, and scenes load the right way up. You can turn the model itself, snap its up axis to the nearest world axis, or stand it on a ground plane the app finds for you.
-
-**Saving.** Every run writes a project file as it goes. If training is interrupted, the run resumes from its last checkpoint. Recent projects appear on the home screen with Resume and Delete actions.
-
-**Export.** Splats save as PLY, `.splat` or SPZ. The viewport orientation is baked into whatever you export. Optional mesh export writes glb, OBJ or PLY with per-vertex colour.
-
-**Live camera tracking (off by default).** Turn it on in Settings under Cameras. Cameras then solve one at a time and appear in the viewport as frustums, with a running count and confidence, instead of waiting for a single blocking COLMAP pass. If it loses confidence it tells you and switches back to COLMAP.
-
-**Reliability.** Exhaustive error messages at every stage, a one-click diagnostics export, and a preflight free-disk check before jobs start.
+Worldwide AOI geospatial suite, 3D ENU workspace, live reconstruction stages, Settings/About cleanup. See the [v0.9.0 release](https://github.com/ericcayers-ai/instasplatter/releases/tag/v0.9.0).
 
 ## Settings that default to off
 
 - **Live camera tracking.** Camera intrinsics are guessed from the image size and are not refined, so poses carry whatever error that guess introduces. COLMAP remains the accurate path.
 - **Research sidecars.** NC weights (VGGT-Ω, Difix research). Off until you accept the license risk.
+- **Minecraft schematic export.** Experimental Mode only.
 
 Progressive resolution, Mip-Splatting, dense init, neural densifiers (when installed), and post polish (when Fixer is installed) default **ON**.
 
 ## Manual end-to-end gate
 
-Before trusting a release on your machine, run one full reconstruction (video or image folder) with engines installed. This is the acceptance check for ROADMAP-V2 item 1.1.
+Before trusting a release on your machine, run one full reconstruction (video or image folder) with engines installed. This is the acceptance check for ROADMAP-V2 item 1.1. With Experimental Mode on, also try **Export schematic** and confirm a `.schem` opens in your preferred paste tool.
