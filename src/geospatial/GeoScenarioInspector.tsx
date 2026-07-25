@@ -40,6 +40,9 @@ export default function GeoScenarioInspector() {
   const prepareDem = useStore((s) => s.prepareGeoDemForAoi);
   const stageUserGeoTiff = useStore((s) => s.stageUserGeoTiffDem);
   const generateSplatDem = useStore((s) => s.generateSplatDemFromRecon);
+  const generateSatSplat = useStore((s) => s.generateSatSplat);
+  const satSplatBusy = useStore((s) => s.geoSatSplatBusy);
+  const satSplatProduct = useStore((s) => s.geoSatSplatProduct);
   const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
   const aoi = useStore((s) => s.geoAoiWgs84);
   const setTool = useStore((s) => s.setGeoTool);
@@ -349,6 +352,36 @@ export default function GeoScenarioInspector() {
 
           <p className="text-[9px] leading-snug text-[var(--color-gauge)]">
             Authority: draft templates — Live preview / non-authoritative until ANUGA validates.
+          </p>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Satellite Splat" defaultOpen={false} badge="anywhere">
+        <div className="space-y-2 p-2">
+          <p className="text-[9px] leading-snug text-ink-dim">
+            Build a Gaussian splat straight from public elevation + imagery catalogs — no
+            on-site capture or reconstruction required. Works for any AOI on the map.
+          </p>
+          <button
+            type="button"
+            className="btn px-2 py-1 text-[11px]"
+            disabled={satSplatBusy || !aoi}
+            title={aoi ? "Fetch DEM + imagery for this AOI and build a splat" : "Draw an AOI first"}
+            onClick={() => {
+              void generateSatSplat();
+            }}
+          >
+            {satSplatBusy ? "Generating…" : "Generate Satellite Splat"}
+          </button>
+          {satSplatProduct && (
+            <p className="mt-1.5 font-mono text-[9px] leading-snug text-ink-dim">
+              {satSplatProduct.points} pts · {satSplatProduct.cols}×{satSplatProduct.rows} ·{" "}
+              {satSplatProduct.demSource}
+              {satSplatProduct.imagerySource ? ` + ${satSplatProduct.imagerySource}` : " (colormap)"}
+            </p>
+          )}
+          <p className="text-[9px] leading-snug text-[var(--color-gauge)]">
+            Authority: draft — catalog-derived, non-authoritative Live preview.
           </p>
         </div>
       </CollapsibleSection>

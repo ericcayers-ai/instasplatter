@@ -288,6 +288,17 @@ export interface DemSampleGrid {
   sourcePath?: string | null;
 }
 
+export interface SatSplatProduct {
+  path: string;
+  points: number;
+  cols: number;
+  rows: number;
+  aoiWgs84: [number, number, number, number];
+  demSource: string;
+  imagerySource?: string | null;
+  notes: string[];
+}
+
 export interface CatalogFetchOpts {
   aoiWgs84?: [number, number, number, number] | null;
   cellSizeM?: number | null;
@@ -561,6 +572,20 @@ export const api = {
       workspace,
       aoiWgs84: opts?.aoiWgs84 ?? null,
       cellSizeM: opts?.cellSizeM ?? null,
+    }),
+
+  /** Generate a Gaussian splat for any AOI from public elevation + imagery catalogs — no capture required. */
+  generateSatSplat: (
+    workspace: string,
+    aoiWgs84: [number, number, number, number],
+    opts?: { cellSizeM?: number | null; gridCols?: number | null; gridRows?: number | null },
+  ) =>
+    invoke<SatSplatProduct>("generate_sat_splat", {
+      workspace,
+      aoiWgs84,
+      cellSizeM: opts?.cellSizeM ?? null,
+      gridCols: opts?.gridCols ?? null,
+      gridRows: opts?.gridRows ?? null,
     }),
 
   getFloodEngineStatus: () => invoke<FloodEngineStatus>("get_flood_engine_status"),

@@ -465,6 +465,31 @@ fn generate_splat_dem(
     )
 }
 
+/// Generate a Gaussian splat for any WGS84 AOI directly from public
+/// elevation + imagery catalogs — no photo/video capture or prior
+/// Reconstruction required. Works anywhere USGS 3DEP or Copernicus GLO-30
+/// elevation is reachable.
+#[tauri::command]
+fn generate_sat_splat(
+    workspace: String,
+    aoi_wgs84: [f64; 4],
+    cell_size_m: Option<f64>,
+    grid_cols: Option<u32>,
+    grid_rows: Option<u32>,
+) -> Result<geospatial::sat_splat::SatSplatProduct, String> {
+    let ws = PathBuf::from(&workspace);
+    geospatial::prepare_workspace(&ws)?;
+    geospatial::sat_splat::generate_sat_splat(
+        &ws,
+        &geospatial::sat_splat::SatSplatOpts {
+            aoi_wgs84,
+            cell_size_m,
+            grid_cols,
+            grid_rows,
+        },
+    )
+}
+
 /// Import flight / survey telemetry into a project and write pose priors.
 #[tauri::command]
 fn import_geo_telemetry(
@@ -1237,6 +1262,7 @@ pub fn run() {
             prepare_geo_dem,
             sample_geo_dem,
             generate_splat_dem,
+            generate_sat_splat,
             import_geo_telemetry,
             set_geo_gcps,
             compute_geo_reference,

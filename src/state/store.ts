@@ -3,6 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type {
   CameraRegistered,
   DemProduct,
+  SatSplatProduct,
   DemSampleGrid,
   EngineStatus,
   FloodEngineStatus,
@@ -221,6 +222,9 @@ interface AppStore {
   geoOverlayPaths: Record<string, string>;
   /** Bumped when DEM bed / overlays change so map engines can refresh. */
   geoDemRevision: number;
+  /** Last "Satellite Splat" (catalog-derived, no-capture) generation result. */
+  geoSatSplatProduct: SatSplatProduct | null;
+  geoSatSplatBusy: boolean;
 
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
@@ -244,6 +248,8 @@ interface AppStore {
   stageUserGeoTiffDem: (sourcePath: string) => Promise<void>;
   /** Rasterize registered splat → proxy DEM; requires metric GeoReference. */
   generateSplatDemFromRecon: () => Promise<void>;
+  /** Generate a Gaussian splat for the current AOI from catalogs alone — no capture/registration needed. */
+  generateSatSplat: () => Promise<void>;
   /** Fetch catalog overlay (nfhl / hydrosheds / gauges / osm-waterways) into layer tree. */
   fetchGeoOverlayLayer: (layerId: string) => Promise<void>;
   startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
@@ -384,6 +390,8 @@ export const useStore = create<AppStore>((set, get) => ({
   geoDemSample: null,
   geoOverlayPaths: {},
   geoDemRevision: 0,
+  geoSatSplatProduct: null,
+  geoSatSplatBusy: false,
 
   init: async () => {
     if (initStarted) return;
@@ -891,6 +899,53 @@ export const useStore = create<AppStore>((set, get) => ({
     } catch (err) {
       set({
         geoInspectHint: String(err),
+      });
+    }
+  },
+
+  generateSatSplat: async () => {
+    const aoi = get().geoAoiWgs84;
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? get().queueItems.find((i) => i.workspace)?.workspace ?? null;
+    }
+    if (!workspace) {
+      set({ geoInspectHint: "Open a geospatial workspace before generating a Satellite Splat." });
+      return;
+    }
+    if (!aoiIsValid(aoi)) {
+      set({
+        geoInspectHint: "Draw an AOI before generating a Satellite Splat.",
+      });
+      return;
+    }
+
+    const domain = domainFromAoi(aoi!, get().geoFloodLowPower);
+    const plan = get().geoExtentPlan;
+    const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
+
+    set({ geoSatSplatBusy: true, geoInspectHint: "Generating Satellite Splat from public elevation + imagery catalogs…" });
+    try {
+      const product = await api.generateSatSplat(workspace, aoi!, {
+        cellSizeM: cell,
+        gridCols: domain.cols,
+        gridRows: domain.rows,
+      });
+      set({
+        workspace,
+        geoSatSplatProduct: product,
+        geoSatSplatBusy: false,
+        geoInspectHint: `Satellite Splat ready — ${product.points} pts from ${product.demSource}${
+          product.imagerySource ? ` + ${product.imagerySource}` : " (elevation colormap, no imagery)"
+        }.`,
+      });
+    } catch (err) {
+      set({
+        geoSatSplatBusy: false,
+        geoInspectHint: `Satellite Splat: ${String(err)}`,
       });
     }
   },
