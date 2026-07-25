@@ -7,6 +7,7 @@ import { api, type SimEvent } from "../lib/ipc";
 import {
   aoiIsValid,
   aoiPolygonGeoJson,
+  coarsenDomainDxFromPlan,
   domainFromAoi,
   networkFeaturesForAoi,
   normalizeAoi,
@@ -72,7 +73,7 @@ function buildBaseStyle(mode: GeoBasemapMode): StyleSpecification {
       {
         id: "background",
         type: "background",
-        paint: { "background-color": satellite ? "#0a1620" : "#08121D" },
+        paint: { "background-color": satellite ? "#0a1620" : "var(--color-basin, #08121D)" },
       },
       {
         id: "esri-imagery",
@@ -579,28 +580,29 @@ export default function GeoMap({ className }: GeoMapProps) {
     if (!map || !readyRef.current || !engine) return;
 
     ensureStaticSources(map, aoi);
+    let cancelCatchUp: (() => void) | undefined;
     if (aoiIsValid(aoi)) {
       (map.getSource(AOI_SRC) as maplibregl.GeoJSONSource)?.setData(aoiPolygonGeoJson(aoi));
-      const domain = domainFromAoi(aoi, lowPower);
       const plan = useStore.getState().geoExtentPlan;
-      if (plan?.previewCellM && plan.previewCellM > 0) {
-        domain.dxM = Math.max(4, plan.previewCellM);
-        domain.cols = Math.max(24, Math.round(((aoi[2] - aoi[0]) * 111320 * Math.cos((((aoi[1] + aoi[3]) / 2) * Math.PI) / 180)) / domain.dxM));
-        domain.rows = Math.max(16, Math.round(((aoi[3] - aoi[1]) * 111320) / domain.dxM));
-      }
+      const domain = coarsenDomainDxFromPlan(domainFromAoi(aoi, lowPower), plan?.previewCellM);
       engine.rebindDomain(domain, useStore.getState().geoScenario?.durationHours);
-      const art = engine.seek(useStore.getState().geoFloodTime);
-      if (canvasRef.current) ensurePreviewLayers(map, art, canvasRef.current);
-      setGeoPreview({
-        backend: art.frame.backend,
-        validation: art.frame.validation,
-        maxDepthM: art.frame.stats.maxDepthM,
-        wetFraction: art.frame.stats.wetFraction,
-        massM3: art.frame.stats.massM3,
-        maxSpeedMs: art.frame.stats.maxSpeedMs,
-        hazardClass: art.frame.stats.hazardClass,
-        cfl: art.frame.stats.cfl,
-      });
+      const pushArt = (art: PreviewRenderArtifacts) => {
+        if (canvasRef.current && mapRef.current) {
+          ensurePreviewLayers(mapRef.current, art, canvasRef.current);
+        }
+        setGeoPreview({
+          backend: art.frame.backend,
+          validation: art.frame.validation,
+          maxDepthM: art.frame.stats.maxDepthM,
+          wetFraction: art.frame.stats.wetFraction,
+          massM3: art.frame.stats.massM3,
+          maxSpeedMs: art.frame.stats.maxSpeedMs,
+          hazardClass: art.frame.stats.hazardClass,
+          cfl: art.frame.stats.cfl,
+        });
+      };
+      // Seek 0 immediately; defer any non-zero catch-up (store resets flood time on commit).
+      cancelCatchUp = engine.seekZeroThenCatchUp(() => useStore.getState().geoFloodTime, pushArt);
       fitAoi(map, aoi);
       const byId = Object.fromEntries(useStore.getState().geoLayers.map((l) => [l.id, l]));
       setLayerVis(map, FLOOD_RASTER_LAYER, !!byId.flood_depth?.visible || !!byId.flood_hazard?.visible);
@@ -622,6 +624,7 @@ export default function GeoMap({ className }: GeoMapProps) {
       setLayerVis(map, "hydrosheds-line", false);
       setGeoPreview(null);
     }
+    return () => cancelCatchUp?.();
   }, [aoi, aoiRevision, lowPower, setGeoPreview]);
 
   // DEM sample → soft-solver bed (real GeoTIFF samples when staged).
@@ -634,8 +637,8 @@ export default function GeoMap({ className }: GeoMapProps) {
       rows: demSample.rows,
       bedSource: (demSample.bedSource as "real" | "synthetic" | "proxy") || "synthetic",
     });
-    if (engine.hasBoundDomain()) {
-      const art = engine.seek(useStore.getState().geoFloodTime);
+    if (!engine.hasBoundDomain()) return;
+    const pushArt = (art: PreviewRenderArtifacts) => {
       if (mapRef.current && canvasRef.current && readyRef.current) {
         ensurePreviewLayers(mapRef.current, art, canvasRef.current);
       }
@@ -649,7 +652,8 @@ export default function GeoMap({ className }: GeoMapProps) {
         hazardClass: art.frame.stats.hazardClass,
         cfl: art.frame.stats.cfl,
       });
-    }
+    };
+    return engine.seekZeroThenCatchUp(() => useStore.getState().geoFloodTime, pushArt);
   }, [demSample, demRevision, setGeoPreview]);
 
   // Catalog overlay GeoJSON (NFHL / HydroSHEDS / gauges / OSM waterways).

@@ -506,6 +506,27 @@ async fn start_geo_placeholder(
     std::fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
     crate::geospatial::prepare_workspace(&workspace)?;
 
+    // GeoTIFF / COG inputs → copy into geo/sources so prepare_geo_dem can find them.
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(ext.as_str(), "tif" | "tiff" | "geotiff" | "cog") && input.is_file() {
+        let sources = workspace.join("geo").join("sources");
+        let _ = std::fs::create_dir_all(&sources);
+        let dest_name = input
+            .file_name()
+            .map(|n| n.to_owned())
+            .unwrap_or_else(|| std::ffi::OsString::from(format!("user_dem.{ext}")));
+        let dest = sources.join(&dest_name);
+        if let Err(e) = std::fs::copy(&input, &dest) {
+            return Err(format!(
+                "Failed to copy GeoTIFF into geo/sources: {e}"
+            ));
+        }
+    }
+
     let profile = profiler::profile();
     let resolved: ResolvedSettings = settings::resolve(&settings::Settings::load(), &profile);
     let proj = Project::new_with_suite(

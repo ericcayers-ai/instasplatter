@@ -26,6 +26,10 @@ pub fn dense_ply_path(workspace: &Path) -> PathBuf {
     preview_dir(workspace).join("dense.ply")
 }
 
+pub fn dense_ply_path_rev(workspace: &Path, rev: u32) -> PathBuf {
+    preview_dir(workspace).join(format!("dense_{rev:04}.ply"))
+}
+
 /// Binary little-endian XYZRGB PLY (viewport point layers).
 pub fn write_xyzrgb_ply(
     path: &Path,
@@ -72,11 +76,17 @@ pub fn write_xyzrgb_ply(
 /// Emit frame count + a simple sequential path preview after ingest/gating.
 pub fn emit_ingest_preview(ctx: &JobCtx, frame_count: u32) {
     // Without poses yet, lay frames along +X so the viewport shows a capture
-    // path skeleton that SfM frustums will replace.
+    // path skeleton that SfM frustums will replace. Bézier-smooth so the
+    // preview path matches the post-SfM path style.
     let spacing = 0.25f32;
-    let path: Vec<[f32; 3]> = (0..frame_count)
+    let raw: Vec<[f32; 3]> = (0..frame_count)
         .map(|i| [i as f32 * spacing, 0.0, 0.0])
         .collect();
+    let path = if raw.len() >= 3 {
+        crate::path_smooth::smooth_path_positions(&raw, 4)
+    } else {
+        raw
+    };
     ctx.emit(JobEvent::IngestPreview {
         job_id: ctx.job_id.clone(),
         frame_count,
@@ -108,6 +118,7 @@ pub fn emit_sparse_stage(ctx: &JobCtx) -> Result<(), String> {
 }
 
 /// After densify: stream dense XYZRGB (separate from Gaussian `init.ply`).
+/// Uses a revisioned filename so the viewport reloads as densifiers merge live.
 pub fn emit_dense_stage(
     ctx: &JobCtx,
     xyz: &[[f32; 3]],
@@ -116,14 +127,70 @@ pub fn emit_dense_stage(
     if xyz.is_empty() {
         return Ok(());
     }
-    let dest = dense_ply_path(&ctx.workspace);
+    // Bump revision from existing dense_*.ply count so mid-fuse updates land.
+    let rev = next_dense_rev(&ctx.workspace);
+    let dest = dense_ply_path_rev(&ctx.workspace, rev);
     let n = write_xyzrgb_ply(&dest, xyz, rgb)?;
+    // Keep a stable "latest" alias for tools / export.
+    let alias = dense_ply_path(&ctx.workspace);
+    let _ = std::fs::copy(&dest, &alias);
     ctx.emit(JobEvent::DenseCloudReady {
         job_id: ctx.job_id.clone(),
         path: dest.to_string_lossy().into_owned(),
         point_count: n as u32,
     });
-    ctx.log(format!("Dense preview: {n} points → {}", dest.display()));
+    ctx.log(format!("Dense preview (live densify #{rev}): {n} points → {}", dest.display()));
+    Ok(())
+}
+
+fn next_dense_rev(workspace: &Path) -> u32 {
+    let dir = preview_dir(workspace);
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return 1;
+    };
+    let mut max = 0u32;
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let s = name.to_string_lossy();
+        if let Some(rest) = s.strip_prefix("dense_") {
+            if let Some(num) = rest.strip_suffix(".ply") {
+                if let Ok(n) = num.parse::<u32>() {
+                    max = max.max(n);
+                }
+            }
+        }
+    }
+    max + 1
+}
+
+/// Stream a growing sparse cloud from live-tracking tracks (no COLMAP model yet).
+pub fn emit_tracks_sparse(
+    ctx: &JobCtx,
+    tracks: &[crate::sfm::Track],
+) -> Result<(), String> {
+    let mut xyz = Vec::with_capacity(tracks.len());
+    let mut rgb = Vec::with_capacity(tracks.len());
+    for t in tracks {
+        if t.obs.len() < 2 {
+            continue;
+        }
+        if !t.xyz.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        xyz.push([t.xyz[0] as f32, t.xyz[1] as f32, t.xyz[2] as f32]);
+        rgb.push(t.rgb);
+    }
+    if xyz.len() < 32 {
+        return Ok(());
+    }
+    let dest = sparse_ply_path(&ctx.workspace);
+    let n = write_xyzrgb_ply(&dest, &xyz, &rgb)?;
+    ctx.emit(JobEvent::SparseCloudReady {
+        job_id: ctx.job_id.clone(),
+        path: dest.to_string_lossy().into_owned(),
+        point_count: n as u32,
+    });
+    ctx.log(format!("Live sparse preview: {n} points → {}", dest.display()));
     Ok(())
 }
 

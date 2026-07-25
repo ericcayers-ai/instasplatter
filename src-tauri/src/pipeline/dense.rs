@@ -591,7 +591,7 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
         candidates.push((name, nx, nr, conf));
     }
 
-    if ctx.settings.sift_gpu {
+    if ctx.settings.sift_gpu && crate::engines::colmap_is_cuda() {
         match run_mvs_fused(ctx, images_dir, &model_dir, &model).await {
             Ok(Some((mx, mr))) => {
                 ctx.log(format!("COLMAP MVS: {} fused points (will fuse).", mx.len()));
@@ -602,6 +602,11 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
                 ctx.notice(format!("Dense MVS failed ({e}). Continuing with other seeds."));
             }
         }
+    } else if ctx.settings.sift_gpu && !crate::engines::colmap_is_cuda() {
+        ctx.notice(
+            "Dense MVS needs the CUDA COLMAP build. Seeding from neural/sparse clouds instead. \
+             Click Install engines on an NVIDIA PC to download the CUDA COLMAP archive.",
+        );
     } else if candidates.is_empty() && clouds.is_empty() {
         ctx.notice(
             "Dense MVS needs a CUDA COLMAP build. Seeding from neural/sparse clouds instead.",

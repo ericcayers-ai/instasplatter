@@ -1,8 +1,10 @@
 mod colmap;
+mod capture_selection;
 mod engines;
 mod geospatial;
 mod math;
 mod mesh;
+mod path_smooth;
 mod pipeline;
 mod profiler;
 mod project;
@@ -28,6 +30,13 @@ struct AppState {
 }
 
 static PROFILE: OnceLock<HardwareProfile> = OnceLock::new();
+
+/// Sidecar directory inside the Tauri resource bundle (set once during setup).
+static BUNDLED_SIDECARS_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub(crate) fn bundled_sidecars_path(name: &str) -> Option<PathBuf> {
+    BUNDLED_SIDECARS_DIR.get().map(|d| d.join(name))
+}
 
 fn cached_profile() -> &'static HardwareProfile {
     PROFILE.get_or_init(profiler::profile)
@@ -92,6 +101,11 @@ fn get_engine_status() -> engines::EngineStatus {
 async fn install_engines(app: tauri::AppHandle) -> Result<engines::EngineStatus, String> {
     let has_cuda = cached_profile().has_cuda;
     engines::ensure_engines(app, has_cuda).await
+}
+
+#[tauri::command]
+fn stage_image_selection(paths: Vec<String>) -> Result<String, String> {
+    capture_selection::stage(&paths).map(|path| path.to_string_lossy().into_owned())
 }
 
 /// Register a job with the app state and drive it to completion on the async
@@ -221,6 +235,12 @@ async fn resume_project(
 ) -> Result<String, String> {
     let ws = PathBuf::from(&workspace);
     let proj = Project::load(&ws)?;
+    if proj.completed {
+        return Err(
+            "This project is already complete — open it from Recent to view the splat (resume is only for interrupted runs)."
+                .into(),
+        );
+    }
     if !proj.is_resumable() {
         return Err("This project cannot be resumed.".into());
     }
@@ -423,6 +443,26 @@ fn sample_geo_dem(
     let ws = PathBuf::from(&workspace);
     geospatial::prepare_workspace(&ws)?;
     geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)
+}
+
+/// Rasterize a registered reconstruction splat → proxy DEM GeoTIFF → stage as flood DTM.
+///
+/// Requires metric GeoReference + latest splat. Bed is labelled non-authoritative (`proxy`).
+#[tauri::command]
+fn generate_splat_dem(
+    workspace: String,
+    aoi_wgs84: Option<[f64; 4]>,
+    cell_size_m: Option<f64>,
+) -> Result<geospatial::dem::DemProduct, String> {
+    let ws = PathBuf::from(&workspace);
+    geospatial::prepare_workspace(&ws)?;
+    geospatial::splat_dem::generate_splat_dem(
+        &ws,
+        &geospatial::splat_dem::SplatDemOpts {
+            aoi_wgs84,
+            cell_size_m,
+        },
+    )
 }
 
 /// Import flight / survey telemetry into a project and write pose priors.
@@ -730,6 +770,24 @@ fn parse_path_list(body: &str) -> Vec<String> {
 #[tauri::command]
 fn get_autostart() -> Option<String> {
     None
+}
+
+/// Dev-only: consume `open_workspace.txt` so agents can reopen a finished job
+/// without fighting WebView click coordinates.
+#[tauri::command]
+fn take_open_workspace() -> Option<String> {
+    if !dev_mode() {
+        return None;
+    }
+    let marker = settings::app_data_dir().join("open_workspace.txt");
+    let body = std::fs::read_to_string(&marker).ok()?;
+    let _ = std::fs::remove_file(&marker);
+    let v = body.trim().to_string();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 /// Start enqueued smoke / batch inputs from Rust so runs do not depend on the
@@ -1139,7 +1197,14 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let state = app.state::<AppState>().inner().clone();
-            // Defer one tick so plugins / window are live before GPU jobs start.
+            let resource_sidecars = app
+                .path()
+                .resource_dir()
+                .map(|d| d.join("sidecars"))
+                .unwrap_or_default();
+            if !resource_sidecars.as_os_str().is_empty() {
+                let _ = BUNDLED_SIDECARS_DIR.set(resource_sidecars);
+            }
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                 maybe_start_dev_batch(&handle, &state);
@@ -1153,7 +1218,9 @@ pub fn run() {
             get_resolved_settings,
             get_engine_status,
             install_engines,
+            stage_image_selection,
             get_autostart,
+            take_open_workspace,
             start_job,
             cancel_job,
             enqueue_jobs,
@@ -1169,6 +1236,7 @@ pub fn run() {
             fetch_geo_catalog_asset,
             prepare_geo_dem,
             sample_geo_dem,
+            generate_splat_dem,
             import_geo_telemetry,
             set_geo_gcps,
             compute_geo_reference,

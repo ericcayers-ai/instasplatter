@@ -1,0 +1,15 @@
+InstaSplatter
+
+Copyright 2026 Eric Ayers
+
+This product includes software developed at:
+
+- ArthurBrussee/brush (Apache-2.0)
+- colmap/colmap (BSD-3-Clause)
+- CesiumGS/cesium (Apache-2.0)
+- maplibre/maplibre-gl-js (BSD-3-Clause)
+- pmndrs/zustand (MIT)
+- facebook/react (MIT)
+- tauri-apps/tauri (Apache-2.0 / MIT)
+- tailwindlabs/tailwindcss (MIT)
+- vitejs/vite (MIT)

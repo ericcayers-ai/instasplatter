@@ -18,6 +18,19 @@ export {
   getLocalDemTerrainUrl,
   setLocalDemTerrainUrl,
   subscribeLocalDemTerrainUrl,
+  subscribeDemTerrain,
+  getDemHeightmap,
+  setDemHeightmap,
+  createDemHeightmapTerrainProvider,
   resolveGlobeTerrain,
 } from "./terrain";
+export type { DemHeightmapGrid, GlobeTerrainResult } from "./terrain";
 export { createGlobeImageryProvider, globeImageryAttribution } from "./imagery";
+export {
+  applyFloodOverlay,
+  clearFloodOverlay,
+  applyDemReliefOverlay,
+  clearDemReliefOverlay,
+  rasterizeDemRelief,
+  scheduleIdleWork,
+} from "./floodOverlay";

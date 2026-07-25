@@ -1,7 +1,8 @@
 node_modules
 dist
 src-tauri/target
-src-tauri/gen/schemas
+src-tauri/gen/
+src-tauri/icons
 *.local
 .DS_Store
 target/
@@ -15,6 +16,63 @@ tools/brush-fork/src/
 __pycache__/
 *.pyc
 
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Stray installer outputs
+InstaSplatter*.exe
+InstaSplatter*.msi
+*.appinstaller
+
+# Logs and coverage
+*.log
+coverage/
+*.lcov
+.nyc_output/
+
+# Playwright
+playwright-report/
+test-results/
+playwright/.cache/
+
+# Temp files
+tmp/
+cache/
+.cache/
+*~
+*.swp
+*.swo
+Thumbs.db
+desktop.ini
+
+# Vite
+.vite/
+
+# Cursor/Claude skill noise
+.claude/
+.agents/skills/accessibility/
+.agents/skills/bash-defensive-patterns/
+.agents/skills/composition-patterns/
+.agents/skills/frontend-design/
+.agents/skills/nodejs-backend-patterns/
+.agents/skills/nodejs-best-practices/
+.agents/skills/react-best-practices/
+.agents/skills/seo/
+.agents/skills/tailwind-css-patterns/
+.agents/skills/tauri-v2/
+.agents/skills/typescript-advanced-types/
+.agents/skills/vite/
 
 # impeccable-ignore-start
 # Ephemeral output, runtime state, and per-dev overrides.

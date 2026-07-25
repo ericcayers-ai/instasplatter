@@ -18,9 +18,11 @@ import {
   mat4Mul,
   orbitBasis,
   orbitBy,
+  orbitFromEyeTarget,
   panBy,
   projectionMatrix,
   rotationBetween,
+  sampleFlythrough,
   trsModelMatrix,
   viewMatrix,
   zoomAtCursor,
@@ -283,9 +285,14 @@ export class SplatRenderer {
   private lerpStart = 0;
   private lerpDurationMs = 2200;
   private lerpPending = false;
+  /** Smoothed world-space samples for path flythrough (auto-orbit). */
+  private flyPath: Vec3[] = [];
+  private flyT = 0;
 
   public camera: CameraState = defaultCamera();
   public autoOrbit = false;
+  /** When auto-orbiting with a camera path, follow it instead of yaw-spin. */
+  public pathFollow = true;
   public showFrustums = true;
   public showCameraPath = true;
   public showSparse = true;
@@ -560,9 +567,11 @@ export class SplatRenderer {
     return this.frustums.length;
   }
 
-  /** Ingest / camera-path polyline in world space. */
+  /** Ingest / camera-path polyline in world space (already smoothed by caller). */
   setCameraPath(points: Vec3[]) {
     const gl = this.gl;
+    this.flyPath = points.length >= 2 ? points.slice() : [];
+    this.flyT = 0;
     if (points.length < 2) {
       this.pathVertexCount = 0;
       return;
@@ -590,6 +599,8 @@ export class SplatRenderer {
 
   clearCameraPath() {
     this.pathVertexCount = 0;
+    this.flyPath = [];
+    this.flyT = 0;
   }
 
   setPointCloud(layer: PointLayerId, positions: Float32Array, colors: Float32Array, count: number) {
@@ -812,6 +823,7 @@ export class SplatRenderer {
       }
     }
 
+    const prevFrameTime = this.lastFrameTime;
     if (this.lastFrameTime > 0) {
       this.fpsAccum += now - this.lastFrameTime;
       this.fpsFrames++;
@@ -842,7 +854,17 @@ export class SplatRenderer {
       }
     }
 
-    if (this.autoOrbit) this.camera.yaw += 0.002;
+    if (this.autoOrbit) {
+      if (this.pathFollow && this.flyPath.length >= 2) {
+        const dt = prevFrameTime > 0 ? Math.min(0.05, (now - prevFrameTime) / 1000) : 0.016;
+        // ~40s for a full loop on a typical capture path.
+        this.flyT = (this.flyT + dt / 40) % 1;
+        const { eye, target } = sampleFlythrough(this.flyPath, this.flyT);
+        orbitFromEyeTarget(this.camera, eye, target);
+      } else {
+        this.camera.yaw += 0.002;
+      }
+    }
 
     const proj =
       shared?.proj ??

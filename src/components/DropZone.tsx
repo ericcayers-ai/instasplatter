@@ -1,21 +1,18 @@
 import { useEffect, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useStore } from "../state/store";
 import BatchQueue from "./BatchQueue";
-
-const VIDEO_EXTS = ["mp4", "mov", "avi", "mkv", "webm", "m4v", "mts", "3gp"];
+import { useCaptureStart } from "./CaptureStart";
 
 export default function DropZone() {
   const [hover, setHover] = useState(false);
-  const startJob = useStore((s) => s.startJob);
-  const enqueueJobs = useStore((s) => s.enqueueJobs);
   const profile = useStore((s) => s.profile);
   const resolved = useStore((s) => s.resolved);
   const queueItems = useStore((s) => s.queueItems);
   const projects = useStore((s) => s.recentProjects);
   const resumeProject = useStore((s) => s.resumeProject);
   const setLeftPanelOpen = useStore((s) => s.setLeftPanelOpen);
+  const capture = useCaptureStart();
 
   useEffect(() => {
     const un = getCurrentWebview().onDragDropEvent((event) => {
@@ -23,30 +20,13 @@ export default function DropZone() {
       else if (event.payload.type === "drop") {
         setHover(false);
         const paths = event.payload.paths ?? [];
-        if (paths.length > 1) void enqueueJobs(paths);
-        else if (paths[0]) void startJob(paths[0]);
+        void capture.launch(paths);
       } else setHover(false);
     });
     return () => {
       un.then((f) => f());
     };
-  }, [startJob, enqueueJobs]);
-
-  const browse = async (dir: boolean, multiple: boolean) => {
-    const sel = await open(
-      dir
-        ? { directory: true, multiple, title: multiple ? "Choose image folders" : "Choose an image folder" }
-        : {
-            title: multiple ? "Choose videos" : "Choose a video",
-            multiple,
-            filters: [{ name: "Video", extensions: VIDEO_EXTS }],
-          },
-    );
-    if (!sel) return;
-    const paths = Array.isArray(sel) ? sel : [sel];
-    if (paths.length > 1) void enqueueJobs(paths);
-    else if (paths[0]) void startJob(paths[0]);
-  };
+  }, [capture]);
 
   const vram = profile ? Math.round(profile.vram_mb / 1024) : 0;
   const recent = projects.slice(0, 4);
@@ -71,7 +51,7 @@ export default function DropZone() {
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            void browse(false, false);
+            void capture.chooseVideos(false);
           }
         }}
         className="drop-plane float-in float-in-delay-1 flex flex-col items-center gap-5 px-8 py-12 md:px-12 md:py-14"
@@ -83,19 +63,20 @@ export default function DropZone() {
           <div className="mt-1 text-xs text-ink-dim">MP4 · MOV · MKV · JPG / PNG folders · batch OK</div>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
-          <button type="button" onClick={() => void browse(false, false)} className="btn btn-primary">
+          <button type="button" onClick={() => void capture.chooseVideos(false)} className="btn btn-primary">
             Choose video
           </button>
-          <button type="button" onClick={() => void browse(true, false)} className="btn">
-            Choose folder
+          <button type="button" onClick={() => void capture.chooseImages()} className="btn">
+            Choose images
           </button>
-          <button type="button" onClick={() => void browse(false, true)} className="btn btn-ghost">
+          <button type="button" onClick={() => void capture.chooseFolder()} className="btn btn-ghost">
+            Image folder
+          </button>
+          <button type="button" onClick={() => void capture.chooseVideos(true)} className="btn btn-ghost">
             Batch videos
           </button>
-          <button type="button" onClick={() => void browse(true, true)} className="btn btn-ghost">
-            Batch folders
-          </button>
         </div>
+        {capture.error && <div role="alert" className="max-w-sm text-center text-[11px] text-danger">{capture.error}</div>}
       </div>
 
       {profile && (
@@ -124,10 +105,10 @@ export default function DropZone() {
             <h2 className="text-[10px] font-semibold uppercase tracking-wider text-ink-dim">Recent</h2>
             <button
               type="button"
-              className="btn btn-ghost px-1.5 py-0.5 text-[10px]"
+              className="btn btn-ghost-teal px-1.5 py-0.5 text-[10px]"
               onClick={() => setLeftPanelOpen(true)}
             >
-              Open panel
+              Open CAPTURE
             </button>
           </div>
           <ul className="flex flex-col gap-1">
@@ -160,6 +141,7 @@ export default function DropZone() {
           <BatchQueue />
         </div>
       )}
+      {capture.dialog}
     </div>
   );
 }

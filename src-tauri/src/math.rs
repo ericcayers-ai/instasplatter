@@ -478,7 +478,6 @@ pub fn rodrigues(w: V3) -> M3 {
 }
 
 /// Inverse of `rodrigues`: rotation matrix to rotation vector.
-#[cfg(test)]
 pub fn rodrigues_inv(m: M3) -> V3 {
     let trace = m[0][0] + m[1][1] + m[2][2];
     let cos_t = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0);

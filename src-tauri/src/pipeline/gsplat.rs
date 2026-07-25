@@ -38,23 +38,43 @@ struct Request<'a> {
 }
 
 fn launcher() -> PathBuf {
-    let dir = app_data_dir().join("engines").join("sidecars").join("gsplat-train");
-    #[cfg(windows)]
-    {
-        let bat = dir.join("run.bat");
-        if bat.exists() {
-            return bat;
+    let user_dir = app_data_dir().join("engines").join("sidecars").join("gsplat-train");
+    let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tools")
+        .join("sidecars")
+        .join("gsplat-train");
+    let bundled_dir = crate::bundled_sidecars_path("gsplat-train");
+
+    for dir in [Some(&user_dir), bundled_dir.as_ref(), Some(&dev_dir)] {
+        let Some(dir) = dir else { continue; };
+        #[cfg(windows)]
+        {
+            let bat = dir.join("run.bat");
+            if bat.exists() {
+                return bat;
+            }
+        }
+        let py = dir.join("run.py");
+        if py.exists() {
+            return py;
         }
     }
-    let py = dir.join("run.py");
-    if py.exists() {
-        return py;
-    }
-    dir.join("run")
+    user_dir.join("run")
 }
 
 pub fn is_installed() -> bool {
-    launcher().exists()
+    // Only the user-installed engines dir counts as "installed" for routing
+    // decisions. The dev path and bundled resources are launch fallbacks, not
+    // an installation status, so tests and CI resolve to "brush" correctly.
+    let user_dir = app_data_dir().join("engines").join("sidecars").join("gsplat-train");
+    #[cfg(windows)]
+    {
+        if user_dir.join("run.bat").exists() {
+            return true;
+        }
+    }
+    user_dir.join("run.py").exists()
 }
 
 /// Ensure COLMAP text files exist so the mini trainer can load poses.

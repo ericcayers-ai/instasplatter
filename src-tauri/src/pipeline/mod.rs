@@ -338,6 +338,31 @@ async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
 pub async fn run_job(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
     let started = std::time::Instant::now();
 
+    // Honest GPU path summary so CUDA vs portable is never cryptic mid-run.
+    let cuda_hw = crate::profiler::cuda_driver_available();
+    let colmap_cuda = crate::engines::colmap_is_cuda();
+    if cuda_hw && colmap_cuda {
+        ctx.notice(
+            "CUDA GPU detected — using CUDA COLMAP for features/MVS when enabled. \
+             Trainer: gsplat if installed, otherwise Brush (Vulkan/DX12).",
+        );
+    } else if cuda_hw && !colmap_cuda {
+        ctx.notice(
+            "CUDA GPU detected, but COLMAP is the CPU build. Click Install engines to \
+             upgrade to CUDA COLMAP. Continuing with CPU features + Brush/wgpu.",
+        );
+    } else {
+        ctx.notice(
+            "No CUDA GPU (nvidia-smi). Using portable path: CPU COLMAP features + Brush on Vulkan/Metal/DX12.",
+        );
+    }
+    if ctx.settings.trainer == "gsplat" && !crate::pipeline::gsplat::is_installed() {
+        ctx.notice(
+            "gsplat trainer selected but not installed — falling back to Brush. \
+             See tools/sidecars/gsplat-train/README.md.",
+        );
+    }
+
     ctx.stage_started("ingest", "Reading input");
     let images_dir = ingest::ingest(ctx, input).await?;
     ctx.check_cancel()?;

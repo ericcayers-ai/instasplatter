@@ -65,6 +65,7 @@ export function aoiToEnuBox(aoi: AoiWgs84): {
 /**
  * Soft-solver domain from an AOI. Cell size follows extent length so worldwide
  * sites are not locked to the Wellington demo grid.
+ * Grid is always capped (≤192×144) — never expand cols/rows from planner cell size.
  */
 export function domainFromAoi(aoi: AoiWgs84, lowPower = false): PreviewDomain {
   const bounds = normalizeAoi(aoi);
@@ -81,6 +82,18 @@ export function domainFromAoi(aoi: AoiWgs84, lowPower = false): PreviewDomain {
     rows,
     coarseFactor: 2,
   };
+}
+
+/**
+ * Apply extent-plan preview cell size by coarsening `dxM` only.
+ * Does not recompute cols/rows (avoids uncapped soft-preview grids).
+ */
+export function coarsenDomainDxFromPlan(
+  domain: PreviewDomain,
+  previewCellM: number | null | undefined,
+): PreviewDomain {
+  if (!previewCellM || !(previewCellM > 0)) return domain;
+  return { ...domain, dxM: Math.max(domain.dxM, previewCellM) };
 }
 
 export function aoiPolygonGeoJson(aoi: AoiWgs84): GeoJSON.FeatureCollection {

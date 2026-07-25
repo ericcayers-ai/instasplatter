@@ -125,25 +125,57 @@ export function buildBedFromDemSamples(
   return { z, fromDem: true };
 }
 
+/** Soft-preview grid hard caps — prevents main-thread freeze after AOI commit. */
+export const MAX_PREVIEW_COLS = 192;
+export const MAX_PREVIEW_ROWS = 144;
+export const MAX_PREVIEW_CELLS = MAX_PREVIEW_COLS * MAX_PREVIEW_ROWS;
+
+function clampPreviewGrid(cols: number, rows: number): { cols: number; rows: number } {
+  let c = Math.max(24, Math.min(MAX_PREVIEW_COLS, Math.round(cols)));
+  let r = Math.max(16, Math.min(MAX_PREVIEW_ROWS, Math.round(rows)));
+  const n = c * r;
+  if (n > MAX_PREVIEW_CELLS) {
+    const scale = Math.sqrt(MAX_PREVIEW_CELLS / n);
+    c = Math.max(24, Math.min(MAX_PREVIEW_COLS, Math.floor(c * scale)));
+    r = Math.max(16, Math.min(MAX_PREVIEW_ROWS, Math.floor(r * scale)));
+  }
+  return { cols: c, rows: r };
+}
+
 export function resolveDomain(partial?: Partial<PreviewDomain>, lowPower = false): PreviewDomain {
   // Prefer caller-supplied bounds/grid; DEFAULT_DOMAIN is only the cold-start fallback.
+  // Always hard-clamp so callers cannot rebuild uncapped soft-preview domains.
+  const clamped = clampPreviewGrid(
+    partial?.cols ?? DEFAULT_DOMAIN.cols,
+    partial?.rows ?? DEFAULT_DOMAIN.rows,
+  );
   const base: PreviewDomain = {
     bounds: partial?.bounds ?? DEFAULT_DOMAIN.bounds,
-    dxM: partial?.dxM ?? DEFAULT_DOMAIN.dxM,
-    cols: partial?.cols ?? DEFAULT_DOMAIN.cols,
-    rows: partial?.rows ?? DEFAULT_DOMAIN.rows,
+    dxM: Math.max(4, partial?.dxM ?? DEFAULT_DOMAIN.dxM),
+    cols: clamped.cols,
+    rows: clamped.rows,
     coarseFactor: partial?.coarseFactor ?? DEFAULT_DOMAIN.coarseFactor,
   };
   if (lowPower) {
+    const lp = clampPreviewGrid(Math.round(base.cols / 2), Math.round(base.rows / 2));
     return {
       ...base,
-      cols: Math.max(32, Math.round(base.cols / 2)),
-      rows: Math.max(24, Math.round(base.rows / 2)),
+      cols: lp.cols,
+      rows: lp.rows,
       dxM: base.dxM * 2,
       coarseFactor: Math.max(2, base.coarseFactor),
     };
   }
   return base;
+}
+
+/** Smoke: oversized partial domains are clamped to the preview budget. */
+export function resolveDomainSmokeOk(): boolean {
+  const huge = resolveDomain({ cols: 4000, rows: 3000, dxM: 2, bounds: DEFAULT_DOMAIN.bounds });
+  if (huge.cols > MAX_PREVIEW_COLS || huge.rows > MAX_PREVIEW_ROWS) return false;
+  if (huge.cols * huge.rows > MAX_PREVIEW_CELLS) return false;
+  const ok = resolveDomain(DEFAULT_DOMAIN);
+  return ok.cols <= MAX_PREVIEW_COLS && ok.rows <= MAX_PREVIEW_ROWS;
 }
 
 /** Linear-blend display frames between two physics states. */
@@ -283,7 +315,6 @@ export function softStep(
       const ir = i < cols - 1 ? i + 1 : i;
       const jd = j > 0 ? j - 1 : j;
       const ju = j < rows - 1 ? j + 1 : j;
-      const eta = z[k] + depth;
       const etaL = z[j * cols + il] + h[j * cols + il];
       const etaR = z[j * cols + ir] + h[j * cols + ir];
       const etaD = z[jd * cols + i] + h[jd * cols + i];

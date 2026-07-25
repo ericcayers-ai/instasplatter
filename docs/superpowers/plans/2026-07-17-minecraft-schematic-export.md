@@ -41,38 +41,38 @@
 - Create: `src-tauri/src/splat/schematic.rs`
 - Modify: `src-tauri/src/splat/mod.rs`, `src-tauri/Cargo.toml`
 
-- [ ] Add `fastnbt` dependency
-- [ ] Write failing tests: varint, palette nearest, synthetic cloud → file round-trip structure
-- [ ] Implement `SchematicOptions`, `voxelize_cloud`, `write_schem`, concrete palette
-- [ ] `cargo test schematic::` green
-- [ ] Commit
+- [x] Add `fastnbt` dependency
+- [x] Write failing tests: varint, palette nearest, synthetic cloud → file round-trip structure
+- [x] Implement `SchematicOptions`, `voxelize_cloud`, `write_schem`, concrete palette
+- [x] `cargo test schematic::` green
+- [x] Commit
 
 ### Task 2: IPC + Experimental gate
 
 **Files:**
 - Modify: `src-tauri/src/lib.rs`
 
-- [ ] Command `export_minecraft_schematic` requiring experimental mode
-- [ ] Reuse splat rotation bake from project / argument
-- [ ] Register in invoke handler
-- [ ] Commit
+- [x] Command `export_minecraft_schematic` requiring experimental mode
+- [x] Reuse splat rotation bake from project / argument
+- [x] Register in invoke handler
+- [x] Commit
 
 ### Task 3: Frontend Experimental export action
 
 **Files:**
 - Modify: `src/lib/ipc.ts`, `src/state/store.ts`, `src/components/shell/TitleBar.tsx`, `AboutPanel.tsx`
 
-- [ ] API + store action with `.schem` save dialog
-- [ ] Button only when `resolved.experimentalMode && resultPath`
-- [ ] `npx tsc --noEmit` green
-- [ ] Commit
+- [x] API + store action with `.schem` save dialog
+- [x] Button only when `resolved.experimentalMode && resultPath`
+- [x] `npx tsc --noEmit` green
+- [x] Commit
 
 ### Task 4: Docs + v0.9.1 release
 
 **Files:**
 - Modify: README, RESEARCH-STACK, RELEASE.md, version fields
 
-- [ ] Document experimental schematic export
-- [ ] Bump to 0.9.1
-- [ ] Full `cargo test` + `tsc`
-- [ ] Push branch, open PR, tag release after merge path
+- [x] Document experimental schematic export
+- [x] Bump to 0.9.1
+- [x] Full `cargo test` + `tsc`
+- [x] Push branch, open PR, tag release after merge path

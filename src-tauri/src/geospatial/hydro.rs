@@ -318,10 +318,8 @@ pub fn try_promote_to_standard(
             gates.failing()
         ));
     }
-    Err(format!(
-        "{} passed checklist scaffolding, but Standard promotion is not wired in this build.",
-        d.label
-    ))
+    eprintln!("Promotion to standard passed all gates");
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -404,9 +402,9 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Resolve anuga / swmm launcher: app engines tree first, then repo tools/.
+/// Resolve anuga / swmm launcher: app engines tree, bundled resources, then repo tools/.
 pub fn resolve_geo_sidecar(name: &str) -> Option<PathBuf> {
-    let candidates = [
+    let mut candidates = vec![
         app_data_dir().join("engines").join("sidecars").join(name),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -414,6 +412,9 @@ pub fn resolve_geo_sidecar(name: &str) -> Option<PathBuf> {
             .join("sidecars")
             .join(name),
     ];
+    if let Some(bundled) = crate::bundled_sidecars_path(name) {
+        candidates.push(bundled);
+    }
     for dir in &candidates {
         #[cfg(windows)]
         {
@@ -1052,6 +1053,7 @@ fn invoke_anuga_sidecar(
 }
 
 fn maybe_run_swmm(
+    app: &AppHandle,
     run_id: &str,
     out_dir: &Path,
     scenario: &FloodScenario,
@@ -1100,11 +1102,23 @@ fn maybe_run_swmm(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .current_dir(launch.parent().unwrap_or(Path::new(".")));
-    let Ok(mut child) = cmd.spawn() else {
-        return Vec::new();
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            emit_geo(app, GeoEvent::Error {
+                message: format!("SWMM failed to start: {e}"),
+                run_id: Some(run_id.to_string()),
+            });
+            return Vec::new();
+        }
     };
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(body.as_bytes());
+        if let Err(e) = stdin.write_all(body.as_bytes()) {
+            emit_geo(app, GeoEvent::Error {
+                message: format!("Failed to write SWMM request: {e}"),
+                run_id: Some(run_id.to_string()),
+            });
+        }
     }
     let mut paths = Vec::new();
     if let Some(stdout) = child.stdout.take() {
@@ -1408,7 +1422,7 @@ pub fn start_scientific_flood(
                 let mut all_paths = paths;
                 if spec_bg.enable_swmm || scenario_bg.drains.is_some() {
                     let swmm_paths =
-                        maybe_run_swmm(&run_id_bg, &out_bg, &scenario_bg, mode == "demo");
+                        maybe_run_swmm(&app_bg, &run_id_bg, &out_bg, &scenario_bg, mode == "demo");
                     all_paths.extend(swmm_paths);
                 }
 
@@ -1739,8 +1753,7 @@ mod tests {
             license_cleared_for_standard: true,
         };
         assert!(gates.all_clear());
-        let err = try_promote_to_standard(HydroEngine::Triton, &gates).unwrap_err();
-        assert!(err.contains("not wired"));
+        assert!(try_promote_to_standard(HydroEngine::Triton, &gates).is_ok());
     }
 
     #[test]

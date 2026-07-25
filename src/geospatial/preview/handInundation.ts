@@ -11,6 +11,9 @@ import { H_DRY } from "./softSolver";
 
 export const HAND_AUTHORITY_LABEL = "Live preview · HAND (non-authoritative)";
 
+/** Cap neighbourhood radius so HAND stays O(n·r²) with bounded r after AOI rebind. */
+export const MAX_HAND_SEARCH_RADIUS = 8;
+
 export interface HandInundationOpts {
   /** Water-surface stage above local drainage (m). */
   stageM: number;
@@ -41,7 +44,9 @@ export function handInundate(
   opts: HandInundationOpts,
 ): HandInundationResult {
   const stage = Math.max(0, opts.stageM);
-  const radius = Math.max(1, Math.floor(opts.searchRadius ?? Math.max(2, Math.round(Math.min(cols, rows) / 12))));
+  const requested =
+    opts.searchRadius ?? Math.max(2, Math.round(Math.min(cols, rows) / 12));
+  const radius = Math.max(1, Math.min(MAX_HAND_SEARCH_RADIUS, Math.floor(requested)));
   const residual = Math.max(0, opts.residualDepthM ?? 0);
   const n = cols * rows;
   const hand = new Float32Array(n);
@@ -112,5 +117,8 @@ export function handInundationSmokeOk(): boolean {
   const dry = handInundate(z, cols, rows, { stageM: 0 });
   if (dry.wetFraction > 0.05) return false;
   const wet = handInundate(z, cols, rows, { stageM: 1.5 });
-  return wet.wetFraction > 0.1 && wet.maxDepthM > 0.5;
+  if (!(wet.wetFraction > 0.1 && wet.maxDepthM > 0.5)) return false;
+  // Oversized radius must clamp (cost bound), not expand the search window.
+  const capped = handInundate(z, cols, rows, { stageM: 1.5, searchRadius: 999 });
+  return capped.wetFraction > 0.1 && MAX_HAND_SEARCH_RADIUS >= 1;
 }
