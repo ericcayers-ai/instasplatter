@@ -63,19 +63,44 @@ export default function DropZone() {
           <div className="mt-1 text-xs text-ink-dim">MP4 · MOV · MKV · JPG / PNG folders · batch OK</div>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
-          <button type="button" onClick={() => void capture.chooseVideos(false)} className="btn btn-primary">
+          <button
+            type="button"
+            onClick={() => void capture.chooseVideos(false)}
+            className="btn btn-primary"
+            disabled={capture.busy}
+          >
             Choose video
           </button>
-          <button type="button" onClick={() => void capture.chooseImages()} className="btn">
+          <button
+            type="button"
+            onClick={() => void capture.chooseImages()}
+            className="btn"
+            disabled={capture.busy}
+          >
             Choose images
           </button>
-          <button type="button" onClick={() => void capture.chooseFolder()} className="btn btn-ghost">
+          <button
+            type="button"
+            onClick={() => void capture.chooseFolder()}
+            className="btn btn-ghost"
+            disabled={capture.busy}
+          >
             Image folder
           </button>
-          <button type="button" onClick={() => void capture.chooseVideos(true)} className="btn btn-ghost">
+          <button
+            type="button"
+            onClick={() => void capture.chooseVideos(true)}
+            className="btn btn-ghost"
+            disabled={capture.busy}
+          >
             Batch videos
           </button>
         </div>
+        {capture.busy && (
+          <div className="text-center text-[11px] text-ink-dim" aria-live="polite">
+            Adding files…
+          </div>
+        )}
         {capture.error && <div role="alert" className="max-w-sm text-center text-[11px] text-danger">{capture.error}</div>}
       </div>
 

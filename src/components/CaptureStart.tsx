@@ -24,6 +24,7 @@ export function useCaptureStart() {
   const profile = useStore((state) => state.profile);
   const [pending, setPending] = useState<PendingVideo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const launch = async (rawPaths: string[]) => {
     setError(null);
@@ -37,6 +38,11 @@ export function useCaptureStart() {
         return;
       }
       if (selection.kind === "images") {
+        // stageImageSelection copies every file synchronously on the backend
+        // before returning — for a large batch this can take a while with no
+        // events fired, so surface a busy state instead of leaving the drop
+        // zone looking unresponsive.
+        setBusy(true);
         const stagedDirectory = await api.stageImageSelection(selection.paths);
         await startJob(stagedDirectory);
         return;
@@ -48,6 +54,8 @@ export function useCaptureStart() {
       setError("Choose videos, image files, or one image folder—not a mixed selection.");
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -175,5 +183,6 @@ export function useCaptureStart() {
     launch,
     dialog,
     error,
+    busy,
   };
 }

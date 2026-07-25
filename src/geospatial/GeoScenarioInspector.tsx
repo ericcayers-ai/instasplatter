@@ -370,7 +370,7 @@ export default function GeoScenarioInspector() {
             title={aoi ? "Start scientific flood on the committed AOI" : "Draw an AOI first"}
             onClick={() => void startScientificFlood({ allowDemo: true })}
           >
-            {running ? "Running…" : "Start flood"}
+            {running ? "Running…" : scientific?.state === "failed" ? "Retry flood" : "Start flood"}
           </button>
           <button
             type="button"
@@ -401,13 +401,23 @@ export default function GeoScenarioInspector() {
           <div className="space-y-1 pb-2 text-[11px]">
             <div className="flex justify-between gap-2">
               <span className="text-ink-dim">State</span>
-              <span className="tabular-nums">{scientific.state}</span>
+              <span
+                className={`tabular-nums ${scientific.state === "failed" ? "text-[var(--color-danger,#e05a4e)]" : ""}`}
+              >
+                {scientific.state}
+              </span>
             </div>
             <div className="flex justify-between gap-2">
               <span className="text-ink-dim">Progress</span>
               <span className="tabular-nums">{Math.round(scientific.progress * 100)}%</span>
             </div>
-            <p className="text-[10px] leading-snug text-ink-dim">{scientific.detail}</p>
+            <p
+              className={`text-[10px] leading-snug ${scientific.state === "failed" ? "text-[var(--color-danger,#e05a4e)]" : "text-ink-dim"}`}
+            >
+              {scientific.state === "failed" && !scientific.detail
+                ? "Flood run failed. Try again or check engine status above."
+                : scientific.detail}
+            </p>
             {scientific.massBalance != null && (
               <div className="flex justify-between gap-2">
                 <span className="text-ink-dim">Mass bal.</span>
