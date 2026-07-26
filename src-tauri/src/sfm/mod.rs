@@ -30,7 +30,7 @@ pub mod geometry;
 pub mod matcher;
 
 use crate::colmap::{m3_to_quat, Camera, CameraModel, Image, Model, Point3D};
-use crate::math::{m3_mul_v, m3_transpose, sub, V3};
+use crate::math::{m3_mul, m3_mul_v, m3_transpose, norm, rodrigues_inv, sub, V3};
 use crate::pipeline::{JobCtx, JobEvent};
 use ba::{bundle_adjust, BaOptions, Observation};
 use features::{DetectOptions, Frame, Thumb};
@@ -54,34 +54,46 @@ const THUMB_MAX_DIM: u32 = 256;
 const RANSAC_PX: f64 = 2.5;
 
 /// Frames considered as the second half of the seed pair.
-const SEED_SPAN: usize = 30;
+const SEED_SPAN: usize = 48;
+
+/// Opening frames tried as the first half of the seed pair.
+const SEED_REF_CANDIDATES: usize = 6;
 
 /// A seed pair needs this many surviving correspondences,
-const MIN_SEED_INLIERS: usize = 60;
+const MIN_SEED_INLIERS: usize = 50;
 
 /// this much median motion between the two images,
-const MIN_SEED_DISPLACEMENT_PX: f32 = 4.0;
+const MIN_SEED_DISPLACEMENT_PX: f32 = 3.5;
 
 /// and this much median parallax, or its depths would be guesswork.
-const MIN_SEED_PARALLAX: f64 = 1.5 * std::f64::consts::PI / 180.0;
+const MIN_SEED_PARALLAX: f64 = 1.2 * std::f64::consts::PI / 180.0;
 
 /// A new point needs this much parallax before it is worth keeping.
 const MIN_TRACK_PARALLAX: f64 = 1.0 * std::f64::consts::PI / 180.0;
 
 /// Already-registered neighbours matched against each new frame.
-const REF_FRAMES: usize = 3;
+const REF_FRAMES: usize = 5;
 
 /// Below this many 3D-2D correspondences a frame cannot be registered.
-const MIN_PNP_MATCHES: usize = 16;
+const MIN_PNP_MATCHES: usize = 12;
 
 /// Fraction of correspondences that must survive pose estimation.
-const MIN_CONFIDENCE: f32 = 0.35;
+const MIN_CONFIDENCE: f32 = 0.30;
 
-/// Consecutive frames that may fail before the engine gives up.
-const MAX_CONSECUTIVE_FAILURES: usize = 4;
+/// Soft floor: accept a weaker PnP after a second, longer RANSAC pass.
+const SOFT_CONFIDENCE: f32 = 0.22;
+
+/// RANSAC iterations for the first PnP attempt.
+const PNP_ITERS: usize = 500;
+
+/// Extra RANSAC iterations when the first pass is marginal.
+const PNP_ITERS_RETRY: usize = 900;
+
+/// Consecutive skips before we check whether the run is already hopeless.
+const HOPELESS_SKIP_STREAK: usize = 16;
 
 /// Keyframes in the local bundle adjustment window.
-const BA_WINDOW: usize = 8;
+const BA_WINDOW: usize = 10;
 
 /// Points in any one bundle adjustment. The reduced camera system is dense, so
 /// the pose count is what really bounds cost, but a runaway point count would
@@ -89,7 +101,18 @@ const BA_WINDOW: usize = 8;
 const MAX_BA_POINTS: usize = 6000;
 
 /// Fraction of the frames that must register for the result to be usable.
-const MIN_REGISTERED_FRACTION: f32 = 0.6;
+const MIN_REGISTERED_FRACTION: f32 = 0.55;
+
+/// Prune outlier tracks this often during incremental registration.
+const PRUNE_EVERY: usize = 12;
+
+/// Reject a new pose whose centre jumps farther than this multiple of the
+/// typical inter-frame baseline (scaled by frame gap).
+const MAX_CENTER_JUMP_MULT: f64 = 10.0;
+
+/// Reject a pose that rotates more than this (radians) vs its nearest neighbour
+/// when the frame gap is small.
+const MAX_ROTATION_JUMP: f64 = 75.0 * std::f64::consts::PI / 180.0;
 
 /// A 3D point and every keypoint that sees it.
 #[derive(Debug, Clone)]
@@ -125,6 +148,17 @@ pub struct RegisterEvent<'a> {
     pub confidence: f32,
     /// Median depth of the points this camera sees, in scene units.
     pub median_depth: f64,
+    /// Growing sparse cloud — stream to the viewport during live tracking.
+    pub tracks: &'a [Track],
+}
+
+/// Progress while a frame cannot be locked — keeps the UI from looking frozen.
+pub struct SkipEvent<'a> {
+    pub frame: &'a Frame,
+    pub registered: usize,
+    pub total: usize,
+    pub reason: &'static str,
+    pub consecutive_skips: usize,
 }
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -181,7 +215,8 @@ fn find_seed(
     rng: &mut Rng,
 ) -> Option<(usize, usize, Pose, Vec<(usize, usize)>, Vec<usize>)> {
     let n = frames.len();
-    for i in 0..n.min(3) {
+    let mut best: Option<(usize, usize, Pose, Vec<(usize, usize)>, Vec<usize>, f64)> = None;
+    for i in 0..n.min(SEED_REF_CANDIDATES) {
         for j in (i + 1)..n.min(i + 1 + SEED_SPAN) {
             let m = match_frames(&frames[i], &frames[j], MatchOptions::default());
             if m.len() < MIN_SEED_INLIERS {
@@ -195,7 +230,7 @@ fn find_seed(
             let x1: Vec<[f64; 2]> = m.iter().map(|&(a, _)| bearing(&frames[i], a, intr)).collect();
             let x2: Vec<[f64; 2]> = m.iter().map(|&(_, b)| bearing(&frames[j], b, intr)).collect();
 
-            let tv = match ransac_essential(&x1, &x2, intr.mean_focal(), RANSAC_PX, 400, rng) {
+            let tv = match ransac_essential(&x1, &x2, intr.mean_focal(), RANSAC_PX, 600, rng) {
                 Some(tv) => tv,
                 None => continue,
             };
@@ -211,13 +246,68 @@ fn find_seed(
                 .filter(|p| first.apply(*p)[2] > 1e-6 && tv.pose.apply(*p)[2] > 1e-6)
                 .map(|p| parallax(&first, &tv.pose, p))
                 .collect();
-            if angles.len() < MIN_SEED_INLIERS || median(angles) < MIN_SEED_PARALLAX {
+            if angles.len() < MIN_SEED_INLIERS || median(angles.clone()) < MIN_SEED_PARALLAX {
                 continue;
             }
-            return Some((i, j, tv.pose, m, tv.inliers));
+            // Prefer a seed with more inliers and healthier parallax — not just
+            // the first pair that clears the floor.
+            let score = tv.inliers.len() as f64 * median(angles);
+            let candidate = (i, j, tv.pose, m, tv.inliers, score);
+            if best.as_ref().map(|b| b.5).unwrap_or(0.0) < score {
+                best = Some(candidate);
+            }
         }
     }
-    None
+    best.map(|(i, j, pose, m, inliers, _)| (i, j, pose, m, inliers))
+}
+
+/// Median baseline between consecutive registered cameras in `order`.
+fn typical_step(poses: &[Option<Pose>], order: &[usize]) -> f64 {
+    if order.len() < 2 {
+        return 0.0;
+    }
+    let mut steps = Vec::with_capacity(order.len());
+    for w in order.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if let (Some(pa), Some(pb)) = (&poses[a], &poses[b]) {
+            let d = norm(sub(pa.center(), pb.center()));
+            if d.is_finite() && d > 1e-9 {
+                steps.push(d);
+            }
+        }
+    }
+    median(steps)
+}
+
+/// True when the new pose is a plausible continuation of its nearest neighbour.
+fn pose_is_plausible(pose: &Pose, nearest: &Pose, frame_gap: usize, typical: f64) -> bool {
+    let gap = (frame_gap as f64).max(1.0);
+    let dist = norm(sub(pose.center(), nearest.center()));
+    if !dist.is_finite() {
+        return false;
+    }
+    if typical > 1e-6 {
+        let max_dist = (typical * gap * MAX_CENTER_JUMP_MULT)
+            .max(typical * 3.0)
+            .max(1e-3);
+        if dist > max_dist {
+            return false;
+        }
+    }
+    let rel = m3_mul(pose.r, m3_transpose(nearest.r));
+    let angle = norm(rodrigues_inv(rel));
+    if !angle.is_finite() {
+        return false;
+    }
+    // Allow larger turns when frames are farther apart (cuts, pans).
+    let max_rot = MAX_ROTATION_JUMP * gap.sqrt().clamp(1.0, 3.0);
+    angle <= max_rot
+}
+
+/// Still possible to hit the registration floor given what is left.
+fn can_still_succeed(registered: usize, remaining: usize, total: usize) -> bool {
+    let max_possible = registered + remaining;
+    (max_possible as f32) >= MIN_REGISTERED_FRACTION * total as f32
 }
 
 /// Reproject every observation and drop the ones that no longer agree with the
@@ -266,16 +356,19 @@ fn rms_px(frames: &[Frame], poses: &[Option<Pose>], tracks: &[Track], intr: Intr
 
 /// Reconstruct poses and points from an ordered set of frames.
 ///
-/// `on_register` is called the moment each camera is solved, and may return an
-/// error to abort the run (which is how cancellation reaches the loop).
-pub fn reconstruct<F>(
+/// `on_register` is called the moment each camera is solved. `on_skip` is called
+/// when a frame cannot be locked, so the UI can keep progress moving. Either
+/// callback may return an error to abort (cancellation).
+pub fn reconstruct<F, S>(
     frames: &[Frame],
     thumbs: &[Thumb],
     intr: Intrinsics,
     mut on_register: F,
+    mut on_skip: S,
 ) -> Result<Reconstruction, String>
 where
     F: FnMut(RegisterEvent) -> Result<(), String>,
+    S: FnMut(SkipEvent) -> Result<(), String>,
 {
     let n = frames.len();
     if n < 3 {
@@ -338,11 +431,13 @@ where
             total: n,
             confidence: 1.0,
             median_depth: depth,
+            tracks: &recon.tracks,
         })?;
     }
 
     // ---- 2. Register the rest ---------------------------------------------
-    let mut consecutive_failures = 0usize;
+    let mut consecutive_skips = 0usize;
+    let mut skipped = 0usize;
     for k in 0..n {
         if recon.poses[k].is_some() {
             continue;
@@ -379,12 +474,41 @@ where
             }
         }
 
-        let failure = |why: &str| format!("frame {} {}", frames[k].name, why);
-        if cand.len() < MIN_PNP_MATCHES {
-            consecutive_failures += 1;
-            if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                return Err(failure("and the frames before it saw too few known points"));
+        let remaining_including = n - k;
+        let skip = |reason: &'static str,
+                    consecutive_skips: &mut usize,
+                    skipped: &mut usize,
+                    order: &[usize],
+                    on_skip: &mut S|
+         -> Result<(), String> {
+            *consecutive_skips += 1;
+            *skipped += 1;
+            on_skip(SkipEvent {
+                frame: &frames[k],
+                registered: order.len(),
+                total: n,
+                reason,
+                consecutive_skips: *consecutive_skips,
+            })?;
+            if *consecutive_skips >= HOPELESS_SKIP_STREAK
+                && !can_still_succeed(order.len(), remaining_including.saturating_sub(1), n)
+            {
+                return Err(format!(
+                    "frame {} and the frames before it could not be located",
+                    frames[k].name
+                ));
             }
+            Ok(())
+        };
+
+        if cand.len() < MIN_PNP_MATCHES {
+            skip(
+                "too few known points",
+                &mut consecutive_skips,
+                &mut skipped,
+                &order,
+                &mut on_skip,
+            )?;
             continue;
         }
 
@@ -394,27 +518,64 @@ where
             .map(|&(_, a)| bearing(&frames[k], a, intr))
             .collect();
 
-        let (pose, inliers) =
-            match ransac_pnp(&pts, &obs, intr.mean_focal(), RANSAC_PX, 400, &mut rng) {
-                Some(v) => v,
-                None => {
-                    consecutive_failures += 1;
-                    if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                        return Err(failure("and the frames before it could not be located"));
-                    }
-                    continue;
-                }
-            };
+        let mut pnp = ransac_pnp(&pts, &obs, intr.mean_focal(), RANSAC_PX, PNP_ITERS, &mut rng);
+        let mut confidence = pnp
+            .as_ref()
+            .map(|(pose, inliers)| {
+                let _ = pose;
+                inliers.len() as f32 / cand.len() as f32
+            })
+            .unwrap_or(0.0);
 
-        let confidence = inliers.len() as f32 / cand.len() as f32;
-        if confidence < MIN_CONFIDENCE {
-            consecutive_failures += 1;
-            if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                return Err(failure("and the frames before it matched too poorly"));
+        // Marginal first pass: spend more RANSAC before giving up on the frame.
+        if pnp.is_none() || confidence < MIN_CONFIDENCE {
+            if let Some(retry) =
+                ransac_pnp(&pts, &obs, intr.mean_focal(), RANSAC_PX * 1.25, PNP_ITERS_RETRY, &mut rng)
+            {
+                let retry_conf = retry.1.len() as f32 / cand.len() as f32;
+                if pnp.is_none() || retry_conf > confidence {
+                    confidence = retry_conf;
+                    pnp = Some(retry);
+                }
             }
-            continue;
         }
-        consecutive_failures = 0;
+
+        let (pose, inliers) = match pnp {
+            Some(v) if confidence >= SOFT_CONFIDENCE => v,
+            _ => {
+                skip(
+                    "pose estimation failed",
+                    &mut consecutive_skips,
+                    &mut skipped,
+                    &order,
+                    &mut on_skip,
+                )?;
+                continue;
+            }
+        };
+
+        // Outlier rejection: a teleporting pose poisons every later frame.
+        let nearest_ref = refs
+            .iter()
+            .min_by_key(|&&r| (r as i64 - k as i64).abs())
+            .copied()
+            .and_then(|r| recon.poses[r].map(|p| (r, p)));
+        if let Some((r, nearest)) = nearest_ref {
+            let gap = (k as i64 - r as i64).unsigned_abs() as usize;
+            let step = typical_step(&recon.poses, &order);
+            if !pose_is_plausible(&pose, &nearest, gap, step) {
+                skip(
+                    "pose jumped too far",
+                    &mut consecutive_skips,
+                    &mut skipped,
+                    &order,
+                    &mut on_skip,
+                )?;
+                continue;
+            }
+        }
+
+        consecutive_skips = 0;
 
         recon.poses[k] = Some(pose);
         order.push(k);
@@ -455,7 +616,21 @@ where
         let window: Vec<usize> = order.iter().rev().take(BA_WINDOW).copied().collect();
         if window.len() > 2 {
             let free: Vec<usize> = window[..window.len() - 2].to_vec();
-            adjust_with_frames(frames, &mut recon, &free, intr, 5);
+            adjust_with_frames(frames, &mut recon, &free, intr, 6);
+        }
+
+        // Periodic prune keeps drifted tracks from anchoring later PnP.
+        if order.len() % PRUNE_EVERY == 0 {
+            prune(&frames, &recon.poses, &mut recon.tracks, intr, RANSAC_PX * 2.5);
+            // Rebuild keypoint→track index after prune may have dropped tracks.
+            for map in kp_track.iter_mut() {
+                map.clear();
+            }
+            for (t, track) in recon.tracks.iter().enumerate() {
+                for &(f, kp) in &track.obs {
+                    kp_track[f].insert(kp, t);
+                }
+            }
         }
 
         let depth = median(
@@ -473,13 +648,17 @@ where
             total: n,
             confidence,
             median_depth: depth,
+            tracks: &recon.tracks,
         })?;
     }
 
     let registered = order.len();
     if (registered as f32) < MIN_REGISTERED_FRACTION * n as f32 {
-        return Err(format!("only {registered} of {n} frames could be located"));
+        return Err(format!(
+            "only {registered} of {n} frames could be located ({skipped} skipped)"
+        ));
     }
+    let _ = skipped;
     Ok(recon)
 }
 
@@ -782,6 +961,9 @@ fn run_blocking(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
         return Err("fewer than three images to work from".into());
     }
     ctx.check_cancel()?;
+    ctx.notice(
+        "Live camera tracking is on. Cameras lock one at a time; the batch solver takes over if tracking fails.",
+    );
 
     // ---- Detect features on every frame ------------------------------------
     ctx.stage_progress("sfm", 0.0, "Finding features…");
@@ -847,37 +1029,86 @@ fn run_blocking(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
 
     // ---- Reconstruct --------------------------------------------------------
     ctx.stage_progress("sfm", 0.30, "Locating the first cameras…");
-    let mut recon = reconstruct(&frames, &thumbs, intr, |ev| {
-        if ctx.cancelled() {
-            return Err("__cancelled__".to_string());
-        }
-        let depth = if ev.median_depth.is_finite() && ev.median_depth > 1e-6 {
-            ev.median_depth * 0.12
-        } else {
-            0.1
-        };
-        let (apex, corners) = frustum(&ev.pose, intr, ev.frame.width, ev.frame.height, depth);
-        ctx.emit(JobEvent::CameraRegistered {
-            job_id: ctx.job_id.clone(),
-            name: ev.frame.name.clone(),
-            registered: ev.registered as u32,
-            total: ev.total as u32,
-            confidence: ev.confidence,
-            apex,
-            corners,
-        });
-        ctx.stage_progress(
-            "sfm",
-            0.30 + 0.55 * ev.registered as f32 / ev.total as f32,
-            &format!("Located {} of {} cameras", ev.registered, ev.total),
-        );
-        Ok(())
-    })?;
+    let mut skip_notices = 0usize;
+    // Stream a growing sparse cloud while cameras lock (live densify preview).
+    let last_sparse_emit = std::cell::Cell::new(0usize);
+    let mut recon = reconstruct(
+        &frames,
+        &thumbs,
+        intr,
+        |ev| {
+            if ctx.cancelled() {
+                return Err("__cancelled__".to_string());
+            }
+            let depth = if ev.median_depth.is_finite() && ev.median_depth > 1e-6 {
+                ev.median_depth * 0.12
+            } else {
+                0.1
+            };
+            let (apex, corners) = frustum(&ev.pose, intr, ev.frame.width, ev.frame.height, depth);
+            ctx.emit(JobEvent::CameraRegistered {
+                job_id: ctx.job_id.clone(),
+                name: ev.frame.name.clone(),
+                registered: ev.registered as u32,
+                total: ev.total as u32,
+                confidence: ev.confidence,
+                apex,
+                corners,
+            });
+            ctx.stage_progress(
+                "sfm",
+                0.30 + 0.55 * ev.registered as f32 / ev.total as f32,
+                &format!("Located {} of {} cameras", ev.registered, ev.total),
+            );
+            // Emit sparse every ~4 cameras (and at seed / final) so densify
+            // geometry appears live during tracking, not only after batch SfM.
+            let due = ev.registered == 2
+                || ev.registered == ev.total
+                || ev.registered.saturating_sub(last_sparse_emit.get()) >= 4;
+            if due && ev.tracks.len() >= 32 {
+                if let Err(e) = crate::pipeline::preview::emit_tracks_sparse(ctx, ev.tracks) {
+                    ctx.log(format!("[warn] live sparse preview failed: {e}"));
+                } else {
+                    last_sparse_emit.set(ev.registered);
+                }
+            }
+            Ok(())
+        },
+        |skip| {
+            if ctx.cancelled() {
+                return Err("__cancelled__".to_string());
+            }
+            // Keep the stage bar moving when frames are skipped so the UI does
+            // not look frozen during a gap or a hard cut.
+            let scanned = skip.registered + skip.consecutive_skips;
+            ctx.stage_progress(
+                "sfm",
+                0.30 + 0.55 * (scanned.min(skip.total) as f32) / skip.total as f32,
+                &format!(
+                    "Skipping {} ({}) · {} of {} locked",
+                    skip.frame.name, skip.reason, skip.registered, skip.total
+                ),
+            );
+            if skip.consecutive_skips == 3 || skip.consecutive_skips % 8 == 0 {
+                skip_notices += 1;
+                if skip_notices <= 4 {
+                    ctx.notice(format!(
+                        "Live tracking degraded: skipped {} ({}).",
+                        skip.frame.name, skip.reason
+                    ));
+                }
+            }
+            Ok(())
+        },
+    )?;
     ctx.check_cancel()?;
 
     // ---- Refine and clean ---------------------------------------------------
     ctx.stage_progress("sfm", 0.85, "Refining camera poses…");
-    refine_sweep(&frames, &mut recon, intr, 2, |frac| {
+    refine_sweep(&frames, &mut recon, intr, 3, |frac| {
+        if ctx.cancelled() {
+            return;
+        }
         ctx.stage_progress("sfm", 0.85 + 0.10 * frac, "Refining camera poses…");
     });
     ctx.check_cancel()?;
@@ -887,16 +1118,22 @@ fn run_blocking(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     if recon.tracks.len() < 200 {
         return Err("too few stable points survived refinement".into());
     }
+    let rms = rms_px(&frames, &recon.poses, &recon.tracks, intr);
     ctx.log(format!(
-        "Live camera tracking: {registered} of {total} frames, {} points, {dropped} discarded, {:.2} px rms",
+        "Live camera tracking: {registered} of {total} frames, {} points, {dropped} discarded, {rms:.2} px rms",
         recon.tracks.len(),
-        rms_px(&frames, &recon.poses, &recon.tracks, intr)
     ));
     if registered < total {
         ctx.notice(format!(
             "{} of {total} frames could not be located and will not be used for training.",
             total - registered
         ));
+    }
+    if rms > 4.0 {
+        ctx.notice(format!(
+            "Live tracking residual is high ({rms:.1} px). Falling back to the batch camera solver."
+        ));
+        return Err(format!("reprojection residual too high ({rms:.1} px)"));
     }
 
     // ---- Write the sparse model --------------------------------------------
@@ -1066,11 +1303,17 @@ mod tests {
         let (frames, thumbs) = synthetic(&points, &truth);
 
         let mut seen = Vec::new();
-        let recon = reconstruct(&frames, &thumbs, intr(), |ev| {
-            seen.push(ev.frame.name.clone());
-            assert!(ev.confidence > 0.0 && ev.confidence <= 1.0);
-            Ok(())
-        })
+        let recon = reconstruct(
+            &frames,
+            &thumbs,
+            intr(),
+            |ev| {
+                seen.push(ev.frame.name.clone());
+                assert!(ev.confidence > 0.0 && ev.confidence <= 1.0);
+                Ok(())
+            },
+            |_| Ok(()),
+        )
         .expect("reconstruction failed");
 
         assert_eq!(recon.registered().len(), 7, "not every frame registered");
@@ -1105,7 +1348,7 @@ mod tests {
         let points = cloud(400);
         let truth = truth_poses(6);
         let (frames, thumbs) = synthetic(&points, &truth);
-        let recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(())).unwrap();
+        let recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(()), |_| Ok(())).unwrap();
         let rms = rms_px(&frames, &recon.poses, &recon.tracks, intr());
         assert!(rms < 1.0, "rms {rms} px");
     }
@@ -1115,7 +1358,7 @@ mod tests {
         let points = cloud(400);
         let truth = truth_poses(8);
         let (frames, thumbs) = synthetic(&points, &truth);
-        let mut recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(())).unwrap();
+        let mut recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(()), |_| Ok(())).unwrap();
         let before = rms_px(&frames, &recon.poses, &recon.tracks, intr());
         refine_sweep(&frames, &mut recon, intr(), 2, |_| {});
         let after = rms_px(&frames, &recon.poses, &recon.tracks, intr());
@@ -1127,8 +1370,14 @@ mod tests {
         let points = cloud(300);
         let truth = truth_poses(6);
         let (frames, thumbs) = synthetic(&points, &truth);
-        let err = reconstruct(&frames, &thumbs, intr(), |_| Err("__cancelled__".into()))
-            .expect_err("should have aborted");
+        let err = reconstruct(
+            &frames,
+            &thumbs,
+            intr(),
+            |_| Err("__cancelled__".into()),
+            |_| Ok(()),
+        )
+        .expect_err("should have aborted");
         assert_eq!(err, "__cancelled__");
     }
 
@@ -1137,7 +1386,7 @@ mod tests {
         let points = cloud(100);
         let truth = truth_poses(2);
         let (frames, thumbs) = synthetic(&points, &truth);
-        assert!(reconstruct(&frames, &thumbs, intr(), |_| Ok(())).is_err());
+        assert!(reconstruct(&frames, &thumbs, intr(), |_| Ok(()), |_| Ok(())).is_err());
     }
 
     #[test]
@@ -1145,7 +1394,7 @@ mod tests {
         let points = cloud(300);
         let truth = truth_poses(5);
         let (frames, thumbs) = synthetic(&points, &truth);
-        let mut recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(())).unwrap();
+        let mut recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(()), |_| Ok(())).unwrap();
 
         // A clean reconstruction loses nothing.
         assert_eq!(prune(&frames, &recon.poses, &mut recon.tracks, intr(), 4.0), 0);
@@ -1164,7 +1413,7 @@ mod tests {
         let points = cloud(400);
         let truth = truth_poses(6);
         let (frames, thumbs) = synthetic(&points, &truth);
-        let recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(())).unwrap();
+        let recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(()), |_| Ok(())).unwrap();
 
         // Pretend the working images were half the size of the originals.
         let model = build_model(&frames, &recon, intr(), 2.0, (1920, 1440));
@@ -1229,5 +1478,49 @@ mod tests {
                 assert!(d > 0.1, "corners {i} and {j} coincide");
             }
         }
+    }
+
+    #[test]
+    fn pose_jump_rejection_blocks_teleports() {
+        let a = Pose::identity();
+        let near = Pose {
+            r: Pose::identity().r,
+            t: [-0.4, 0.0, 0.0],
+        };
+        let far = Pose {
+            r: Pose::identity().r,
+            t: [-40.0, 0.0, 0.0],
+        };
+        assert!(pose_is_plausible(&near, &a, 1, 0.4));
+        assert!(!pose_is_plausible(&far, &a, 1, 0.4));
+    }
+
+    #[test]
+    fn hopeless_registration_exits_early() {
+        assert!(can_still_succeed(2, 10, 10));
+        assert!(!can_still_succeed(1, 2, 20));
+    }
+
+    #[test]
+    fn skip_callback_fires_for_a_blank_frame() {
+        let points = cloud(400);
+        let truth = truth_poses(6);
+        let (mut frames, thumbs) = synthetic(&points, &truth);
+        frames[2].keypoints.clear();
+        frames[2].descriptors.clear();
+        let mut skips = 0usize;
+        let recon = reconstruct(
+            &frames,
+            &thumbs,
+            intr(),
+            |_| Ok(()),
+            |_| {
+                skips += 1;
+                Ok(())
+            },
+        )
+        .expect("reconstruction should survive one blank frame");
+        assert!(skips >= 1, "expected at least one skip");
+        assert!(recon.registered().len() >= 4);
     }
 }

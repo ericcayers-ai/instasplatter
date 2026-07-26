@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { useMemo } from "react";
 import { useStore } from "../../state/store";
 import { floodSnapshotFromTime, hazardClassLabel } from "../../geospatial/floodPreview";
 
@@ -7,7 +8,7 @@ function Pill({
   children,
 }: {
   tone: "idle" | "live" | "ok" | "err";
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <span className="status-pill" data-tone={tone}>
@@ -16,28 +17,28 @@ function Pill({
   );
 }
 
+function BrassProgress({ pct }: { pct: number }) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  return (
+    <div className="status-progress" title={`${clamped}%`}>
+      <div className="status-progress__fill" style={{ width: `${clamped}%` }} />
+      {clamped > 0 && clamped < 100 && (
+        <span className="status-progress__spark" style={{ left: `${clamped}%` }} aria-hidden />
+      )}
+    </div>
+  );
+}
+
 export default function StatusBar() {
   const suite = useStore((s) => s.suite);
   const screen = useStore((s) => s.screen);
   const stages = useStore((s) => s.stages);
-  const splatCount = useStore((s) => s.splatCount);
-  const fps = useStore((s) => s.fps);
-  const latestIter = useStore((s) => s.latestIter);
-  const totalSteps = useStore((s) => s.totalSteps);
-  const elapsedSecs = useStore((s) => s.elapsedSecs);
-  const jobStartedAt = useStore((s) => s.jobStartedAt);
   const resultPath = useStore((s) => s.resultPath);
   const jobError = useStore((s) => s.jobError);
-  const registeredCameras = useStore((s) => s.registeredCameras);
-  const totalCameras = useStore((s) => s.totalCameras);
-  const trackingConfidence = useStore((s) => s.trackingConfidence);
-  const meshStatus = useStore((s) => s.meshStatus);
   const logConsoleOpen = useStore((s) => s.logConsoleOpen);
   const setLogConsoleOpen = useStore((s) => s.setLogConsoleOpen);
-  const exportDiagnosticsAction = useStore((s) => s.exportDiagnosticsAction);
+  const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const floodTime = useStore((s) => s.geoFloodTime);
-  const viewMode = useStore((s) => s.geoViewMode);
-  const waterStyle = useStore((s) => s.geoWaterStyle);
   const preview = useStore((s) => s.geoPreview);
   const scientific = useStore((s) => s.geoScientificRun);
   const pipelineChips = useStore((s) => s.pipelineChips);
@@ -46,30 +47,29 @@ export default function StatusBar() {
     [floodTime, preview],
   );
 
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  void tick;
+  const openLog = () => {
+    setRightPanelOpen(true);
+    setLogConsoleOpen(!logConsoleOpen);
+  };
+
+  const openStats = () => {
+    setRightPanelOpen(true);
+  };
 
   const actions = (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => void exportDiagnosticsAction()}
-        className="btn btn-ghost px-1.5 py-0.5 text-[10px]"
-      >
-        Diagnostics
+      <button type="button" onClick={openStats} className="btn btn-ghost px-1.5 py-0.5 text-[10px]" aria-label="Open statistics">
+        Stats
       </button>
       <button
         type="button"
-        onClick={() => setLogConsoleOpen(!logConsoleOpen)}
+        onClick={openLog}
         className={`btn btn-ghost px-1.5 py-0.5 text-[10px] ${logConsoleOpen ? "btn-active" : ""}`}
         title="Toggle log (Ctrl+L)"
+        aria-label={logConsoleOpen ? "Hide log" : "Show log"}
       >
         {logConsoleOpen ? "Hide log" : "Log"}
-        <span className="kbd ml-1 hidden sm:inline">⌃L</span>
+        <span className="kbd ml-1 hidden sm:inline">Ctrl+L</span>
       </button>
     </div>
   );
@@ -90,28 +90,34 @@ export default function StatusBar() {
             ? "ok"
             : "idle";
     return (
-      <footer className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-edge bg-panel px-3 text-[11px] tabular-nums text-ink-dim">
-        <div className="flex min-w-0 items-center gap-3 overflow-hidden">
+      <footer className="status-ribbon" role="status">
+        <div className="status-ribbon__live min-w-0 overflow-hidden">
           <Pill tone={tone}>
-            {preview?.validation === "validated" ? "Validated" : "Live preview"}
+            {scientific?.state === "running"
+              ? "Live"
+              : preview?.validation === "validated"
+                ? "Validated"
+                : "Ready"}
           </Pill>
+          {floodPct != null && (
+            <>
+              <BrassProgress pct={floodPct} />
+              <span className="tabular-nums text-accent2">{floodPct}%</span>
+            </>
+          )}
           {scientific && (
-            <span title={scientific.detail} className="truncate">
+            <span title={scientific.detail} className="hidden truncate md:inline">
               Flood {scientific.state}
-              {floodPct != null ? ` ${floodPct}%` : ""}
             </span>
           )}
           {pipelineChips.export && (
-            <span className="max-w-40 truncate" title={pipelineChips.export}>
+            <span className="hidden max-w-40 truncate lg:inline" title={pipelineChips.export}>
               {pipelineChips.export.replace(/^Export:\s*/i, "Export · ")}
             </span>
           )}
-          <span className="hidden truncate md:inline">
+          <span className="hidden truncate xl:inline">
             t {geoSnap.hours.toFixed(1)} h · {geoSnap.maxDepthM.toFixed(2)} m ·{" "}
             {hazardClassLabel(geoSnap.hazardClass)}
-          </span>
-          <span className="hidden uppercase lg:inline">
-            {viewMode} · {waterStyle}
           </span>
         </div>
         {actions}
@@ -121,8 +127,8 @@ export default function StatusBar() {
 
   if (screen !== "processing") {
     return (
-      <footer className="flex h-7 shrink-0 items-center justify-between border-t border-edge bg-panel px-3 text-[11px] text-ink-dim">
-        <div className="flex items-center gap-2">
+      <footer className="status-ribbon" role="status">
+        <div className="status-ribbon__live">
           <Pill tone="idle">Ready</Pill>
           <span className="hidden sm:inline">Drop a capture or open a recent project</span>
         </div>
@@ -132,49 +138,30 @@ export default function StatusBar() {
   }
 
   const running = !resultPath && !jobError;
-  const elapsed = elapsedSecs ?? (jobStartedAt ? (Date.now() - jobStartedAt) / 1000 : 0);
-  const trainStage = stages.find((s) => s.id === "train");
   const activeStage = stages.find((s) => s.state === "active");
-  const eta =
-    running && trainStage?.state === "active" && latestIter > 100 && totalSteps > 0
-      ? (elapsed / latestIter) * (totalSteps - latestIter)
-      : null;
-  const solvingCameras = stages.find((s) => s.id === "sfm")?.state === "active" && totalCameras > 0;
-
-  const fmt = (secs: number) =>
-    `${Math.max(0, Math.floor(secs / 60))}m ${Math.max(0, Math.floor(secs % 60))}s`;
-
+  const pct =
+    running && activeStage && activeStage.progress > 0
+      ? Math.round(activeStage.progress * 100)
+      : resultPath
+        ? 100
+        : 0;
   const tone = jobError ? "err" : resultPath ? "ok" : "live";
-  const label = jobError
-    ? "Failed"
-    : resultPath
-      ? "Complete"
-      : activeStage
-        ? activeStage.label
-        : "Preparing";
+  const label = jobError ? "Failed" : resultPath ? "Complete" : "Live";
 
   return (
-    <footer className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-edge bg-panel px-3 text-[11px] tabular-nums text-ink-dim">
-      <div className="flex min-w-0 items-center gap-3 overflow-hidden">
+    <footer className="status-ribbon" role="status">
+      <div className="status-ribbon__live min-w-0 overflow-hidden">
         <Pill tone={tone}>{label}</Pill>
-        {running && activeStage && activeStage.progress > 0 && (
-          <span className="text-accent2">{Math.round(activeStage.progress * 100)}%</span>
+        {(running || resultPath) && !jobError && (
+          <>
+            <BrassProgress pct={pct} />
+            <span className="tabular-nums text-accent2">{pct}%</span>
+          </>
         )}
-        {solvingCameras && (
-          <span className="hidden truncate sm:inline">
-            {registeredCameras}/{totalCameras} cams · {Math.round(trackingConfidence * 100)}%
-          </span>
+        {activeStage && running && (
+          <span className="hidden truncate sm:inline">{activeStage.label}</span>
         )}
-        <span className="hidden md:inline">{splatCount.toLocaleString()} splats</span>
-        {totalSteps > 0 && (
-          <span className="hidden lg:inline">
-            {latestIter.toLocaleString()}/{totalSteps.toLocaleString()}
-          </span>
-        )}
-        <span className="hidden xl:inline">{fps.toFixed(0)} fps</span>
-        <span>{fmt(elapsed)}</span>
-        {eta !== null && <span className="hidden sm:inline">ETA {fmt(eta)}</span>}
-        {meshStatus && <span className="max-w-56 truncate text-ink" title={meshStatus}>{meshStatus}</span>}
+        <span className="hidden text-[10px] text-ink-dim md:inline">Details in STATS</span>
       </div>
       {actions}
     </footer>

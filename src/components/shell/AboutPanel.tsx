@@ -2,6 +2,7 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useStore } from "../../state/store";
+import { useFocusTrap } from "../../lib/focusTrap";
 
 const DOCS = {
   researchStack:
@@ -37,6 +38,7 @@ export default function AboutPanel() {
   const engineStatus = useStore((s) => s.engineStatus);
   const floodEngine = useStore((s) => s.geoFloodEngine);
   const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
+  const trapRef = useFocusTrap(open);
 
   if (!open) return null;
 
@@ -45,6 +47,7 @@ export default function AboutPanel() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-[2px]">
       <div
+        ref={trapRef}
         role="dialog"
         aria-labelledby="about-title"
         className="flex max-h-[min(90vh,40rem)] w-full max-w-lg flex-col overflow-hidden rounded border border-edge bg-panel2 shadow-lg"
@@ -135,7 +138,17 @@ export default function AboutPanel() {
             Reconstruction sidecars
           </h3>
           <div className="mt-1 divide-y divide-edge/50">
-            <AttrRow name="COLMAP" license="BSD" note={sidecarReady(engineStatus?.colmap)} />
+            <AttrRow
+              name="COLMAP"
+              license="BSD"
+              note={
+                engineStatus?.colmap
+                  ? engineStatus.colmapCuda
+                    ? "installed · CUDA build"
+                    : "installed · CPU build (Install engines on NVIDIA to upgrade)"
+                  : "not installed"
+              }
+            />
             <AttrRow
               name="Brush"
               license="Apache-2.0"

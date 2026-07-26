@@ -18,8 +18,7 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     watch: {
-      // tell vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/_refs/**", "**/graphify-out/**", "**/release-out/**", "**/.cursor/**", "**/.agents/**"],
     },
   },
 }));

@@ -3,6 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type {
   CameraRegistered,
   DemProduct,
+  SatSplatProduct,
   DemSampleGrid,
   EngineStatus,
   FloodEngineStatus,
@@ -19,13 +20,22 @@ import type {
 } from "../lib/ipc";
 import { api } from "../lib/ipc";
 import { DEFAULT_GEO_LAYERS, PLACEHOLDER_SCENARIO } from "../geospatial/defaults";
-import { aoiIsValid, aoiToEnuBox, domainFromAoi, normalizeAoi, type AoiWgs84 } from "../geospatial/aoi";
+import {
+  aoiIsValid,
+  aoiToEnuBox,
+  coarsenDomainDxFromPlan,
+  domainFromAoi,
+  normalizeAoi,
+  type AoiWgs84,
+} from "../geospatial/aoi";
 import {
   identityModelTransform,
   normalizeModelTransform,
   type ModelTransform,
 } from "../geospatial/modelTransform";
-import { setLocalDemTerrainUrl } from "../geospatial/globe/terrain";
+import { setDemHeightmap, setLocalDemTerrainUrl } from "../geospatial/globe/terrain";
+import { readStoredOpenTopoApiKey } from "../geospatial/opentopo";
+import { isGeoTiffPath } from "../geospatial/demAuthority";
 import type {
   GeoBasemapMode,
   GeoLayer,
@@ -38,6 +48,9 @@ import type {
 } from "../geospatial/types";
 import type { ExtentPlan } from "../lib/ipc";
 import { convertFileSrc } from "@tauri-apps/api/core";
+
+/** DEM catalog providers the UI can stage explicitly. */
+export type GeoDemProvider = "auto" | "usgs-3dep" | "opentopography";
 
 export type Screen = "home" | "processing";
 export type ThemePreference = "system" | "light" | "dark";
@@ -138,6 +151,8 @@ interface AppStore {
   totalCameras: number;
   /** Confidence of the most recently registered camera, 0 to 1. */
   trackingConfidence: number;
+  /** Live-init status for the current job. */
+  liveTrackingStatus: "off" | "starting" | "tracking" | "degraded" | "fallback";
   latestSplatPath: string | null;
   latestIter: number;
   totalSteps: number;
@@ -145,6 +160,7 @@ interface AppStore {
   fps: number;
   resultPath: string | null;
   jobError: string | null;
+  initError: string | null;
   jobStartedAt: number;
   elapsedSecs: number | null;
   meshStatus: string | null;
@@ -206,6 +222,9 @@ interface AppStore {
   geoOverlayPaths: Record<string, string>;
   /** Bumped when DEM bed / overlays change so map engines can refresh. */
   geoDemRevision: number;
+  /** Last "Satellite Splat" (catalog-derived, no-capture) generation result. */
+  geoSatSplatProduct: SatSplatProduct | null;
+  geoSatSplatBusy: boolean;
 
   init: () => Promise<void>;
   setSuite: (suite: Suite) => Promise<void>;
@@ -221,7 +240,16 @@ interface AppStore {
   commitGeoAoi: (aoi: AoiWgs84) => Promise<void>;
   clearGeoAoi: () => void;
   /** Stage DEM + sample bed for soft/HAND; wire Globe terrain URL when tiles exist. */
-  prepareGeoDemForAoi: () => Promise<void>;
+  prepareGeoDemForAoi: (opts?: {
+    provider?: GeoDemProvider;
+    sourcePath?: string | null;
+  }) => Promise<void>;
+  /** Pick / stage a user GeoTIFF as the flood DEM bed. */
+  stageUserGeoTiffDem: (sourcePath: string) => Promise<void>;
+  /** Rasterize registered splat → proxy DEM; requires metric GeoReference. */
+  generateSplatDemFromRecon: () => Promise<void>;
+  /** Generate a Gaussian splat for the current AOI from catalogs alone — no capture/registration needed. */
+  generateSatSplat: () => Promise<void>;
   /** Fetch catalog overlay (nfhl / hydrosheds / gauges / osm-waterways) into layer tree. */
   fetchGeoOverlayLayer: (layerId: string) => Promise<void>;
   startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
@@ -310,6 +338,7 @@ export const useStore = create<AppStore>((set, get) => ({
   registeredCameras: 0,
   totalCameras: 0,
   trackingConfidence: 0,
+  liveTrackingStatus: "off",
   latestSplatPath: null,
   latestIter: 0,
   totalSteps: 0,
@@ -317,6 +346,7 @@ export const useStore = create<AppStore>((set, get) => ({
   fps: 0,
   resultPath: null,
   jobError: null,
+  initError: null,
   jobStartedAt: 0,
   elapsedSecs: null,
   meshStatus: null,
@@ -360,32 +390,34 @@ export const useStore = create<AppStore>((set, get) => ({
   geoDemSample: null,
   geoOverlayPaths: {},
   geoDemRevision: 0,
+  geoSatSplatProduct: null,
+  geoSatSplatBusy: false,
 
   init: async () => {
-    // React StrictMode double-invokes effects in dev; init exactly once.
     if (initStarted) return;
     initStarted = true;
 
-    const storedTheme = localStorage.getItem(THEME_KEY) as ThemePreference | null;
-    const pref = storedTheme ?? "system";
-    const theme = resolveTheme(pref);
-    applyTheme(theme);
-    set({ themePreference: pref, theme });
-    window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
-      if (get().themePreference === "system") {
-        const t = resolveTheme("system");
-        applyTheme(t);
-        set({ theme: t });
-      }
-    });
+    try {
+      const storedTheme = localStorage.getItem(THEME_KEY) as ThemePreference | null;
+      const pref = storedTheme ?? "system";
+      const theme = resolveTheme(pref);
+      applyTheme(theme);
+      set({ themePreference: pref, theme });
+      window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (get().themePreference === "system") {
+          const t = resolveTheme("system");
+          applyTheme(t);
+          set({ theme: t });
+        }
+      });
 
-    const [profile, settings, resolved, engineStatus, suite] = await Promise.all([
-      api.getHardwareProfile(),
-      api.getSettings(),
-      api.getResolvedSettings(),
-      api.getEngineStatus(),
-      api.getSuite().catch(() => "reconstruction" as Suite),
-    ]);
+      const [profile, settings, resolved, engineStatus, suite] = await Promise.all([
+        api.getHardwareProfile(),
+        api.getSettings(),
+        api.getResolvedSettings(),
+        api.getEngineStatus(),
+        api.getSuite().catch(() => "reconstruction" as Suite),
+      ]);
     document.documentElement.dataset.suite = suite;
     set({ profile, settings, resolved, suite });
     void get().refreshProjects();
@@ -396,6 +428,12 @@ export const useStore = create<AppStore>((set, get) => ({
     await api.onJobEvent((e) => get().handleJobEvent(e));
     await api.onGeoEvent((e) => get().handleGeoEvent(e));
     await api.onSimEvent((e) => get().handleSimEvent(e));
+    // Dev/agent hook: reopen a finished workspace after projects load.
+    void (async () => {
+      await get().refreshProjects();
+      const openWs = await api.takeOpenWorkspace().catch(() => null);
+      if (openWs) void get().resumeProject(openWs);
+    })();
     await api.onQueueSnapshot((snap) => {
       set({ queueItems: snap.items, queuePaused: snap.paused });
       const running = snap.items.find((i) => i.state === "running");
@@ -416,6 +454,10 @@ export const useStore = create<AppStore>((set, get) => ({
           notices: [],
           pipelineChips: {},
           cameras: [],
+          registeredCameras: 0,
+          totalCameras: 0,
+          trackingConfidence: 0,
+          liveTrackingStatus: get().resolved?.liveInit ? "starting" : "off",
           jobStartedAt: Date.now(),
           jobSettingsSnapshot: get().resolved,
         });
@@ -426,6 +468,11 @@ export const useStore = create<AppStore>((set, get) => ({
     // Dev/test hook: start a job immediately if requested via env var.
     const auto = await api.getAutostart().catch(() => null);
     if (auto && !get().jobId) void get().startJob(auto);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("Init failed:", message);
+      set({ initError: message });
+    }
   },
 
   setSuite: async (suite) => {
@@ -476,6 +523,7 @@ export const useStore = create<AppStore>((set, get) => ({
 
   clearGeoAoi: () => {
     setLocalDemTerrainUrl(null);
+    setDemHeightmap(null);
     set({
       geoAoiWgs84: null,
       geoExtentPlan: null,
@@ -497,7 +545,7 @@ export const useStore = create<AppStore>((set, get) => ({
       return;
     }
     const aoi = normalizeAoi(raw);
-    const domain = domainFromAoi(aoi, get().geoFloodLowPower);
+    let domain = domainFromAoi(aoi, get().geoFloodLowPower);
     const { origin, demBoundsEnu } = aoiToEnuBox(aoi);
     let extentPlan: ExtentPlan | null = null;
     let persistNote = "AOI set (local preview)";
@@ -510,9 +558,7 @@ export const useStore = create<AppStore>((set, get) => ({
         previewBudgetCells: 1024,
         enuOrigin: origin,
       });
-      if (extentPlan?.previewCellM && extentPlan.previewCellM > 0) {
-        domain.dxM = Math.max(domain.dxM, extentPlan.previewCellM);
-      }
+      domain = coarsenDomainDxFromPlan(domain, extentPlan?.previewCellM);
     } catch {
       // Planner is pure; if invoke fails (tests / missing IPC), keep local domain.
     }
@@ -530,6 +576,10 @@ export const useStore = create<AppStore>((set, get) => ({
       try {
         const result = await api.commitFloodAoi(workspace, scenarioId, aoi);
         extentPlan = result.extentPlan ?? extentPlan;
+        domain = coarsenDomainDxFromPlan(
+          domainFromAoi(aoi, get().geoFloodLowPower),
+          extentPlan?.previewCellM,
+        );
         persistNote = "AOI saved on project";
         set({ workspace });
       } catch (err) {
@@ -548,13 +598,15 @@ export const useStore = create<AppStore>((set, get) => ({
       geoTool: "pan",
       geoInspectHint: `${persistNote} · ${domain.cols}×${domain.rows} @ ${domain.dxM.toFixed(1)} m`,
       geoFloodPlaying: false,
+      // Reset playhead so AOI rebind seeks t=0 (cheap); avoid sync catch-up freeze.
+      geoFloodTime: 0,
     });
 
     // Stage DEM + sample bed for soft/HAND (non-blocking).
     void get().prepareGeoDemForAoi();
   },
 
-  prepareGeoDemForAoi: async () => {
+  prepareGeoDemForAoi: async (opts) => {
     const aoi = get().geoAoiWgs84;
     let workspace = get().workspace;
     if (!workspace) {
@@ -568,25 +620,62 @@ export const useStore = create<AppStore>((set, get) => ({
     const domain = domainFromAoi(aoi!, get().geoFloodLowPower);
     const plan = get().geoExtentPlan;
     const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
+    const provider = opts?.provider ?? "auto";
+    const sourcePath = opts?.sourcePath?.trim() || null;
+    const openTopoKey = readStoredOpenTopoApiKey();
 
     try {
-      // Prefer USGS 3DEP when AOI looks US-local; otherwise stage whatever is on disk.
-      try {
-        await api.fetchGeoCatalogAsset(workspace, "usgs-3dep", {
-          aoiWgs84: aoi,
-          cellSizeM: cell,
-        });
-      } catch {
-        // Network / coverage — dem stage will fall back to catalog files or synthetic.
+      // Explicit user GeoTIFF skips catalog fetch.
+      if (!sourcePath) {
+        const fetchNotes: string[] = [];
+        const tryFetch = async (entryId: string) => {
+          await api.fetchGeoCatalogAsset(workspace!, entryId, {
+            aoiWgs84: aoi,
+            cellSizeM: cell,
+            apiKey: entryId === "opentopography" ? openTopoKey : null,
+          });
+        };
+
+        if (provider === "usgs-3dep" || provider === "auto") {
+          try {
+            await tryFetch("usgs-3dep");
+          } catch (err) {
+            fetchNotes.push(`USGS 3DEP: ${String(err)}`);
+            if (provider === "usgs-3dep") {
+              set({ geoInspectHint: `USGS 3DEP fetch failed: ${String(err)}` });
+            }
+          }
+        }
+
+        if (provider === "opentopography" || (provider === "auto" && fetchNotes.length > 0)) {
+          if (!openTopoKey && provider === "opentopography") {
+            set({
+              geoInspectHint:
+                "OpenTopography needs an API key — set it in Flood lab / Advanced (or OPENTOPOGRAPHY_API_KEY).",
+            });
+            return;
+          }
+          if (openTopoKey) {
+            try {
+              await tryFetch("opentopography");
+            } catch (err) {
+              fetchNotes.push(`OpenTopography: ${String(err)}`);
+              if (provider === "opentopography") {
+                set({ geoInspectHint: `OpenTopography fetch failed: ${String(err)}` });
+              }
+            }
+          }
+        }
       }
 
       const dem = await api.prepareGeoDem(workspace, {
+        sourcePath,
         aoiWgs84: aoi,
         cellSizeM: cell,
         crs: "EPSG:4326",
       });
 
-      // Globe: only set terrain URL when quantized-mesh/heightmap layer.json exists.
+      // Globe: optional CTB layer.json; in-app heightmap from samples is the default.
       if (dem.terrainTilesUrl) {
         try {
           setLocalDemTerrainUrl(convertFileSrc(dem.terrainTilesUrl));
@@ -598,11 +687,19 @@ export const useStore = create<AppStore>((set, get) => ({
       }
 
       const sample = await api.sampleGeoDem(workspace, domain.cols, domain.rows, aoi);
+      setDemHeightmap({
+        cols: sample.cols,
+        rows: sample.rows,
+        bounds: sample.bounds,
+        z: sample.z,
+      });
       const bedNote = dem.synthetic
         ? "Synthetic DEM bed — Demo / Live preview only"
-        : sample.bedSource === "real"
-          ? "DEM bed sampled for soft + HAND preview"
-          : "DEM staged; preview using undulation proxy";
+        : sample.bedSource === "proxy"
+          ? "Splat→DEM proxy bed (non-authoritative)"
+          : sample.bedSource === "real"
+            ? "DEM bed sampled for soft + HAND preview"
+            : "DEM staged; preview using undulation proxy";
 
       set({
         workspace,
@@ -625,12 +722,230 @@ export const useStore = create<AppStore>((set, get) => ({
           authority: dem.synthetic ? "demo" : "live-preview",
           note: dem.synthetic
             ? "Synthetic DEM — soft/HAND stay Live preview; Demo until a real DEM is fetched."
-            : "Real DEM bed feeding soft preview + HAND (Live preview / non-authoritative until ANUGA validates).",
+            : sample.bedSource === "proxy"
+              ? "Splat-derived DEM proxy — Live preview / non-authoritative. Prefer USGS 3DEP or OpenTopography for scientific beds."
+              : "Real DEM bed feeding soft preview + HAND (Live preview / non-authoritative until ANUGA validates).",
         },
       });
     } catch (err) {
       set({
         geoInspectHint: `DEM stage: ${String(err)}`,
+      });
+    }
+  },
+
+  stageUserGeoTiffDem: async (sourcePath) => {
+    const path = sourcePath.trim();
+    if (!path) return;
+    if (!isGeoTiffPath(path)) {
+      set({
+        geoInspectHint: "Use a GeoTIFF / COG (.tif, .tiff, .cog) for the DEM bed.",
+      });
+      return;
+    }
+
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? null;
+    }
+
+    // Ensure a geospatial workspace exists (Add sources / queue scaffold).
+    if (!workspace) {
+      try {
+        set({ geoInspectHint: "Preparing geospatial workspace for GeoTIFF DEM…" });
+        await api.enqueueJobs([path], "geospatial");
+        const baseName = path.split(/[/\\]/).pop() ?? path;
+        for (let i = 0; i < 40; i++) {
+          const snap = await api.listQueue();
+          set({ queueItems: snap.items, queuePaused: snap.paused });
+          const hit = snap.items.find(
+            (q) =>
+              (q.suite ?? "reconstruction") === "geospatial" &&
+              !!q.workspace &&
+              (q.inputPath === path || q.inputPath.endsWith(baseName)),
+          );
+          workspace = hit?.workspace ?? null;
+          if (workspace) break;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      } catch (err) {
+        set({ geoInspectHint: `GeoTIFF workspace: ${String(err)}` });
+        return;
+      }
+    }
+
+    if (!workspace) {
+      set({
+        geoInspectHint:
+          "Could not open a geospatial workspace for this GeoTIFF. Try Add sources again, then Stage DEM.",
+      });
+      return;
+    }
+
+    set({ workspace, geoInspectHint: "Staging user GeoTIFF DEM…" });
+
+    const aoi = get().geoAoiWgs84;
+    if (!aoiIsValid(aoi)) {
+      // Stage the raster into the workspace even without AOI so the next AOI commit picks it up.
+      try {
+        const dem = await api.prepareGeoDem(workspace, {
+          sourcePath: path,
+          cellSizeM: 10,
+          crs: "EPSG:4326",
+        });
+        set({
+          geoDemProduct: dem,
+          geoDemRevision: get().geoDemRevision + 1,
+          geoLayers: get().geoLayers.map((l) =>
+            l.id === "dtm"
+              ? { ...l, status: dem.synthetic ? "empty" : "ready", placeholder: dem.synthetic, visible: !dem.synthetic }
+              : l,
+          ),
+          geoInspectHint: dem.synthetic
+            ? "GeoTIFF staged but bed is still synthetic — draw an AOI and re-stage."
+            : "User GeoTIFF staged — draw an AOI to sample the bed for soft + HAND.",
+          geoScenario: {
+            ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+            authority: dem.synthetic ? "demo" : "live-preview",
+            note: dem.synthetic
+              ? "Synthetic DEM — Demo until a real bed is sampled."
+              : "User GeoTIFF DEM staged (Live preview until ANUGA validates).",
+          },
+        });
+      } catch (err) {
+        set({ geoInspectHint: `GeoTIFF DEM: ${String(err)}` });
+      }
+      return;
+    }
+
+    await get().prepareGeoDemForAoi({ sourcePath: path });
+  },
+
+  generateSplatDemFromRecon: async () => {
+    const aoi = get().geoAoiWgs84;
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? get().queueItems.find((i) => i.workspace)?.workspace ?? null;
+    }
+    if (!workspace) {
+      set({ geoInspectHint: "Open a reconstruction workspace before generating a DEM from splat." });
+      return;
+    }
+    if (!aoiIsValid(aoi)) {
+      set({
+        geoInspectHint:
+          "Draw an AOI before generating a DEM from splat — registration alone is not enough.",
+      });
+      return;
+    }
+
+    const domain = domainFromAoi(aoi!, get().geoFloodLowPower);
+    const plan = get().geoExtentPlan;
+    const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
+
+    try {
+      set({ geoInspectHint: "Generating proxy DEM from registered splat…" });
+      const dem = await api.generateSplatDem(workspace, {
+        aoiWgs84: aoi,
+        cellSizeM: cell,
+      });
+
+      if (dem.terrainTilesUrl) {
+        try {
+          setLocalDemTerrainUrl(convertFileSrc(dem.terrainTilesUrl));
+        } catch {
+          setLocalDemTerrainUrl(null);
+        }
+      } else {
+        setLocalDemTerrainUrl(null);
+      }
+
+      const sample = await api.sampleGeoDem(workspace, domain.cols, domain.rows, aoi);
+      setDemHeightmap({
+        cols: sample.cols,
+        rows: sample.rows,
+        bounds: sample.bounds,
+        z: sample.z,
+      });
+      set({
+        workspace,
+        geoDemProduct: dem,
+        geoDemSample: sample,
+        geoDemRevision: get().geoDemRevision + 1,
+        geoLayers: get().geoLayers.map((l) =>
+          l.id === "dtm"
+            ? {
+                ...l,
+                status: "ready",
+                placeholder: false,
+                visible: true,
+              }
+            : l,
+        ),
+        geoInspectHint:
+          "Splat→DEM proxy bed staged (non-authoritative vs USGS / OpenTopo)",
+        geoScenario: {
+          ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+          authority: "live-preview",
+          note: "Splat-derived DEM proxy — Live preview / non-authoritative. Prefer USGS 3DEP or OpenTopography for scientific beds.",
+        },
+      });
+    } catch (err) {
+      set({
+        geoInspectHint: String(err),
+      });
+    }
+  },
+
+  generateSatSplat: async () => {
+    const aoi = get().geoAoiWgs84;
+    let workspace = get().workspace;
+    if (!workspace) {
+      const geo = get().queueItems.find(
+        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+      );
+      workspace = geo?.workspace ?? get().queueItems.find((i) => i.workspace)?.workspace ?? null;
+    }
+    if (!workspace) {
+      set({ geoInspectHint: "Open a geospatial workspace before generating a Satellite Splat." });
+      return;
+    }
+    if (!aoiIsValid(aoi)) {
+      set({
+        geoInspectHint: "Draw an AOI before generating a Satellite Splat.",
+      });
+      return;
+    }
+
+    const domain = domainFromAoi(aoi!, get().geoFloodLowPower);
+    const plan = get().geoExtentPlan;
+    const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
+
+    set({ geoSatSplatBusy: true, geoInspectHint: "Generating Satellite Splat from public elevation + imagery catalogs…" });
+    try {
+      const product = await api.generateSatSplat(workspace, aoi!, {
+        cellSizeM: cell,
+        gridCols: domain.cols,
+        gridRows: domain.rows,
+      });
+      set({
+        workspace,
+        geoSatSplatProduct: product,
+        geoSatSplatBusy: false,
+        geoInspectHint: `Satellite Splat ready — ${product.points} pts from ${product.demSource}${
+          product.imagerySource ? ` + ${product.imagerySource}` : " (elevation colormap, no imagery)"
+        }.`,
+      });
+    } catch (err) {
+      set({
+        geoSatSplatBusy: false,
+        geoInspectHint: `Satellite Splat: ${String(err)}`,
       });
     }
   },
@@ -667,12 +982,13 @@ export const useStore = create<AppStore>((set, get) => ({
     });
 
     try {
-      const entry = await api.fetchGeoCatalogAsset(workspace, entryId, { aoiWgs84: aoi });
-      const path = entry.localPath ?? "";
       if (layerId === "dtm") {
-        await get().prepareGeoDemForAoi();
+        // Prefer USGS; fall back to OpenTopography when key is present.
+        await get().prepareGeoDemForAoi({ provider: "auto" });
         return;
       }
+      const entry = await api.fetchGeoCatalogAsset(workspace, entryId, { aoiWgs84: aoi });
+      const path = entry.localPath ?? "";
       set({
         workspace,
         geoOverlayPaths: { ...get().geoOverlayPaths, [layerId]: path },
@@ -1084,6 +1400,48 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   resumeProject: async (workspace) => {
+    const summary = get().recentProjects.find((p) => p.workspace === workspace);
+    const openCompleted =
+      !!summary &&
+      (summary.completed || (!!summary.resultPath && !summary.resumable));
+
+    // Completed jobs are view-only — resume_project rejects them (not resumable).
+    if (openCompleted && summary?.resultPath) {
+      set({
+        screen: "processing",
+        inputPath: null,
+        workspace,
+        jobId: summary.jobId,
+        stages: freshStages().map((st) => ({ ...st, state: "done" as const, progress: 1 })),
+        logs: [],
+        notices: [],
+        pipelineChips: { export: "Export: ready" },
+        cameras: [],
+        registeredCameras: 0,
+        totalCameras: 0,
+        trackingConfidence: 0,
+        liveTrackingStatus: "off",
+        latestSplatPath: summary.resultPath,
+        latestIter: summary.latestIter,
+        totalSteps: summary.totalSteps,
+        splatCount: 0,
+        resultPath: summary.resultPath,
+        jobError: null,
+        elapsedSecs: null,
+        jobStartedAt: 0,
+        meshStatus: null,
+        jobSettingsSnapshot: null,
+        sparseCloudPath: null,
+        denseCloudPath: null,
+        latestMeshPath: null,
+        sparsePointCount: 0,
+        densePointCount: 0,
+        ingestFrameCount: 0,
+        ingestPath: [],
+      });
+      return;
+    }
+
     set({
       screen: "processing",
       inputPath: null,
@@ -1096,6 +1454,7 @@ export const useStore = create<AppStore>((set, get) => ({
       registeredCameras: 0,
       totalCameras: 0,
       trackingConfidence: 0,
+      liveTrackingStatus: get().resolved?.liveInit ? "starting" : "off",
       latestSplatPath: null,
       latestIter: 0,
       totalSteps: 0,
@@ -1138,6 +1497,7 @@ export const useStore = create<AppStore>((set, get) => ({
       registeredCameras: 0,
       totalCameras: 0,
       trackingConfidence: 0,
+      liveTrackingStatus: get().resolved?.liveInit ? "starting" : "off",
       latestSplatPath: null,
       latestIter: 0,
       totalSteps: 0,
@@ -1224,6 +1584,10 @@ export const useStore = create<AppStore>((set, get) => ({
       resultPath: null,
       workspace: null,
       cameras: [],
+      registeredCameras: 0,
+      totalCameras: 0,
+      trackingConfidence: 0,
+      liveTrackingStatus: "off",
       notices: [],
       pipelineChips: {},
       meshStatus: null,
@@ -1277,11 +1641,21 @@ export const useStore = create<AppStore>((set, get) => ({
           else if (/^Trainer:/i.test(msg)) chips.trainer = msg;
           else if (/^Flood:/i.test(msg)) chips.flood = msg;
           else if (/^Export:/i.test(msg)) chips.export = msg;
-          return { notices: [...s.notices, msg], pipelineChips: chips };
+          let liveTrackingStatus = s.liveTrackingStatus;
+          if (/live camera tracking is on/i.test(msg)) liveTrackingStatus = "starting";
+          else if (/live tracking degraded/i.test(msg)) liveTrackingStatus = "degraded";
+          else if (/falling back to the batch camera solver/i.test(msg)) liveTrackingStatus = "fallback";
+          else if (/^Cameras:\s*Live tracking/i.test(msg)) liveTrackingStatus = "tracking";
+          return { notices: [...s.notices, msg], pipelineChips: chips, liveTrackingStatus };
         });
         break;
       case "camerasReset":
-        set({ cameras: [], registeredCameras: 0, trackingConfidence: 0 });
+        set({
+          cameras: [],
+          registeredCameras: 0,
+          trackingConfidence: 0,
+          liveTrackingStatus: get().resolved?.liveInit ? "starting" : "off",
+        });
         break;
       case "cameraRegistered":
         set((s) => ({
@@ -1289,6 +1663,12 @@ export const useStore = create<AppStore>((set, get) => ({
           registeredCameras: e.registered,
           totalCameras: e.total,
           trackingConfidence: e.confidence,
+          liveTrackingStatus:
+            s.liveTrackingStatus === "degraded"
+              ? "degraded"
+              : e.confidence < 0.35
+                ? "degraded"
+                : "tracking",
         }));
         break;
       case "ingestPreview":

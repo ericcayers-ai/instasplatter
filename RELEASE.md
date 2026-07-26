@@ -26,7 +26,7 @@ Drop a video file or a folder of images onto the window. On the first run the ap
 winget install ffmpeg
 ```
 
-Nothing else is required for reconstruction. There is no CUDA and no Python runtime; the trainer runs on any GPU that supports Vulkan, Metal or DirectX 12. Scientific flood (ANUGA/SWMM) is optional and not bundled in the installer.
+Nothing else is required for reconstruction. Brush trains on any GPU that supports Vulkan, Metal or DirectX 12. On NVIDIA machines with a working driver (`nvidia-smi`), first-run Install engines downloads the CUDA COLMAP build so GPU feature extraction and MVS enable automatically; without CUDA the app stays on the portable CPU COLMAP + Brush path.
 
 ## Multi-platform CI builds
 

@@ -10,12 +10,14 @@ import GeoWorkspace3D from "./GeoWorkspace3D";
 import { CesiumGlobe } from "./globe";
 import HydrographTimeline from "./HydrographTimeline";
 import { PreviewBadge } from "./PreviewBadge";
+import { demAuthorityLabel, isGeoTiffPath } from "./demAuthority";
 
 /**
  * Geospatial suite viewport: default 3D ENU, optional 2D MapLibre, optional Cesium Globe.
  */
 export default function GeoViewport() {
   const enqueueJobs = useStore((s) => s.enqueueJobs);
+  const stageUserGeoTiff = useStore((s) => s.stageUserGeoTiffDem);
   const queueItems = useStore((s) => s.queueItems);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const preview = useStore((s) => s.geoPreview);
@@ -59,15 +61,24 @@ export default function GeoViewport() {
     });
     if (!sel) return;
     const paths = Array.isArray(sel) ? sel : [sel];
-    if (paths.length) void enqueueJobs(paths, "geospatial");
+    if (!paths.length) return;
+
+    const tiffs = paths.filter(isGeoTiffPath);
+    const others = paths.filter((p) => !isGeoTiffPath(p));
+
+    // GeoTIFF → stage as DEM bed (prepareGeoDem + sample), not a dead queue placeholder.
+    if (tiffs.length) {
+      void stageUserGeoTiff(tiffs[0]);
+      if (tiffs.length > 1) void enqueueJobs(tiffs.slice(1), "geospatial");
+    }
+    if (others.length) void enqueueJobs(others, "geospatial");
   };
 
-  const authority =
-    scientific?.mode === "anuga" && !dem?.synthetic
-      ? "Scientific"
-      : scientific?.mode === "demo" || dem?.synthetic
-        ? "Demo"
-        : "Live preview";
+  const authority = demAuthorityLabel({
+    scientificMode: scientific?.mode,
+    demSynthetic: dem?.synthetic,
+    demBedSource: dem?.bedSource,
+  });
 
   const is2d = viewMode === "2d";
   const isGlobe = viewMode === "globe";
@@ -129,8 +140,9 @@ export default function GeoViewport() {
           {showImport && (
             <div className="pointer-events-auto float-in rounded border border-edge bg-panel/95 p-3 text-[11px] shadow-sm backdrop-blur-sm">
               <p className="leading-relaxed text-ink-dim">
-                Import GeoTIFF, LAS/LAZ, GeoPackage, or drone imagery. Draw an AOI on the 2D satellite map,
-                scrub the live preview in the 3D ENU workspace or Globe, and run ANUGA from the scenario panel.
+                GeoTIFF / COG files stage as the DEM bed. LAS/LAZ, GeoPackage, or drone imagery open a
+                geospatial workspace. Draw an AOI on the 2D map, then run soft/HAND or ANUGA from the
+                scenario panel. OpenTopography needs an API key under Flood lab → Advanced.
               </p>
               {catalog && (
                 <div className="mt-2 space-y-1 text-ink-dim">

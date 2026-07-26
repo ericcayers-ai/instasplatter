@@ -9,18 +9,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Color, Entity, ImageryLayer, Rectangle, Viewer } from "cesium";
 import { useStore } from "../../state/store";
-import { aoiIsValid, domainFromAoi, type AoiWgs84 } from "../aoi";
+import { aoiIsValid, coarsenDomainDxFromPlan, domainFromAoi, type AoiWgs84 } from "../aoi";
 import { FloodPreviewEngine } from "../preview";
 import { PreviewBadge } from "../PreviewBadge";
 import { captureGlobeLookAt, flyGlobeToContext } from "./cameraSync";
-import { applyFloodOverlay, clearFloodOverlay } from "./floodOverlay";
+import { applyFloodOverlay, applyDemReliefOverlay, clearFloodOverlay, clearDemReliefOverlay, scheduleIdleWork } from "./floodOverlay";
 import { createGlobeImageryProvider, globeImageryAttribution } from "./imagery";
 import { applyCesiumIonPolicy, blankCesiumIon } from "./ion";
 import {
+  getDemHeightmap,
   getLocalDemTerrainUrl,
   resolveGlobeTerrain,
   subscribeLocalDemTerrainUrl,
 } from "./terrain";
+import { demAuthorityLabel } from "../demAuthority";
 
 const UI_THROTTLE_MS = 100;
 const FLOOD_OVERLAY_MS = 180;
@@ -50,10 +52,12 @@ export default function CesiumGlobe() {
   const viewerRef = useRef<Viewer | null>(null);
   const engineRef = useRef<FloodPreviewEngine | null>(null);
   const floodCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const demCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const baseLayerRef = useRef<ImageryLayer | null>(null);
   const readyRef = useRef(false);
   const lastFloodPush = useRef(0);
   const floodTimer = useRef<number | null>(null);
+  const demReliefCancel = useRef<(() => void) | null>(null);
   const playingLocal = useRef(false);
 
   const aoi = useStore((s) => s.geoAoiWgs84);
@@ -84,13 +88,14 @@ export default function CesiumGlobe() {
     !!layers.find((l) => l.id === "flood_depth")?.visible ||
     !!layers.find((l) => l.id === "flood_hazard")?.visible;
   const floodOpacity = layers.find((l) => l.id === "flood_depth")?.opacity ?? 0.72;
+  const demVisible = !!layers.find((l) => l.id === "dtm")?.visible;
+  const demOpacity = layers.find((l) => l.id === "dtm")?.opacity ?? 0.9;
 
-  const authority =
-    scientific?.mode === "anuga" && !demProduct?.synthetic
-      ? "Scientific"
-      : scientific?.mode === "demo" || demProduct?.synthetic
-        ? "Demo"
-        : "Live preview";
+  const authority = demAuthorityLabel({
+    scientificMode: scientific?.mode,
+    demSynthetic: demProduct?.synthetic,
+    demBedSource: demProduct?.bedSource,
+  });
 
   // Create Viewer once.
   useEffect(() => {
@@ -125,6 +130,7 @@ export default function CesiumGlobe() {
         creditContainer: creditHost,
       });
     } catch (err) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- error handling in init effect
       setGlobeError(err instanceof Error ? err.message : String(err));
       return;
     }
@@ -139,6 +145,8 @@ export default function CesiumGlobe() {
 
     const floodCanvas = document.createElement("canvas");
     floodCanvasRef.current = floodCanvas;
+    const demCanvas = document.createElement("canvas");
+    demCanvasRef.current = demCanvas;
 
     const reducedMotion = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     const low = useStore.getState().geoFloodLowPower;
@@ -160,6 +168,7 @@ export default function CesiumGlobe() {
     void resolveGlobeTerrain({
       experimental: !!useStore.getState().resolved?.experimentalMode,
       terrainUrlOverride: getLocalDemTerrainUrl(),
+      heightmapOverride: getDemHeightmap(),
     }).then((t) => {
       if (viewer.isDestroyed()) return;
       viewer.terrainProvider = t.provider;
@@ -171,6 +180,7 @@ export default function CesiumGlobe() {
       void resolveGlobeTerrain({
         experimental: !!useStore.getState().resolved?.experimentalMode,
         terrainUrlOverride: getLocalDemTerrainUrl(),
+        heightmapOverride: getDemHeightmap(),
       }).then((t) => {
         if (viewer.isDestroyed()) return;
         viewer.terrainProvider = t.provider;
@@ -206,13 +216,17 @@ export default function CesiumGlobe() {
       unsubTerrain();
       readyRef.current = false;
       if (floodTimer.current != null) window.clearTimeout(floodTimer.current);
+      demReliefCancel.current?.();
+      demReliefCancel.current = null;
       captureGlobeLookAt(viewer);
       engine.destroy();
       engineRef.current = null;
       floodCanvasRef.current = null;
+      demCanvasRef.current = null;
       baseLayerRef.current = null;
       if (!viewer.isDestroyed()) {
         clearFloodOverlay(viewer);
+        clearDemReliefOverlay(viewer);
         viewer.destroy();
       }
       viewerRef.current = null;
@@ -220,7 +234,6 @@ export default function CesiumGlobe() {
       setGeoPreview(null);
     };
     // Mount once for Viewer lifetime.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setGeoPreview]);
 
   // Experimental / ion / terrain policy when Experimental toggles.
@@ -231,6 +244,7 @@ export default function CesiumGlobe() {
     void resolveGlobeTerrain({
       experimental,
       terrainUrlOverride: getLocalDemTerrainUrl(),
+      heightmapOverride: getDemHeightmap(),
     }).then((t) => {
       if (viewer.isDestroyed()) return;
       viewer.terrainProvider = t.provider;
@@ -262,45 +276,43 @@ export default function CesiumGlobe() {
     ensureAoiEntity(viewer, aoi);
     flyGlobeToContext(viewer, aoi);
 
+    let cancelCatchUp: (() => void) | undefined;
     if (aoiIsValid(aoi)) {
-      const domain = domainFromAoi(aoi, lowPower);
       const plan = useStore.getState().geoExtentPlan;
-      if (plan?.previewCellM && plan.previewCellM > 0) {
-        domain.dxM = Math.max(4, plan.previewCellM);
-        domain.cols = Math.max(
-          24,
-          Math.round(
-            ((aoi[2] - aoi[0]) *
-              111320 *
-              Math.cos((((aoi[1] + aoi[3]) / 2) * Math.PI) / 180)) /
-              domain.dxM,
-          ),
-        );
-        domain.rows = Math.max(16, Math.round(((aoi[3] - aoi[1]) * 111320) / domain.dxM));
-      }
+      const domain = coarsenDomainDxFromPlan(domainFromAoi(aoi, lowPower), plan?.previewCellM);
       engine.rebindDomain(domain, useStore.getState().geoScenario?.durationHours);
-      const art = engine.seek(useStore.getState().geoFloodTime);
-      if (floodCanvasRef.current) {
-        void applyFloodOverlay(viewer, floodCanvasRef.current, art, floodVisible, floodOpacity);
-      }
-      setGeoPreview({
-        backend: art.frame.backend,
-        validation: art.frame.validation,
-        maxDepthM: art.frame.stats.maxDepthM,
-        wetFraction: art.frame.stats.wetFraction,
-        massM3: art.frame.stats.massM3,
-        maxSpeedMs: art.frame.stats.maxSpeedMs,
-        hazardClass: art.frame.stats.hazardClass,
-        cfl: art.frame.stats.cfl,
-      });
+      const pushArt = (art: ReturnType<FloodPreviewEngine["seek"]>) => {
+        if (floodCanvasRef.current && viewerRef.current) {
+          void applyFloodOverlay(
+            viewerRef.current,
+            floodCanvasRef.current,
+            art,
+            floodVisible,
+            floodOpacity,
+          );
+        }
+        setGeoPreview({
+          backend: art.frame.backend,
+          validation: art.frame.validation,
+          maxDepthM: art.frame.stats.maxDepthM,
+          wetFraction: art.frame.stats.wetFraction,
+          massM3: art.frame.stats.massM3,
+          maxSpeedMs: art.frame.stats.maxSpeedMs,
+          hazardClass: art.frame.stats.hazardClass,
+          cfl: art.frame.stats.cfl,
+        });
+      };
+      cancelCatchUp = engine.seekZeroThenCatchUp(() => useStore.getState().geoFloodTime, pushArt);
     } else {
       engine.clearBoundDomain();
       clearFloodOverlay(viewer);
+      clearDemReliefOverlay(viewer);
       setGeoPreview(null);
     }
+    return () => cancelCatchUp?.();
   }, [aoi, aoiRevision, lowPower, floodVisible, floodOpacity, setGeoPreview]);
 
-  // DEM samples → soft/HAND bed on Globe (GeoTIFF path; terrain tiles optional).
+  // DEM samples → soft/HAND bed on Globe (GeoTIFF path; heightmap terrain via store).
   useEffect(() => {
     const engine = engineRef.current;
     const viewer = viewerRef.current;
@@ -311,9 +323,17 @@ export default function CesiumGlobe() {
       rows: demSample.rows,
       bedSource: (demSample.bedSource as "real" | "synthetic" | "proxy") || "synthetic",
     });
-    if (engine.hasBoundDomain() && viewer && floodCanvasRef.current) {
-      const art = engine.seek(useStore.getState().geoFloodTime);
-      void applyFloodOverlay(viewer, floodCanvasRef.current, art, floodVisible, floodOpacity);
+    if (!engine.hasBoundDomain() || !viewer || !floodCanvasRef.current) return;
+    const pushArt = (art: ReturnType<FloodPreviewEngine["seek"]>) => {
+      if (floodCanvasRef.current && viewerRef.current) {
+        void applyFloodOverlay(
+          viewerRef.current,
+          floodCanvasRef.current,
+          art,
+          floodVisible,
+          floodOpacity,
+        );
+      }
       setGeoPreview({
         backend: art.frame.backend,
         validation: art.frame.validation,
@@ -324,8 +344,48 @@ export default function CesiumGlobe() {
         hazardClass: art.frame.stats.hazardClass,
         cfl: art.frame.stats.cfl,
       });
-    }
+    };
+    return engine.seekZeroThenCatchUp(() => useStore.getState().geoFloodTime, pushArt);
   }, [demSample, demRevision, floodVisible, floodOpacity, setGeoPreview]);
+
+  // DEM relief SingleTile drape (elevation tint + hillshade) — idle/async, capped grid.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !readyRef.current) return;
+
+    demReliefCancel.current?.();
+    demReliefCancel.current = null;
+
+    if (!demSample || !demVisible) {
+      clearDemReliefOverlay(viewer);
+      return;
+    }
+
+    const grid = {
+      cols: demSample.cols,
+      rows: demSample.rows,
+      bounds: demSample.bounds,
+      z: demSample.z,
+    };
+
+    demReliefCancel.current = scheduleIdleWork(() => {
+      if (!viewerRef.current || viewerRef.current.isDestroyed() || !demCanvasRef.current) {
+        return;
+      }
+      void applyDemReliefOverlay(
+        viewerRef.current,
+        demCanvasRef.current,
+        grid,
+        demVisible,
+        demOpacity,
+      );
+    }, 160);
+
+    return () => {
+      demReliefCancel.current?.();
+      demReliefCancel.current = null;
+    };
+  }, [demSample, demRevision, demVisible, demOpacity]);
 
   // Scrub / style → flood overlay (throttled).
   useEffect(() => {
@@ -442,7 +502,7 @@ export default function CesiumGlobe() {
   ]);
 
   return (
-    <div className="relative h-full min-h-0 w-full overflow-hidden bg-[#0a0c10]">
+    <div className="relative h-full min-h-0 w-full overflow-hidden bg-bg">
       <div ref={containerRef} className="absolute inset-0" data-testid="cesium-globe" />
 
       <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">

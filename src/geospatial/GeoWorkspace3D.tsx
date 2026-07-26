@@ -21,6 +21,7 @@ import {
   type ModelTransform,
 } from "./modelTransform";
 import type { Vec3 } from "./enu";
+import { demAuthorityLabel } from "./demAuthority";
 
 function applyTfToSplat(splat: SplatRenderer, tf: ModelTransform) {
   splat.setModelRotation(rotationToMat3(tf.rotation));
@@ -51,6 +52,7 @@ export default function GeoWorkspace3D() {
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const preview = useStore((s) => s.geoPreview);
   const scientific = useStore((s) => s.geoScientificRun);
+  const dem = useStore((s) => s.geoDemProduct);
   const workspace = useStore((s) => s.workspace);
   const latestSplatPath = useStore((s) => s.latestSplatPath);
   const resultPath = useStore((s) => s.resultPath);
@@ -106,6 +108,7 @@ export default function GeoWorkspace3D() {
       splatRef.current = splat;
       scene.attachSplat(splat);
     } catch {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- error handling in init effect
       setSplatStatus("WebGL2 splat overlay unavailable");
     }
 
@@ -451,12 +454,11 @@ export default function GeoWorkspace3D() {
     schedulePersist(tf);
   };
 
-  const authority =
-    scientific?.mode === "anuga"
-      ? "Scientific"
-      : scientific?.mode === "demo"
-        ? "Demo"
-        : "Live preview";
+  const authority = demAuthorityLabel({
+    scientificMode: scientific?.mode,
+    demSynthetic: dem?.synthetic,
+    demBedSource: dem?.bedSource,
+  });
 
   return (
     <div className="geo-workspace-3d relative h-full w-full min-h-0" data-water-style={waterStyle}>

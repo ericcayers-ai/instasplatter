@@ -121,6 +121,9 @@ impl Settings {
 }
 
 /// Fully-resolved parameters actually used by a pipeline run.
+///
+/// Newer fields use field-level `serde(default = …)` so older `project.json`
+/// manifests still load — otherwise complete jobs vanish from Recent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedSettings {
@@ -139,21 +142,34 @@ pub struct ResolvedSettings {
     pub progressive_resolution: bool,
     pub mip_filter: bool,
     pub live_init: bool,
+    #[serde(default = "default_true")]
     pub dense_init: bool,
+    #[serde(default = "default_true")]
     pub use_neural_init: bool,
+    #[serde(default)]
     pub allow_research_sidecars: bool,
     /// Active Experimental Mode (requires license ack).
+    #[serde(default)]
     pub experimental_mode: bool,
+    #[serde(default)]
     pub experimental_license_acked: bool,
+    #[serde(default = "default_true")]
     pub post_polish: bool,
     /// Resolved trainer engine: "brush" or "gsplat".
+    #[serde(default = "default_trainer")]
     pub trainer: String,
+    #[serde(default = "default_gsplat_strategy")]
     pub gsplat_strategy: String,
+    #[serde(default)]
     pub gsplat_absgrad: bool,
+    #[serde(default = "default_true")]
     pub gsplat_antialiased: bool,
+    #[serde(default = "default_true")]
     pub gsplat_appearance: bool,
+    #[serde(default = "default_true")]
     pub gsplat_bilateral_grid: bool,
     /// RoMa densify quality: "fast" | "base" | "high" | "precise".
+    #[serde(default = "default_roma_quality")]
     pub roma_quality: String,
     pub strictness: f32,
     pub export_format: String,
@@ -162,6 +178,19 @@ pub struct ResolvedSettings {
     pub opac_loss_weight: f64,
     pub scale_loss_weight: f64,
     pub mean_noise_weight: f64,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_trainer() -> String {
+    "brush".into()
+}
+fn default_gsplat_strategy() -> String {
+    "mcmc".into()
+}
+fn default_roma_quality() -> String {
+    "fast".into()
 }
 
 pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettings {
@@ -546,5 +575,38 @@ mod tests {
             &profile(),
         );
         assert!(!def_off.gsplat_absgrad);
+    }
+
+    #[test]
+    fn applying_a_preset_clears_owned_overrides_in_resolve() {
+        // Mimics the frontend applyPresetPatch: set preset and null out owned knobs.
+        let s = Settings {
+            preset: Some("draft".into()),
+            max_frames: None,
+            max_resolution: None,
+            total_steps: None,
+            max_splats: None,
+            sh_degree: None,
+            export_every: None,
+            refine_every: None,
+            ..Default::default()
+        };
+        let r = resolve(&s, &profile());
+        assert_eq!(r.preset, Preset::Draft);
+        assert_eq!(r.total_steps, Preset::Draft.params().total_steps);
+        assert_eq!(r.max_frames, Preset::Draft.params().max_frames);
+
+        // Stale overrides must not stick when the user re-picks a preset
+        // without clearing — resolve still honours explicit values, which is
+        // why the UI clears them on apply.
+        let stale = Settings {
+            preset: Some("draft".into()),
+            max_frames: Some(999),
+            total_steps: Some(99_000),
+            ..Default::default()
+        };
+        let stuck = resolve(&stale, &profile());
+        assert_eq!(stuck.max_frames, 999);
+        assert_eq!(stuck.total_steps, 99_000);
     }
 }

@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; worker-src 'self' blob:; frame-src 'self'; media-src 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$LOCALDATA/InstaSplatter/**"]
@@ -34,6 +34,14 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "appimage", "deb", "dmg"],
-    "icon": ["icons/icon.ico", "icons/icon.png"]
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "resources": {
+      "../tools/sidecars/*": "sidecars/"
+    },
+    "copyright": "Copyright 2026 Eric Ayers",
+    "category": "DeveloperTool",
+    "shortDescription": "Dual-suite Gaussian splatting and geospatial flood analysis",
+    "longDescription": "InstaSplatter turns ordinary captures into photorealistic 3D Gaussian splats, then into metrically georeferenced maps with scientific and preview flood runs. Zero-config by default. All processing runs locally.",
+    "publisher": "InstaSplatter"
   }
 }

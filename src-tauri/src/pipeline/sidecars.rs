@@ -165,16 +165,20 @@ fn sidecars_dir() -> PathBuf {
     app_data_dir().join("engines").join("sidecars")
 }
 
-/// Engines first, then repo `tools/sidecars` (dev / unpackaged installs).
+/// User enginedir first, then bundled resources, then repo `tools/sidecars` (dev).
 fn sidecar_search_dirs(name: &str) -> Vec<PathBuf> {
-    vec![
+    let mut dirs = vec![
         sidecars_dir().join(name),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("tools")
             .join("sidecars")
             .join(name),
-    ]
+    ];
+    if let Some(bundled) = crate::bundled_sidecars_path(name) {
+        dirs.push(bundled);
+    }
+    dirs
 }
 
 fn launcher_in_dir(dir: &Path) -> Option<PathBuf> {
@@ -595,7 +599,16 @@ pub async fn maybe_refine_poses_with_colmap(
         // Extract features so BA can run — guaranteed path after neural init.
         ctx.log("Building COLMAP feature DB for post-neural bundle adjustment…");
         let db_s = db.to_string_lossy().into_owned();
-        let gpu = if ctx.settings.sift_gpu { "1" } else { "0" };
+        let gpu = if ctx.settings.sift_gpu && crate::engines::colmap_is_cuda() {
+            "1"
+        } else {
+            if ctx.settings.sift_gpu && !crate::engines::colmap_is_cuda() {
+                ctx.log(
+                    "Post-neural BA: CUDA COLMAP not installed — extracting features on CPU.",
+                );
+            }
+            "0"
+        };
         if let Err(e) = super::colmap::run_colmap_pub(
             ctx,
             (0.62, 0.70),

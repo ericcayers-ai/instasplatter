@@ -14,6 +14,8 @@ pub mod hydro;
 pub mod hydro_adapters;
 pub mod preview;
 pub mod registration;
+pub mod sat_splat;
+pub mod splat_dem;
 pub mod transforms;
 
 use std::path::Path;

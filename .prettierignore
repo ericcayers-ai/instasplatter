@@ -1,0 +1,8 @@
+dist/
+node_modules/
+src-tauri/
+_refs/
+graphify-out/
+release-out/
+docs/
+*.md

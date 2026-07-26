@@ -144,6 +144,13 @@ fn detect_nvidia() -> Option<(String, u64)> {
     Some((name.trim().to_string(), vram))
 }
 
+/// True when the NVIDIA driver stack answers (`nvidia-smi`). That is the
+/// practical gate for CUDA COLMAP / gsplat — a WMI-only NVIDIA name without a
+/// working driver is not enough to enable GPU feature extraction.
+pub fn cuda_driver_available() -> bool {
+    detect_nvidia().is_some()
+}
+
 fn detect_gpu_wmi() -> Option<String> {
     let out = hidden_command("powershell")
         .args([
@@ -201,11 +208,22 @@ pub fn profile() -> HardwareProfile {
         .map(|c| c.brand().trim().to_string())
         .unwrap_or_else(|| "Unknown CPU".into());
 
+    // Prefer nvidia-smi (driver + CUDA usable). Fall back to WMI for naming
+    // only — an NVIDIA name without nvidia-smi means drivers are missing.
     let (gpu_name, vram_mb, has_cuda) = if let Some((name, vram)) = detect_nvidia() {
         (name, vram, true)
     } else if let Some(name) = detect_gpu_wmi() {
-        // VRAM via WMI is unreliable (32-bit clamp); estimate unknown as 4GB class.
-        (name, 4_096, false)
+        let vendor = vendor_of(&name);
+        let nvidia_without_driver = vendor == GpuVendor::Nvidia;
+        (
+            if nvidia_without_driver {
+                format!("{name} (NVIDIA driver / nvidia-smi not available)")
+            } else {
+                name
+            },
+            4_096,
+            false,
+        )
     } else {
         ("Unknown GPU".to_string(), 0, false)
     };
@@ -222,5 +240,26 @@ pub fn profile() -> HardwareProfile {
         cpu_threads,
         ram_mb,
         auto_preset: auto,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vendor_detects_common_nvidia_names() {
+        assert_eq!(vendor_of("NVIDIA GeForce RTX 4060"), GpuVendor::Nvidia);
+        assert_eq!(vendor_of("GeForce GTX 1080"), GpuVendor::Nvidia);
+        assert_eq!(vendor_of("AMD Radeon RX 6800"), GpuVendor::Amd);
+        assert_eq!(vendor_of("Intel Arc A770"), GpuVendor::Intel);
+    }
+
+    #[test]
+    fn auto_preset_scales_with_vram() {
+        assert_eq!(auto_preset(GpuVendor::Nvidia, 4_000, 32_000), Preset::Balanced);
+        assert_eq!(auto_preset(GpuVendor::Nvidia, 8_000, 32_000), Preset::High);
+        assert_eq!(auto_preset(GpuVendor::Nvidia, 16_000, 32_000), Preset::Max);
+        assert_eq!(auto_preset(GpuVendor::Unknown, 16_000, 32_000), Preset::Draft);
     }
 }

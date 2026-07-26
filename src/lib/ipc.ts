@@ -105,6 +105,8 @@ export interface ResolvedSettings {
 
 export interface EngineStatus {
   colmap: boolean;
+  /** True when the installed COLMAP build is the CUDA variant. */
+  colmapCuda: boolean;
   brush: boolean;
   brushCustom: boolean;
   ffmpeg: boolean;
@@ -284,6 +286,17 @@ export interface DemSampleGrid {
   bedSource: string;
   notes: string[];
   sourcePath?: string | null;
+}
+
+export interface SatSplatProduct {
+  path: string;
+  points: number;
+  cols: number;
+  rows: number;
+  aoiWgs84: [number, number, number, number];
+  demSource: string;
+  imagerySource?: string | null;
+  notes: string[];
 }
 
 export interface CatalogFetchOpts {
@@ -490,7 +503,10 @@ export const api = {
   getResolvedSettings: () => invoke<ResolvedSettings>("get_resolved_settings"),
   getEngineStatus: () => invoke<EngineStatus>("get_engine_status"),
   installEngines: () => invoke<EngineStatus>("install_engines"),
+  stageImageSelection: (paths: string[]) =>
+    invoke<string>("stage_image_selection", { paths }),
   getAutostart: () => invoke<string | null>("get_autostart"),
+  takeOpenWorkspace: () => invoke<string | null>("take_open_workspace"),
 
   getSuite: () => invoke<Suite>("get_suite"),
   setSuite: (suite: Suite) => invoke<Suite>("set_suite", { suite }),
@@ -542,6 +558,34 @@ export const api = {
       cols,
       rows,
       aoiWgs84: aoiWgs84 ?? null,
+    }),
+
+  /** Rasterize registered splat → proxy DEM GeoTIFF → stage flood DTM (non-authoritative). */
+  generateSplatDem: (
+    workspace: string,
+    opts?: {
+      aoiWgs84?: [number, number, number, number] | null;
+      cellSizeM?: number | null;
+    },
+  ) =>
+    invoke<DemProduct>("generate_splat_dem", {
+      workspace,
+      aoiWgs84: opts?.aoiWgs84 ?? null,
+      cellSizeM: opts?.cellSizeM ?? null,
+    }),
+
+  /** Generate a Gaussian splat for any AOI from public elevation + imagery catalogs — no capture required. */
+  generateSatSplat: (
+    workspace: string,
+    aoiWgs84: [number, number, number, number],
+    opts?: { cellSizeM?: number | null; gridCols?: number | null; gridRows?: number | null },
+  ) =>
+    invoke<SatSplatProduct>("generate_sat_splat", {
+      workspace,
+      aoiWgs84,
+      cellSizeM: opts?.cellSizeM ?? null,
+      gridCols: opts?.gridCols ?? null,
+      gridRows: opts?.gridRows ?? null,
     }),
 
   getFloodEngineStatus: () => invoke<FloodEngineStatus>("get_flood_engine_status"),

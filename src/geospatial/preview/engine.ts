@@ -23,7 +23,7 @@ import {
   resolveDomain,
   softStep,
 } from "./softSolver";
-import { handInundate, handStageFromTime01 } from "./handInundation";
+import { handInundate, handStageFromTime01, MAX_HAND_SEARCH_RADIUS } from "./handInundation";
 import type {
   PreviewBackend,
   PreviewCapabilities,
@@ -87,7 +87,6 @@ export class FloodPreviewEngine {
   private keyframes: GridState[] = [];
   private keyframeEveryS: number;
 
-  private ready = false;
   private initPromise: Promise<void>;
   private bound = false;
 
@@ -232,7 +231,6 @@ export class FloodPreviewEngine {
   private async initAccelerator(): Promise<void> {
     this.accelerator = await createGpuAccelerator(this.capabilities.preferredBackend);
     this.backend = this.accelerator.kind;
-    this.ready = true;
     this.captureKeyframe();
     this.emit();
   }
@@ -311,6 +309,7 @@ export class FloodPreviewEngine {
       const stage = handStageFromTime01(targetS / this.durationS, this.handPeakStageM);
       const hand = handInundate(this.display.z, this.display.cols, this.display.rows, {
         stageM: stage,
+        searchRadius: MAX_HAND_SEARCH_RADIUS,
       });
       const n = this.display.cols * this.display.rows;
       for (let i = 0; i < n; i++) {
@@ -323,6 +322,45 @@ export class FloodPreviewEngine {
     this.lastStats = computeStats(this.display, this.lastDt, this.lastCfl);
     this.runCompare();
     return this.emit();
+  }
+
+  /**
+   * After AOI/DEM rebind: paint t=0 immediately, then catch up to `getT01()` on
+   * rAF + idle so soft-steps + HAND do not freeze the main thread synchronously.
+   * Returns a cancel function for effect cleanup.
+   */
+  seekZeroThenCatchUp(
+    getT01: () => number,
+    onArtifacts: (art: PreviewRenderArtifacts) => void,
+  ): () => void {
+    onArtifacts(this.seek(0));
+    const target = Math.max(0, Math.min(1, getT01()));
+    if (target <= 1e-4) return () => {};
+
+    let cancelled = false;
+    let idleId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const rafId = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const run = () => {
+        if (cancelled || !this.bound) return;
+        onArtifacts(this.seek(getT01()));
+      };
+      if (typeof requestIdleCallback === "function") {
+        idleId = requestIdleCallback(run, { timeout: 250 });
+      } else {
+        timeoutId = setTimeout(run, 0);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      if (idleId != null && typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(idleId);
+      }
+      if (timeoutId != null) clearTimeout(timeoutId);
+    };
   }
 
   /** Advance one display tick while playing (scenario seconds). */

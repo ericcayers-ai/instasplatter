@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { SplatRenderer } from "../splat/renderer";
-import { orbitBasis, type Vec3 } from "../splat/camera";
+import { orbitBasis, smoothPolyline, type Vec3 } from "../splat/camera";
 import { parseMeshWirePly, parseXyzRgbPly } from "../splat/xyzrgb";
 import { api } from "../lib/ipc";
 import { useStore } from "../state/store";
@@ -92,6 +92,7 @@ export default function Viewport() {
   const loadedMeshRef = useRef<string | null>(null);
   const firstLoadRef = useRef(true);
   const drawnCamerasRef = useRef(0);
+  const [webglError, setWebglError] = useState<string | null>(null);
 
   const latestSplatPath = useStore((s) => s.latestSplatPath);
   const setSplatCount = useStore((s) => s.setSplatCount);
@@ -111,16 +112,23 @@ export default function Viewport() {
 
   useEffect(() => {
     if (!canvasRef.current) return;
-    const r = new SplatRenderer(canvasRef.current);
-    r.attachControls();
-    r.autoOrbit = true;
-    r.onStats = (n) => setSplatCount(n);
-    r.onFps = (n) => setFps(n);
-    rendererRef.current = r;
-    return () => {
-      r.dispose();
-      rendererRef.current = null;
-    };
+    try {
+      const r = new SplatRenderer(canvasRef.current);
+      r.attachControls();
+      r.autoOrbit = true;
+      r.onStats = (n) => setSplatCount(n);
+      r.onFps = (n) => setFps(n);
+      rendererRef.current = r;
+      return () => {
+        r.dispose();
+        rendererRef.current = null;
+      };
+    } catch {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- error handling in init effect
+      setWebglError(
+        "WebGL2 is not available on this device. The 3D viewport requires a GPU with WebGL2 support.",
+      );
+    }
   }, [setSplatCount, setFps]);
 
   // New job: drop previous stage layers.
@@ -161,8 +169,10 @@ export default function Viewport() {
     }
     drawnCamerasRef.current = cameras.length;
     // Prefer real camera apexes for the path once SfM starts streaming.
+    // Bézier-smooth so the frustum path and flythrough feel continuous.
     if (cameras.length >= 2) {
-      r.setCameraPath(cameras.map((c) => c.apex as Vec3));
+      const apexes = cameras.map((c) => c.apex as Vec3);
+      r.setCameraPath(smoothPolyline(apexes, { samplesPerSegment: 8 }));
     }
   }, [cameras]);
 
@@ -171,7 +181,7 @@ export default function Viewport() {
     if (!r) return;
     if (cameras.length >= 2) return;
     if (ingestPath.length >= 2) {
-      r.setCameraPath(ingestPath as Vec3[]);
+      r.setCameraPath(smoothPolyline(ingestPath as Vec3[], { samplesPerSegment: 6 }));
     } else {
       r.clearCameraPath();
     }
@@ -313,12 +323,26 @@ export default function Viewport() {
 
   const hasModel = latestSplatPath !== null;
 
+  if (webglError) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-bg p-8">
+        <div role="alert" className="max-w-sm text-center">
+          <h3 className="mb-2 text-sm font-semibold text-ink">Viewport unavailable</h3>
+          <p className="text-xs text-ink-dim">{webglError}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative h-full w-full">
       <canvas
         ref={canvasRef}
         className="h-full w-full cursor-grab active:cursor-grabbing"
         style={{ touchAction: "none" }}
+        aria-label="3D reconstruction viewport — use mouse to orbit, pan, and zoom"
+        tabIndex={0}
+        role="img"
       />
 
       <AxisGizmo rendererRef={rendererRef} />
@@ -334,9 +358,11 @@ export default function Viewport() {
           <button
             onClick={() => setOrientOpen((v) => !v)}
             className="flex items-center justify-between text-ink-dim hover:text-ink"
+            aria-label={orientOpen ? "Hide model orientation" : "Show model orientation"}
+            aria-expanded={orientOpen}
           >
             <span>Model orientation</span>
-            <span>{orientOpen ? "-" : "+"}</span>
+            <span aria-hidden>{orientOpen ? "\u25BC" : "\u25B6"}</span>
           </button>
           {orientOpen && (
             <>

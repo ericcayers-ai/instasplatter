@@ -373,6 +373,9 @@ fn find_dem_candidate(workspace: &Path) -> Option<PathBuf> {
             1
         } else if n.contains("copernicus") || n.contains("glo30") || n.contains("dsm_cog") {
             2
+        } else if n.contains("splat_dem") {
+            // Proxy reconstruction bed — prefer catalog / user GeoTIFF when both exist.
+            4
         } else {
             3
         };
@@ -425,6 +428,11 @@ pub fn sample_dem_grid(
                 Ok((w, h, data, nodata)) => {
                     let b = aoi.unwrap_or([-180.0, -90.0, 180.0, 90.0]);
                     let sampled = resample_raw(&data, w, h, cols, rows, nodata);
+                    let bed = if is_splat_proxy_dem(&derived, src) {
+                        "proxy"
+                    } else {
+                        "real"
+                    };
                     let _ = write_preview_json(
                         &derived,
                         cols,
@@ -432,7 +440,7 @@ pub fn sample_dem_grid(
                         b,
                         &sampled,
                         false,
-                        "real",
+                        bed,
                         Some(src),
                     );
                     return Ok(DemSampleGrid {
@@ -441,9 +449,9 @@ pub fn sample_dem_grid(
                         bounds: b,
                         z: sampled,
                         synthetic: false,
-                        bed_source: "real".into(),
+                        bed_source: bed.into(),
                         notes: vec![format!(
-                            "Sampled {}×{} bed from staged DEM {}",
+                            "Sampled {}×{} bed from staged DEM {} ({bed})",
                             cols,
                             rows,
                             src.display()
@@ -669,6 +677,27 @@ fn read_aoi_from_meta(derived: &Path) -> Option<[f64; 4]> {
         a[2].as_f64()?,
         a[3].as_f64()?,
     ])
+}
+
+/// True when staged DEM came from splat→DEM (proxy / non-authoritative).
+fn is_splat_proxy_dem(derived: &Path, staged: &Path) -> bool {
+    if derived.join("splat_dem.meta.json").exists() {
+        return true;
+    }
+    let name = staged
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name.contains("splat_dem") {
+        return true;
+    }
+    if let Ok(text) = fs::read_to_string(derived.join("dtm_flood.meta.json")) {
+        if text.to_ascii_lowercase().contains("splat_dem") {
+            return true;
+        }
+    }
+    false
 }
 
 fn resample_grid(src: &DemSampleGrid, cols: u32, rows: u32, bounds: [f64; 4]) -> DemSampleGrid {

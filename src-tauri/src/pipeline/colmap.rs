@@ -117,7 +117,20 @@ pub async fn run_sfm_with_options(
     let db_s = db.to_string_lossy().into_owned();
     let img_s = images_dir.to_string_lossy().into_owned();
     let sparse_s = sparse.to_string_lossy().into_owned();
-    let gpu = if ctx.settings.sift_gpu { "1" } else { "0" };
+    let gpu = if ctx.settings.sift_gpu {
+        if crate::engines::colmap_is_cuda() {
+            "1"
+        } else {
+            ctx.notice(
+                "GPU feature extraction needs the CUDA COLMAP build. \
+                 Using CPU extraction for this run. Re-install engines on an NVIDIA machine \
+                 (or click Install engines) to enable CUDA.",
+            );
+            "0"
+        }
+    } else {
+        "0"
+    };
 
     // 1) Feature extraction. Single shared camera: frames come from one
     //    device in the common case; COLMAP still refines per-image poses.

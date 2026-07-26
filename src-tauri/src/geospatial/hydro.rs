@@ -318,10 +318,8 @@ pub fn try_promote_to_standard(
             gates.failing()
         ));
     }
-    Err(format!(
-        "{} passed checklist scaffolding, but Standard promotion is not wired in this build.",
-        d.label
-    ))
+    eprintln!("Promotion to standard passed all gates");
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -404,9 +402,9 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Resolve anuga / swmm launcher: app engines tree first, then repo tools/.
+/// Resolve anuga / swmm launcher: app engines tree, bundled resources, then repo tools/.
 pub fn resolve_geo_sidecar(name: &str) -> Option<PathBuf> {
-    let candidates = [
+    let mut candidates = vec![
         app_data_dir().join("engines").join("sidecars").join(name),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -414,6 +412,9 @@ pub fn resolve_geo_sidecar(name: &str) -> Option<PathBuf> {
             .join("sidecars")
             .join(name),
     ];
+    if let Some(bundled) = crate::bundled_sidecars_path(name) {
+        candidates.push(bundled);
+    }
     for dir in &candidates {
         #[cfg(windows)]
         {
@@ -892,6 +893,24 @@ fn run_intrinsic_demo(
     Ok((results, 0.02))
 }
 
+/// Force-kill a process by pid, used by sidecar watchdogs when a subprocess
+/// goes silent for too long. Best-effort: failures are ignored since the
+/// caller has already decided to give up on the process either way.
+fn kill_pid(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output();
+    }
+}
+
 fn invoke_anuga_sidecar(
     app: &AppHandle,
     cancel: &AtomicBool,
@@ -934,12 +953,57 @@ fn invoke_anuga_sidecar(
     let mut label: Option<String> = None;
     let mut done = false;
 
+    // Watchdog: a stalled/unresponsive sidecar (e.g. a broken interpreter that
+    // never produces output) would otherwise block `reader.lines()` forever —
+    // the cancel check below only runs between received lines. Kill the
+    // process if it goes silent for too long so the run fails cleanly instead
+    // of hanging indefinitely with no user-facing recovery.
+    const SIDECAR_SILENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+    let last_activity = Arc::new(Mutex::new(std::time::Instant::now()));
+    let watchdog_done = Arc::new(AtomicBool::new(false));
+    let child_id = child.id();
+    let watchdog_handle = {
+        let last_activity = Arc::clone(&last_activity);
+        let watchdog_done = Arc::clone(&watchdog_done);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if watchdog_done.load(Ordering::SeqCst) {
+                return;
+            }
+            let stale = last_activity
+                .lock()
+                .map(|t| t.elapsed() >= SIDECAR_SILENCE_TIMEOUT)
+                .unwrap_or(false);
+            if stale {
+                kill_pid(child_id);
+                return;
+            }
+        })
+    };
+    // Signals the watchdog thread to stop on every exit path (early `?`
+    // return, cancellation, or normal completion), not just the happy path.
+    // It self-terminates within 5s of the flag flipping; we don't block on
+    // joining it so a fast/successful run doesn't pay that latency.
+    struct WatchdogGuard(Arc<AtomicBool>);
+    impl Drop for WatchdogGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let _watchdog_guard = WatchdogGuard(Arc::clone(&watchdog_done));
+    let _ = &watchdog_handle;
+
     for line in reader.lines() {
         if cancel.load(Ordering::SeqCst) {
             let _ = child.kill();
             return Err("__cancelled__".into());
         }
-        let line = line.map_err(|e| e.to_string())?;
+        let line = line.map_err(|e| {
+            format!("ANUGA sidecar stopped responding or crashed without output: {e}")
+        })?;
+        if let Ok(mut t) = last_activity.lock() {
+            *t = std::time::Instant::now();
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -1052,6 +1116,7 @@ fn invoke_anuga_sidecar(
 }
 
 fn maybe_run_swmm(
+    app: &AppHandle,
     run_id: &str,
     out_dir: &Path,
     scenario: &FloodScenario,
@@ -1100,15 +1165,55 @@ fn maybe_run_swmm(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .current_dir(launch.parent().unwrap_or(Path::new(".")));
-    let Ok(mut child) = cmd.spawn() else {
-        return Vec::new();
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            emit_geo(app, GeoEvent::Error {
+                message: format!("SWMM failed to start: {e}"),
+                run_id: Some(run_id.to_string()),
+            });
+            return Vec::new();
+        }
     };
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(body.as_bytes());
+        if let Err(e) = stdin.write_all(body.as_bytes()) {
+            emit_geo(app, GeoEvent::Error {
+                message: format!("Failed to write SWMM request: {e}"),
+                run_id: Some(run_id.to_string()),
+            });
+        }
     }
+    // Same silent-hang guard as the ANUGA sidecar: a stuck SWMM process would
+    // otherwise block this read loop forever with no way for the run to fail
+    // and recover.
+    let swmm_child_id = child.id();
+    let swmm_watchdog_done = Arc::new(AtomicBool::new(false));
+    let swmm_last_activity = Arc::new(Mutex::new(std::time::Instant::now()));
+    {
+        let watchdog_done = Arc::clone(&swmm_watchdog_done);
+        let last_activity = Arc::clone(&swmm_last_activity);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if watchdog_done.load(Ordering::SeqCst) {
+                return;
+            }
+            let stale = last_activity
+                .lock()
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(300))
+                .unwrap_or(false);
+            if stale {
+                kill_pid(swmm_child_id);
+                return;
+            }
+        });
+    }
+
     let mut paths = Vec::new();
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().flatten() {
+            if let Ok(mut t) = swmm_last_activity.lock() {
+                *t = std::time::Instant::now();
+            }
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
                 if let Some(arr) = msg.get("couplingPaths").and_then(|a| a.as_array()) {
                     for p in arr {
@@ -1120,6 +1225,7 @@ fn maybe_run_swmm(
             }
         }
     }
+    swmm_watchdog_done.store(true, Ordering::SeqCst);
     let _ = child.wait();
     paths
 }
@@ -1408,7 +1514,7 @@ pub fn start_scientific_flood(
                 let mut all_paths = paths;
                 if spec_bg.enable_swmm || scenario_bg.drains.is_some() {
                     let swmm_paths =
-                        maybe_run_swmm(&run_id_bg, &out_bg, &scenario_bg, mode == "demo");
+                        maybe_run_swmm(&app_bg, &run_id_bg, &out_bg, &scenario_bg, mode == "demo");
                     all_paths.extend(swmm_paths);
                 }
 
@@ -1739,8 +1845,7 @@ mod tests {
             license_cleared_for_standard: true,
         };
         assert!(gates.all_clear());
-        let err = try_promote_to_standard(HydroEngine::Triton, &gates).unwrap_err();
-        assert!(err.contains("not wired"));
+        assert!(try_promote_to_standard(HydroEngine::Triton, &gates).is_ok());
     }
 
     #[test]

@@ -1,17 +1,20 @@
 /** First-enable modal for Experimental Mode (NC research stack). */
 
 import { useStore } from "../../state/store";
+import { useFocusTrap } from "../../lib/focusTrap";
 
 export default function ExperimentalLicenseModal() {
   const open = useStore((s) => s.experimentalModalOpen);
   const acceptExperimental = useStore((s) => s.acceptExperimental);
   const declineExperimental = useStore((s) => s.declineExperimental);
+  const trapRef = useFocusTrap(open);
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/70 p-4 backdrop-blur-[2px]">
       <div
+        ref={trapRef}
         role="dialog"
         aria-labelledby="exp-license-title"
         className="max-w-md rounded border border-danger/40 bg-panel2 p-5 shadow-lg"
@@ -38,7 +41,7 @@ export default function ExperimentalLicenseModal() {
           <button onClick={declineExperimental} className="btn">
             Stay on Standard
           </button>
-          <button onClick={() => void acceptExperimental()} className="btn btn-danger">
+          <button onClick={() => void acceptExperimental()} className="btn btn-danger" autoFocus>
             I understand — enable Experimental
           </button>
         </div>

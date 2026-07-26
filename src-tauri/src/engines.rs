@@ -67,6 +67,47 @@ pub fn colmap_exe() -> PathBuf {
     engines_dir().join("colmap").join("bin").join("colmap.exe")
 }
 
+fn colmap_flavor_path() -> PathBuf {
+    engines_dir().join("colmap").join("instasplatter-flavor.txt")
+}
+
+fn write_colmap_flavor(cuda: bool) {
+    let path = colmap_flavor_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&path, if cuda { "cuda" } else { "nocuda" });
+}
+
+fn read_colmap_flavor() -> Option<String> {
+    fs::read_to_string(colmap_flavor_path())
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+}
+
+/// Whether the on-disk COLMAP install is the CUDA build.
+/// Prefers the flavor marker written at install time; falls back to scanning
+/// for bundled CUDA runtime DLLs next to `colmap.exe`.
+pub fn colmap_is_cuda() -> bool {
+    if !colmap_exe().exists() {
+        return false;
+    }
+    match read_colmap_flavor().as_deref() {
+        Some("cuda") => return true,
+        Some("nocuda") => return false,
+        _ => {}
+    }
+    let bin = engines_dir().join("colmap").join("bin");
+    let Ok(entries) = fs::read_dir(&bin) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+        name.starts_with("cudart") && name.ends_with(".dll")
+            || name.starts_with("cublas") && name.ends_with(".dll")
+    })
+}
+
 pub fn ffmpeg_exe() -> String {
     let bundled = engines_dir().join("ffmpeg").join("ffmpeg.exe");
     if bundled.exists() {
@@ -97,6 +138,8 @@ fn ffmpeg_available() -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatus {
     pub colmap: bool,
+    /// True when the installed COLMAP build is the CUDA variant.
+    pub colmap_cuda: bool,
     pub brush: bool,
     /// True when `%LOCALAPPDATA%/InstaSplatter/engines/brush-custom/brush_app.exe` is used.
     pub brush_custom: bool,
@@ -118,6 +161,7 @@ pub fn status() -> EngineStatus {
     let sc = crate::pipeline::sidecars::status();
     EngineStatus {
         colmap: colmap_exe().exists(),
+        colmap_cuda: colmap_is_cuda(),
         brush: brush_exe().exists(),
         brush_custom: brush_is_custom(),
         ffmpeg: ffmpeg_available(),
@@ -349,13 +393,28 @@ async fn install(app: &tauri::AppHandle, engine: &str, archive: &Archive) -> Res
 /// Ensure COLMAP and Brush exist locally, downloading them on first use.
 /// An engine folder that exists but is missing its executable is treated as
 /// absent and reinstalled.
+///
+/// When CUDA is available but a CPU-only COLMAP is installed (e.g. first run
+/// before the driver was detected, or a stale download), upgrade in place to
+/// the CUDA archive so GPU feature extraction and MVS just work.
 pub async fn ensure_engines(app: tauri::AppHandle, has_cuda: bool) -> Result<EngineStatus, String> {
     if !brush_exe().exists() {
         install(&app, "brush", &BRUSH).await?;
     }
-    if !colmap_exe().exists() {
+
+    let colmap_ok = colmap_exe().exists();
+    let need_cuda_upgrade = has_cuda && colmap_ok && !colmap_is_cuda();
+    if !colmap_ok || need_cuda_upgrade {
+        if need_cuda_upgrade {
+            emit(&app, "colmap", 0, 0, "upgrading-cuda");
+            remove_any(&engines_dir().join("colmap"));
+        }
         let archive = if has_cuda { &COLMAP_CUDA } else { &COLMAP_NOCUDA };
         install(&app, "colmap", archive).await?;
+        write_colmap_flavor(has_cuda);
+    } else if colmap_ok && read_colmap_flavor().is_none() {
+        // Legacy install without a marker — record what we can detect.
+        write_colmap_flavor(colmap_is_cuda());
     }
 
     let st = status();
