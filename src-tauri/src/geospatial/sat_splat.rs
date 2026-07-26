@@ -151,9 +151,8 @@ pub fn generate_sat_splat(
         .as_ref()
         .map(|_| "Earth Search STAC (Sentinel-2 L2A thumbnail)".to_string());
     if imagery.is_none() {
-        notes.push(
-            "No satellite thumbnail available — used elevation-shaded color instead.".into(),
-        );
+        notes
+            .push("No satellite thumbnail available — used elevation-shaded color instead.".into());
     }
 
     let cloud = build_splat_cloud(&grid, aoi, cell_size_m, imagery.as_ref());
@@ -200,9 +199,12 @@ fn fetch_thumbnail_rgb(catalog_dir: &Path, aoi: [f64; 4]) -> Option<image::RgbIm
         aoi_wgs84: Some(aoi),
         ..Default::default()
     };
-    let entry =
-        fetch_asset_with_opts("earth-search-stac", &catalog_dir.to_string_lossy(), &fetch_opts)
-            .ok()?;
+    let entry = fetch_asset_with_opts(
+        "earth-search-stac",
+        &catalog_dir.to_string_lossy(),
+        &fetch_opts,
+    )
+    .ok()?;
     let meta_path = PathBuf::from(entry.local_path?);
     let text = fs::read_to_string(&meta_path).ok()?;
     let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -262,11 +264,16 @@ fn build_splat_cloud(
     // slightly overlapping neighbours avoids visible gaps in the cloud.
     let cell_span_deg_x = (east - west) / cols as f64;
     let cell_span_deg_y = (north - south) / rows as f64;
-    let approx_cell_m_x = cell_span_deg_x * 111_320.0 * origin.lat_deg.to_radians().cos().abs().max(0.05);
+    let approx_cell_m_x =
+        cell_span_deg_x * 111_320.0 * origin.lat_deg.to_radians().cos().abs().max(0.05);
     let approx_cell_m_y = cell_span_deg_y * 111_320.0;
     let scale_x = (approx_cell_m_x.max(0.1) * 0.6) as f32;
     let scale_y = (approx_cell_m_y.max(0.1) * 0.6) as f32;
-    let scale_log = [scale_x.ln(), scale_y.ln(), (scale_x.min(scale_y) * 0.25).max(0.01).ln()];
+    let scale_log = [
+        scale_x.ln(),
+        scale_y.ln(),
+        (scale_x.min(scale_y) * 0.25).max(0.01).ln(),
+    ];
 
     let mut cloud = SplatCloud::default();
     for r in 0..rows {
@@ -286,10 +293,18 @@ fn build_splat_cloud(
             let enu = frame.ecef_to_enu(geodetic_to_ecef(geo));
 
             let rgb = imagery
-                .map(|img| sample_rgb_bilinear(img, c as f64 / cols.max(1) as f64, 1.0 - r as f64 / rows.max(1) as f64))
+                .map(|img| {
+                    sample_rgb_bilinear(
+                        img,
+                        c as f64 / cols.max(1) as f64,
+                        1.0 - r as f64 / rows.max(1) as f64,
+                    )
+                })
                 .unwrap_or_else(|| elevation_colormap(z, z_min, z_range));
 
-            cloud.positions.push([enu.east as f32, enu.up as f32, -enu.north as f32]);
+            cloud
+                .positions
+                .push([enu.east as f32, enu.up as f32, -enu.north as f32]);
             cloud.scales_log.push(scale_log);
             cloud.rot_wxyz.push([1.0, 0.0, 0.0, 0.0]);
             cloud.opacity_logit.push(8.0); // ~0.9997 opacity — solid terrain, not translucent
@@ -365,8 +380,15 @@ mod tests {
             source_path: None,
         };
         let cloud = build_splat_cloud(&grid, grid.bounds, 10.0, None);
-        assert_eq!(cloud.len(), 3, "nodata cell must be skipped, not fabricated");
-        assert!(cloud.positions.iter().all(|p| p.iter().all(|c| c.is_finite())));
+        assert_eq!(
+            cloud.len(),
+            3,
+            "nodata cell must be skipped, not fabricated"
+        );
+        assert!(cloud
+            .positions
+            .iter()
+            .all(|p| p.iter().all(|c| c.is_finite())));
     }
 
     #[test]

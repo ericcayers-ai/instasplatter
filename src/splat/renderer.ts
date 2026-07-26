@@ -30,6 +30,19 @@ import {
   type Vec3,
 } from "./camera";
 
+type SplatWorkerMessage =
+  | {
+      type: "parsed";
+      texdata: Uint32Array;
+      sceneCenter: Vec3;
+      sceneRadius: number;
+      count: number;
+      canInterpolate: boolean;
+    }
+  | { type: "lerped"; texdata: Uint32Array; count: number }
+  | { type: "sorted"; depthIndex: Uint32Array; count: number }
+  | { type: "error"; message: string };
+
 const VS = `#version 300 es
 precision highp float;
 precision highp int;
@@ -714,7 +727,7 @@ export class SplatRenderer {
     this.onStats?.(this.count);
   }
 
-  private onWorker(msg: any) {
+  private onWorker(msg: SplatWorkerMessage) {
     if (msg.type === "parsed") {
       const texdata: Uint32Array = msg.texdata;
       this.sceneCenter = msg.sceneCenter;

@@ -234,7 +234,6 @@ export default function CesiumGlobe() {
       setGeoPreview(null);
     };
     // Mount once for Viewer lifetime.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setGeoPreview]);
 
   // Experimental / ion / terrain policy when Experimental toggles.
