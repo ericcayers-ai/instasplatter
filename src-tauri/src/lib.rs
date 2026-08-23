@@ -445,6 +445,56 @@ fn sample_geo_dem(
     geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)
 }
 
+/// Analytic sky colour (Preetham 1999 single-scattering) for a view ray in
+/// the observer's ENU frame, given a unit sun direction and turbidity.
+/// Returns linear RGB; the frontend applies its own transfer function.
+#[tauri::command]
+fn get_sky_color(
+    sun_east: f64,
+    sun_north: f64,
+    sun_up: f64,
+    view_east: f64,
+    view_north: f64,
+    view_up: f64,
+    turbidity: Option<f64>,
+) -> Result<geospatial::sky::SkyRgb, String> {
+    Ok(geospatial::sky::sky_color_default(
+        geospatial::transforms::Enu { east: sun_east, north: sun_north, up: sun_up },
+        geospatial::transforms::Enu { east: view_east, north: view_north, up: view_up },
+        turbidity.unwrap_or(2.0),
+    ))
+}
+
+/// Astronomical sun position (NOAA / Meeus low-precision, ~0.01 deg) for a
+/// WGS84 location at a UTC instant. Azimuth is clockwise from north; the ENU
+/// direction reuses the shared transforms type.
+#[tauri::command]
+fn get_sun_position(
+    lat_deg: f64,
+    lon_deg: f64,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour_utc: f64,
+) -> Result<geospatial::sun::SunPosition, String> {
+    if !(-90.0..=90.0).contains(&lat_deg) || !(-180.0..=180.0).contains(&lon_deg) {
+        return Err(format!("invalid coordinates: lat={lat_deg}, lon={lon_deg}"));
+    }
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(format!("invalid date: month={month}, day={day}"));
+    }
+    Ok(geospatial::sun::sun_position(
+        lat_deg,
+        lon_deg,
+        geospatial::sun::UtcDateTime {
+            year,
+            month,
+            day,
+            hour_utc,
+        },
+    ))
+}
+
 /// Rasterize a registered reconstruction splat → proxy DEM GeoTIFF → stage as flood DTM.
 ///
 /// Requires metric GeoReference + latest splat. Bed is labelled non-authoritative (`proxy`).
@@ -1280,6 +1330,8 @@ pub fn run() {
             sample_geo_dem,
             generate_splat_dem,
             generate_sat_splat,
+            get_sun_position,
+            get_sky_color,
             import_geo_telemetry,
             set_geo_gcps,
             compute_geo_reference,

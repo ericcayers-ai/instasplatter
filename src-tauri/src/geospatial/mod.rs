@@ -16,7 +16,9 @@ pub mod hydro_adapters;
 pub mod preview;
 pub mod registration;
 pub mod sat_splat;
+pub mod sky;
 pub mod splat_dem;
+pub mod sun;
 pub mod transforms;
 
 use std::path::Path;
