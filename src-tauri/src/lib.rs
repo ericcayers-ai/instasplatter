@@ -445,6 +445,44 @@ fn sample_geo_dem(
     geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)
 }
 
+/// Sun-lit hillshade over the staged DEM preview, driven by a real
+/// astronomical sun position (Item 1) instead of fixed angles.
+#[tauri::command]
+fn sample_geo_dem_hillshade(
+    workspace: String,
+    cols: u32,
+    rows: u32,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour_utc: f64,
+    aoi_wgs84: Option<[f64; 4]>,
+) -> Result<geospatial::dem::DemHillshadeGrid, String> {
+    let ws = PathBuf::from(&workspace);
+    geospatial::prepare_workspace(&ws)?;
+    let grid = geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)?;
+    let mid_lat = 0.5 * (grid.bounds[1] + grid.bounds[3]);
+    let mid_lon = 0.5 * (grid.bounds[0] + grid.bounds[2]);
+    let sun = geospatial::sun::sun_position(
+        mid_lat,
+        mid_lon,
+        geospatial::sun::UtcDateTime {
+            year,
+            month,
+            day,
+            hour_utc,
+        },
+    );
+    Ok(geospatial::dem::DemHillshadeGrid {
+        cols: grid.cols,
+        rows: grid.rows,
+        bounds: grid.bounds,
+        sun_azimuth_deg: sun.azimuth_deg,
+        sun_elevation_deg: sun.elevation_deg,
+        shade: geospatial::dem::hillshade_grid(&grid, &sun),
+    })
+}
+
 /// Analytic sky colour (Preetham 1999 single-scattering) for a view ray in
 /// the observer's ENU frame, given a unit sun direction and turbidity.
 /// Returns linear RGB; the frontend applies its own transfer function.
@@ -1331,6 +1369,7 @@ pub fn run() {
             generate_splat_dem,
             generate_sat_splat,
             get_sun_position,
+            sample_geo_dem_hillshade,
             get_sky_color,
             import_geo_telemetry,
             set_geo_gcps,

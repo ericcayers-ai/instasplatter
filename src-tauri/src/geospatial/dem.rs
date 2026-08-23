@@ -57,6 +57,96 @@ pub struct DemSampleGrid {
     pub source_path: Option<String>,
 }
 
+/// Hillshaded DEM preview plus the sun geometry used to produce it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DemHillshadeGrid {
+    pub cols: u32,
+    pub rows: u32,
+    /// West, south, east, north (WGS84 degrees).
+    pub bounds: [f64; 4],
+    pub sun_azimuth_deg: f64,
+    pub sun_elevation_deg: f64,
+    /// Row-major shade values in [0, 1].
+    pub shade: Vec<f32>,
+}
+
+/// Lambertian hillshade over a sampled DEM grid, lit by a real astronomical
+/// sun position (see [`crate::geospatial::sun`]).
+///
+/// `shade = max(0, cos(zenith)·cos(slope) + sin(zenith)·sin(slope)·cos(azimuth − aspect))`
+/// with slope/aspect from central-difference height gradients on the grid.
+/// Returns one value per cell in [0, 1] (row-major, same indexing as `z`).
+pub fn hillshade_grid(
+    grid: &DemSampleGrid,
+    sun: &crate::geospatial::sun::SunPosition,
+) -> Vec<f32> {
+    let cols = grid.cols.max(1) as usize;
+    let rows = grid.rows.max(1) as usize;
+    let n = cols * rows;
+
+    // Metres per cell from the WGS84 bounds so gradients are true slopes.
+    let lat_mid = 0.5 * (grid.bounds[1] + grid.bounds[3]);
+    let m_per_deg_lat = 111_320.0;
+    let m_per_deg_lon = 111_320.0 * lat_mid.to_radians().cos();
+    let dx_m = if cols > 1 {
+        ((grid.bounds[2] - grid.bounds[0]) * m_per_deg_lon) / (cols - 1) as f64
+    } else {
+        1.0
+    };
+    let dy_m = if rows > 1 {
+        ((grid.bounds[3] - grid.bounds[1]) * m_per_deg_lat) / (rows - 1) as f64
+    } else {
+        1.0
+    };
+
+    let zenith_rad = (90.0 - sun.elevation_deg).to_radians();
+    let azimuth_rad = sun.azimuth_deg.to_radians();
+
+    let at = |x: usize, y: usize| -> f64 { grid.z[y * cols + x.min(cols - 1)] as f64 };
+
+    let mut shade = Vec::with_capacity(n);
+    for y in 0..rows {
+        for x in 0..cols {
+            let xl = x.saturating_sub(1);
+            let xr = (x + 1).min(cols - 1);
+            let yu = y.saturating_sub(1);
+            let yd = (y + 1).min(rows - 1);
+            // Central differences; one-sided at the borders.
+            let dzdx = match (xl == x, xr == x) {
+                (false, false) => (at(xr, y) - at(xl, y)) / ((xr - xl) as f64 * dx_m),
+                (true, _) => (at(xr, y) - at(x, y)) / dx_m,
+                (_, true) => (at(x, y) - at(xl, y)) / dx_m,
+            };
+            let dzdy = {
+                let span = yd - yu;
+                if span == 0 {
+                    0.0
+                } else {
+                    (at(x, yd) - at(x, yu)) / (span as f64 * dy_m)
+                }
+            };
+
+            let slope = (dzdx * dzdx + dzdy * dzdy).sqrt().atan();
+            // Aspect = compass bearing of steepest descent (CW from north).
+            let aspect = (-dzdx).atan2(-dzdy);
+
+            let shade_val = zen_cos_term(zenith_rad, slope)
+                + zen_sin_term(zenith_rad, slope) * (azimuth_rad - aspect).cos();
+            shade.push(shade_val.clamp(0.0, 1.0) as f32);
+        }
+    }
+    shade
+}
+
+fn zen_cos_term(zenith: f64, slope: f64) -> f64 {
+    zenith.cos() * slope.cos()
+}
+
+fn zen_sin_term(zenith: f64, slope: f64) -> f64 {
+    zenith.sin() * slope.sin()
+}
+
 /// Options for staging / conditioning a flood DEM.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -984,6 +1074,112 @@ fn read_u32_array(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flat_grid(cols: u32, rows: u32, z: f32) -> DemSampleGrid {
+        DemSampleGrid {
+            cols,
+            rows,
+            bounds: [0.0, 0.0, 0.001, 0.001],
+            z: vec![z; (cols * rows) as usize],
+            synthetic: true,
+            bed_source: "synthetic".into(),
+            notes: vec![],
+            source_path: None,
+        }
+    }
+
+    fn sun_at(elev_deg: f64, az_deg: f64) -> crate::geospatial::sun::SunPosition {
+        let e = elev_deg.to_radians();
+        let a = az_deg.to_radians();
+        let l = 1.0f64;
+        let _ = l;
+        crate::geospatial::sun::SunPosition {
+            azimuth_deg: az_deg,
+            elevation_deg: elev_deg,
+            direction_enu: crate::geospatial::transforms::Enu {
+                east: a.sin() * e.cos(),
+                north: a.cos() * e.cos(),
+                up: e.sin(),
+            },
+        }
+    }
+
+    #[test]
+    fn hillshade_flat_terrain_equals_cos_zenith() {
+        // Flat ground faces straight up; the directional term vanishes and
+        // shade collapses to cos(zenith).
+        for &elev in &[60.0_f64, 30.0, 10.0] {
+            let grid = flat_grid(16, 16, 100.0);
+            let sun = sun_at(elev, 180.0);
+            let shade = hillshade_grid(&grid, &sun);
+            let expected = (90.0_f64 - elev).to_radians().cos();
+            for s in &shade {
+                assert!(
+                    (*s as f64 - expected).abs() < 1e-4,
+                    "elev {} got {} want {}",
+                    elev,
+                    s,
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hillshade_slope_facing_sun_is_bright_opposite_is_dark() {
+        // Sun due south at 45 deg elevation. A plane rising toward the south
+        // has its normal pointing exactly at the sun => shade ~ 1. The mirror
+        // plane rising toward the north sits in self-shadow => shade ~ 0.
+        let cols = 32u32;
+        let rows = 32u32;
+        // Bounds span 0.001 deg lon (~111 m at the equator) and lat.
+        let m_per_deg = 111_320.0_f64;
+        let span_m = 0.001 * m_per_deg;
+
+        let mut facing = flat_grid(cols, rows, 0.0);
+        let mut away = flat_grid(cols, rows, 0.0);
+        for y in 0..rows as usize {
+            for x in 0..cols as usize {
+                // y increases with latitude (north). Rising-toward-south
+                // plane: z decreases as we go north.
+                let north_m = y as f64 / (rows - 1) as f64 * span_m;
+                let idx = y * cols as usize + x;
+                away.z[idx] = (-north_m) as f32; // descends toward the sun: faces north
+                facing.z[idx] = north_m as f32;
+            }
+        }
+        let sun = sun_at(45.0, 180.0);
+
+        let bright = hillshade_grid(&facing, &sun);
+        let dark = hillshade_grid(&away, &sun);
+
+        let mean: f32 = bright.iter().sum::<f32>() / bright.len() as f32;
+        assert!(mean > 0.95, "sun-facing slope should be ~1.0, got {}", mean);
+        let dmean: f32 = dark.iter().sum::<f32>() / dark.len() as f32;
+        assert!(dmean < 0.05, "opposite slope should be ~0.0, got {}", dmean);
+    }
+
+    #[test]
+    fn hillshade_output_bounded_and_finite_on_rugged_synthetic() {
+        let cols = 48u32;
+        let rows = 48u32;
+        let mut grid = flat_grid(cols, rows, 0.0);
+        for i in 0..grid.z.len() {
+            let x = (i % cols as usize) as f32;
+            let y = (i / cols as usize) as f32;
+            grid.z[i] =
+                50.0 * (x * 0.7).sin() + 30.0 * (y * 1.3).cos() + 8.0 * (x * y * 0.11).sin();
+        }
+        for &elev in &[70.0_f64, 25.0, 2.0] {
+            let sun = sun_at(elev, 315.0);
+            let shade = hillshade_grid(&grid, &sun);
+            assert_eq!(shade.len(), (cols * rows) as usize);
+            for v in &shade {
+                assert!(v.is_finite());
+                assert!((0.0..=1.0).contains(v), "shade out of range: {}", v);
+            }
+        }
+    }
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_ws() -> PathBuf {
