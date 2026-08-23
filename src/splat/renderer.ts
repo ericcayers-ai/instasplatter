@@ -29,6 +29,7 @@ import {
   type CameraState,
   type Vec3,
 } from "./camera";
+import { PostChain } from "./post";
 
 type SplatWorkerMessage =
   | {
@@ -314,6 +315,14 @@ export class SplatRenderer {
   public showMesh = true;
   public onStats: ((splats: number) => void) | null = null;
   public onFps: ((fps: number) => void) | null = null;
+  /**
+   * Post-process toggles (Item 4). All default off — the legacy direct path
+   * is untouched until one of these flips.
+   */
+  public postToggles = { tonemap: false, fxaa: false, glare: false };
+  /** Unit world-space direction toward the sun for glare positioning. */
+  public sunDirectionWorld: [number, number, number] | null = null;
+  private post: PostChain | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -859,7 +868,13 @@ export class SplatRenderer {
       if (t >= 1) this.lerpActive = false;
     }
 
-    if (!shared) {
+    const usePost = this.postToggles.tonemap || this.postToggles.fxaa || this.postToggles.glare;
+    if (usePost && !this.post) {
+      this.post = new PostChain(gl);
+    }
+    if (usePost) {
+      this.post!.begin(w, h); // binds scene FBO + viewport + clear
+    } else if (!shared) {
       gl.viewport(0, 0, w, h);
       if (this.clearOnFrame) {
         gl.clearColor(0, 0, 0, 0);
@@ -959,6 +974,17 @@ export class SplatRenderer {
       gl.depthMask(true);
     }
 
+    if (this.post && usePost) {
+      const sv = this.projectSunToScreen(proj, view);
+      this.post.end({
+        tonemap: this.postToggles.tonemap,
+        glare: this.postToggles.glare,
+        fxaa: this.postToggles.fxaa,
+        sunUv: sv.uv,
+        sunVisible: sv.visible,
+      });
+    }
+
     if (this.count === 0) return;
 
     // Sorting happens against proj * view * model, so a model rotation
@@ -969,6 +995,26 @@ export class SplatRenderer {
       this.lastSortVP = vp;
       this.worker.postMessage({ type: "sort", viewProj: vp });
     }
+  }
+
+  private projectSunToScreen(
+    proj: Float32Array,
+    view: Float32Array,
+  ): { uv: [number, number]; visible: number } {
+    const d = this.sunDirectionWorld;
+    if (!d) return { uv: [0.5, 0.5], visible: 0 };
+    const vp = mat4Mul(proj, view);
+    const c = [0, 0, 0, 0];
+    for (let i = 0; i < 4; i++) {
+      c[i] = vp[i] * d[0] + vp[4 + i] * d[1] + vp[8 + i] * d[2];
+    }
+    if (!(Math.abs(c[3]) > 1e-8) || c[3] <= 0) return { uv: [0.5, 0.5], visible: 0 };
+    const nx = c[0] / c[3];
+    const ny = c[1] / c[3];
+    if (!Number.isFinite(nx) || !Number.isFinite(ny) || Math.abs(nx) > 3 || Math.abs(ny) > 3) {
+      return { uv: [0.5, 0.5], visible: 0 };
+    }
+    return { uv: [(nx + 1) / 2, (ny + 1) / 2], visible: 1 };
   }
 
   private needsSort(vp: Float32Array): boolean {
@@ -1048,5 +1094,7 @@ export class SplatRenderer {
   dispose() {
     this.disposed = true;
     this.worker.terminate();
+    this.post?.dispose();
+    this.post = null;
   }
 }
