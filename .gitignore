@@ -8,6 +8,7 @@ src-tauri/icons
 target/
 _refs/
 graphify-out/
+.graphify/
 release-out/
 .graphify_hook_installed
 .graphifyignore

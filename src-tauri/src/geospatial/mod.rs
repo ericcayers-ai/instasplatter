@@ -8,6 +8,7 @@
 pub mod catalog;
 pub mod data;
 pub mod dem;
+pub mod digital_earth_export;
 pub mod events;
 pub mod exports;
 pub mod hydro;

@@ -152,9 +152,26 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 | **Geospatial Globe** | CesiumJS globe with local DEM terrain + flood overlay (no ion required on Standard) |
 | **Geospatial 2D** | MapLibre satellite + AOI draw + flood depth overlay |
 | **Flood** | ANUGA/SWMM scientific path + DEM-backed preview / HAND + demo fallback |
-| **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests; Experimental Minecraft `.schem` |
+| **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests; Experimental Minecraft `.schem`; Digital Earth placement manifest |
 | **Modes** | Suite switch + Standard / Experimental + About implementations |
 | **Resume** | Project bundles with checkpoint resume |
+
+---
+
+## Digital Earth bridge
+
+Any georeferenced splat can be handed to **Digital Earth** (the sibling
+real-scale ECEF path-traced globe renderer) at its true captured location.
+`export_digital_earth_splat(plyPath, origin, destPath)` (Tauri command,
+`src-tauri/src/geospatial/digital_earth_export.rs`) writes a
+`digital-earth-splat-v1` JSON manifest next to the PLY: the AOI's ENU
+origin plus the row-major 4x4 local-ENU(m) → ECEF(m) matrix already
+computed by `EnuFrame` (`geospatial/transforms.rs`) — no new geodesy, just a
+sidecar pointing at math this suite already tests. Digital Earth's
+`lib/splat_import.py` reads it back and applies the matrix directly, since
+its own world space is already ECEF metres. See that project's README for
+the render-side status (the loader is done and tested; wiring the points
+into the live Vulkan path tracer is the documented next step there).
 
 ---
 

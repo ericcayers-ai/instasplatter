@@ -638,6 +638,23 @@ fn export_geo_layer(
     geospatial::exports::export_geo_layer(&ws, parsed, run_id.as_deref(), dest.as_deref())
 }
 
+/// Export a trained splat PLY's Digital Earth placement manifest: the
+/// ENU->ECEF matrix for `origin`, written as a JSON sidecar at `destPath`.
+/// Digital Earth reads this to place the splat on the globe at its real
+/// lat/lon/height without re-deriving the geodesy itself.
+#[tauri::command]
+fn export_digital_earth_splat(
+    ply_path: String,
+    origin: geospatial::transforms::Geodetic,
+    dest_path: String,
+) -> Result<geospatial::digital_earth_export::DigitalEarthSplatManifest, String> {
+    geospatial::digital_earth_export::export_splat_for_digital_earth(
+        Path::new(&ply_path),
+        origin,
+        Path::new(&dest_path),
+    )
+}
+
 #[tauri::command]
 fn list_queue() -> serde_json::Value {
     let q = queue::global();
@@ -1275,6 +1292,7 @@ pub fn run() {
             get_flood_engine_status,
             export_flood_products,
             export_geo_layer,
+            export_digital_earth_splat,
             resume_project,
             list_projects,
             delete_project,
