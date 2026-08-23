@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Color, Entity, ImageryLayer, Rectangle, Viewer } from "cesium";
+import { applySunDrivenLighting } from "./sunLight";
 import { useStore } from "../../state/store";
 import { aoiIsValid, coarsenDomainDxFromPlan, domainFromAoi, type AoiWgs84 } from "../aoi";
 import { FloodPreviewEngine } from "../preview";
@@ -66,6 +67,7 @@ export default function CesiumGlobe() {
   const demSample = useStore((s) => s.geoDemSample);
   const demProduct = useStore((s) => s.geoDemProduct);
   const floodTime = useStore((s) => s.geoFloodTime);
+  const sunHourUtc = useStore((s) => s.geoSunHourUtc);
   const floodPlaying = useStore((s) => s.geoFloodPlaying);
   const lowPower = useStore((s) => s.geoFloodLowPower);
   const waterStyle = useStore((s) => s.geoWaterStyle);
@@ -77,6 +79,7 @@ export default function CesiumGlobe() {
   const setGeoPreview = useStore((s) => s.setGeoPreview);
   const setFloodTime = useStore((s) => s.setGeoFloodTime);
   const setFloodPlaying = useStore((s) => s.setGeoFloodPlaying);
+  const setGeoSunHourUtc = useStore((s) => s.setGeoSunHourUtc);
   const setTool = useStore((s) => s.setGeoTool);
   const setInspectHint = useStore((s) => s.setGeoInspectHint);
 
@@ -135,9 +138,12 @@ export default function CesiumGlobe() {
       return;
     }
 
+    // Photorealism merge (Item 3): the atmosphere is ON by default and the
+    // globe is lit by the astronomically-correct sun direction (Item 1).
+    // baseColor stays dark as the under-terrain / ocean fallback.
     viewer.scene.globe.baseColor = Color.fromCssColorString("#0a1620");
-    viewer.scene.backgroundColor = Color.fromCssColorString("#0a0c10");
-    viewer.scene.fog.enabled = false;
+    viewer.scene.fog.enabled = true;
+    viewer.scene.fog.density = 2.0e-4;
 
     const imagery = createGlobeImageryProvider(useStore.getState().geoBasemapMode);
     baseLayerRef.current = viewer.imageryLayers.addImageryProvider(imagery);
@@ -161,6 +167,13 @@ export default function CesiumGlobe() {
     engineRef.current = engine;
 
     viewerRef.current = viewer;
+    // Sun-driven lighting (Item 3): resolve via Rust astronomy command.
+    {
+      const aoiNow = initialAoi;
+      const lat = aoiIsValid(aoiNow) ? (aoiNow![1] + aoiNow![3]) / 2 : 20.0;
+      const lon = aoiIsValid(aoiNow) ? (aoiNow![0] + aoiNow![2]) / 2 : 0.0;
+      void applySunDrivenLighting(viewer, lat, lon);
+    }
     readyRef.current = true;
     flyGlobeToContext(viewer, initialAoi, { duration: 0 });
     ensureAoiEntity(viewer, initialAoi);
@@ -235,6 +248,23 @@ export default function CesiumGlobe() {
     };
     // Mount once for Viewer lifetime.
   }, [setGeoPreview]);
+
+  // Re-aim the directional light whenever the observer AOI or the manual
+  // UTC hour changes (Item 3 acceptance: sky/shading follow adjusted time).
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    const aoiNow = useStore.getState().geoAoiWgs84;
+    const lat = aoiIsValid(aoiNow) ? (aoiNow![1] + aoiNow![3]) / 2 : 20.0;
+    const lon = aoiIsValid(aoiNow) ? (aoiNow![0] + aoiNow![2]) / 2 : 0.0;
+    const manual = useStore.getState().geoSunHourUtc;
+    let when = new Date();
+    if (manual != null) {
+      when = new Date();
+      when.setUTCHours(Math.floor(manual), Math.round((manual % 1) * 60), 0, 0);
+    }
+    void applySunDrivenLighting(viewer, lat, lon, when);
+  }, [sunHourUtc, aoiRevision]);
 
   // Experimental / ion / terrain policy when Experimental toggles.
   useEffect(() => {
@@ -506,6 +536,24 @@ export default function CesiumGlobe() {
       <div ref={containerRef} className="absolute inset-0" data-testid="cesium-globe" />
 
       <div className="pointer-events-none absolute right-3 top-12 z-10 flex flex-col items-end gap-1.5">
+        <div className="pointer-events-auto rounded border border-edge bg-panel/90 px-2 py-1 backdrop-blur-sm">
+          <label className="flex items-center gap-2 text-[10px] text-ink-dim">
+            <span>Sun&nbsp;UTC</span>
+            <input
+              aria-label="Sun hour (UTC)"
+              type="range"
+              min={0}
+              max={23.99}
+              step={0.25}
+              value={sunHourUtc ?? new Date().getUTCHours() + new Date().getUTCMinutes() / 60}
+              onChange={(e) => setGeoSunHourUtc(Number(e.target.value))}
+              className="h-1 w-28 accent-[var(--color-accent,#4aa3ff)]"
+            />
+            <span className="tabular-nums">
+              {String(Math.floor(sunHourUtc ?? 12)).padStart(2, "0")}:00
+            </span>
+          </label>
+        </div>
         <div className="pointer-events-auto">
           <PreviewBadge validation={preview?.validation ?? "live"} backend={preview?.backend} />
         </div>

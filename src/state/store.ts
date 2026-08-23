@@ -191,6 +191,8 @@ interface AppStore {
   geoFloodPlaying: boolean;
   /** Prefer coarser grid / no particles. */
   geoFloodLowPower: boolean;
+  /** Manual UTC hour for the globe sun; null = real current time. */
+  geoSunHourUtc: number | null;
   geoScenario: GeoScenarioMeta | null;
   geoViewMode: GeoViewMode;
   geoWaterStyle: GeoWaterStyle;
@@ -234,6 +236,7 @@ interface AppStore {
   setGeoFloodPlaying: (playing: boolean) => void;
   toggleGeoFloodPlaying: () => void;
   setGeoFloodLowPower: (on: boolean) => void;
+  setGeoSunHourUtc: (hourUtc: number | null) => void;
   setGeoPreview: (runtime: GeoPreviewRuntime | null) => void;
   setGeoBasemapMode: (mode: GeoBasemapMode) => void;
   /** Draw/edit commit: persist AOI, plan extent, rebind soft-solver domain. */
@@ -372,6 +375,7 @@ export const useStore = create<AppStore>((set, get) => ({
   geoFloodTime: 0.35,
   geoFloodPlaying: false,
   geoFloodLowPower: false,
+  geoSunHourUtc: null,
   geoScenario: PLACEHOLDER_SCENARIO,
   geoViewMode: "3d",
   geoWaterStyle: "depth",
@@ -516,6 +520,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   setGeoFloodLowPower: (on) => set({ geoFloodLowPower: on }),
+  setGeoSunHourUtc: (hourUtc) => set({ geoSunHourUtc: hourUtc }),
 
   setGeoPreview: (runtime) => set({ geoPreview: runtime }),
 
