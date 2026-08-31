@@ -716,11 +716,15 @@ input[type="range"] {
   height: 3px;
   border-radius: 2px;
   background: var(--color-edge);
-  outline: none;
 }
 input[type="range"]:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 4px;
+}
+input[type="range"]:focus:not(:focus-visible) {
+  /* Only suppress the ring for pointer (mouse/touch) activation, never keyboard
+     focus — keyboard users get the :focus-visible ring above (WCAG 2.4.7). */
+  outline: none;
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
