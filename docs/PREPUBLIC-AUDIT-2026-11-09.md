@@ -84,3 +84,36 @@ graph: 5 MPL-2.0, unmodified, attributed in `NOTICE` and `THIRDPARTY.md`. Nothin
 AGPL, SSPL or non-commercial is compiled or bundled. `THIRDPARTY.md` previously called
 ANUGA GPL-2.0; upstream `LICENSE.txt` (GeoscienceAustralia/anuga_core) is Apache-2.0, and
 the row is corrected.
+
+## CI receipt (run 42490752361, commit 6b15fc3)
+
+| Job | Result |
+|---|---|
+| typecheck (`tsc --noEmit`) | pass |
+| lint (`eslint . --max-warnings 0`) | pass |
+| frontend bundle (`npm run <bundle>`) | pass |
+| cargo-fmt (`cargo fmt --check`) | pass |
+| **cargo-test** (`cargo test --locked`, windows-latest) | **pass** |
+| cargo-clippy (`cargo clippy -- -D warnings`) | fail — 66 pre-existing lints |
+| audit (`npm audit --audit-level=moderate`) | fail — the advisory above |
+
+`cargo test --locked` passing on a clean Windows runner is the first compile-and-test
+evidence for the Rust half of this branch, including the new
+`the_renderer_has_no_html_or_code_injection_sink` test and the `sog` reader limits.
+
+### The 66 clippy lints
+
+None are in the code introduced by this pass; they are the accumulated style debt of
+four months of feature work. By category: dead code in reference-only modules
+(`path_smooth` quaternion helpers, `pipeline::experimental` routing tables,
+`pipeline::solver` pose chains, `splat::export` unpack helpers) 19; `needless_range_loop`
+and `chunks_exact` 12; redundant casts 4; `is_multiple_of` 4; `sort_by_key` 2; complex
+type aliases 6; assorted single-pattern `match`, collapsible `if`, useless `format!`,
+manual char comparison, `too_many_arguments` (2/2), negated partial-ordinal comparison,
+and `clone` on a `Copy` type 2.
+
+They were not fixed in this pass on purpose: each fix needs `cargo clippy` to verify the
+rewrite, and this machine cannot run it (disk floor). Blind-editing loop indexing and
+borrow shapes without a compiler is how a green test run turns red. The remedy is one
+branch with a local Rust toolchain, or a decision to scope `-D warnings` to the crates
+that matter.
