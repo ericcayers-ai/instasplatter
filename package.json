@@ -30,7 +30,7 @@
     "cesium": "^1.143.0",
     "maplibre-gl": "^5.24.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react-dom": "^19.3.1",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
@@ -39,7 +39,7 @@
     "@tauri-apps/cli": "^2.4.0",
     "@types/geojson": "^7946.0.16",
     "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
