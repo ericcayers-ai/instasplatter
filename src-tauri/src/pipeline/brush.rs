@@ -39,6 +39,85 @@ pub struct Stage {
     pub end_iter: u32,
 }
 
+struct BrushDataset {
+    path: PathBuf,
+    model_dir: PathBuf,
+    registered_images: usize,
+}
+
+fn prepare_brush_dataset(workspace: &Path) -> Result<BrushDataset, String> {
+    let model_dir = crate::colmap::find_model_dir(workspace)
+        .ok_or("Brush cannot start without a valid sparse COLMAP model.")?;
+    let model = crate::colmap::read_model(&model_dir)?;
+    let source_images = workspace.join("images");
+    if !source_images.is_dir() {
+        return Err(format!(
+            "Brush input images folder is missing: {}.",
+            source_images.display()
+        ));
+    }
+
+    // Brush reads only sparse/0. Give it a private dataset whose single model
+    // is the best valid reconstruction, leaving COLMAP's original models intact.
+    let path = workspace.join("brush-input");
+    copy_directory_contents(&source_images, &path.join("images"))?;
+    let brush_model = path.join("sparse").join("0");
+    std::fs::create_dir_all(&brush_model).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(&model_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source = entry.path();
+        if source.is_file() {
+            std::fs::copy(&source, brush_model.join(entry.file_name())).map_err(|e| {
+                format!(
+                    "Could not stage COLMAP model file {}: {e}",
+                    source.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(BrushDataset {
+        path,
+        model_dir,
+        registered_images: model.images.len(),
+    })
+}
+
+fn copy_directory_contents(source: &Path, destination: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let target = destination.join(entry.file_name());
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        if kind.is_dir() {
+            copy_directory_contents(&path, &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(&path, &target)
+                .map_err(|e| format!("Could not stage training image {}: {e}", path.display()))?;
+        } else {
+            return Err(format!(
+                "Brush input contains an unsupported filesystem entry: {}.",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn stage_brush_init(workspace: &Path, dataset: &Path) -> Result<(), String> {
+    let source = workspace.join("init.ply");
+    let destination = dataset.join("init.ply");
+    if source.is_file() {
+        std::fs::copy(&source, &destination)
+            .map_err(|e| format!("Could not stage Brush init.ply: {e}"))?;
+    } else if destination.exists() {
+        std::fs::remove_file(&destination)
+            .map_err(|e| format!("Could not clear stale Brush init.ply: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Below this resolution a coarse stage buys nothing, so we do not add one.
 const MIN_STAGE_RESOLUTION: u32 = 480;
 
@@ -151,11 +230,7 @@ pub fn exports_dir(workspace: &Path) -> PathBuf {
 
 /// Seed the next run from `source`, optionally applying the Mip-Splatting 3D
 /// filter first. Returns the number of Gaussians handed over.
-fn seed_init_ply(
-    ctx: &JobCtx,
-    source: &Path,
-    training_resolution: u32,
-) -> Result<usize, String> {
+fn seed_init_ply(ctx: &JobCtx, source: &Path, training_resolution: u32) -> Result<usize, String> {
     let dest = init_ply_path(&ctx.workspace);
     if !ctx.settings.mip_filter {
         std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
@@ -167,7 +242,8 @@ fn seed_init_ply(
     let model = crate::colmap::read_model(&model_dir)?;
     let mut cloud = ply::read_ply(source)?;
     let scale = mipfilter::focal_scale_for(&model, training_resolution);
-    let stats = mipfilter::apply_3d_filter(&mut cloud, &model, mipfilter::DEFAULT_FILTER_SIZE, scale);
+    let stats =
+        mipfilter::apply_3d_filter(&mut cloud, &model, mipfilter::DEFAULT_FILTER_SIZE, scale);
     ctx.log(format!(
         "Mip-Splatting filter: bounded {} of {} Gaussians (mean sigma {:.5}); {} were seen by no camera",
         stats.filtered,
@@ -191,7 +267,8 @@ pub fn bake_final_filter(ctx: &JobCtx, splat: &Path) -> Result<(), String> {
     let model = crate::colmap::read_model(&model_dir)?;
     let mut cloud = ply::read_ply(splat)?;
     let scale = mipfilter::focal_scale_for(&model, ctx.settings.max_resolution);
-    let stats = mipfilter::apply_3d_filter(&mut cloud, &model, mipfilter::DEFAULT_FILTER_SIZE, scale);
+    let stats =
+        mipfilter::apply_3d_filter(&mut cloud, &model, mipfilter::DEFAULT_FILTER_SIZE, scale);
     ctx.log(format!(
         "Mip-Splatting bake: bounded {} of {} Gaussians; {} were seen by no camera",
         stats.filtered,
@@ -248,19 +325,21 @@ impl ExportWatcher {
 /// Spawn Brush for one stage. Returns `(exit_status_ok, stopped_at_boundary)`.
 async fn run_stage(
     ctx: &JobCtx,
+    brush_dataset: &Path,
     stage: &Stage,
     watcher: &mut ExportWatcher,
     is_last: bool,
 ) -> Result<(), String> {
     let s = &ctx.settings;
     let export_every = stage_export_every(stage, s.export_every);
+    stage_brush_init(&ctx.workspace, brush_dataset)?;
 
     let mut cmd = tokio::process::Command::new(brush_exe());
     #[cfg(windows)]
     cmd.creation_flags(crate::profiler::CREATE_NO_WINDOW);
     // cwd = workspace so Brush's autotune cache lands there, not in the app dir.
     cmd.current_dir(&ctx.workspace);
-    cmd.arg(&ctx.workspace)
+    cmd.arg(brush_dataset)
         .args(["--total-steps", &s.total_steps.to_string()])
         .args(["--start-iter", &stage.start_iter.to_string()])
         .args(["--max-splats", &s.max_splats.to_string()])
@@ -444,8 +523,19 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
         }
     };
 
+    let brush_dataset = prepare_brush_dataset(&ctx.workspace)?;
+    ctx.log(format!(
+        "Brush dataset uses {} registered images from {} (staged at {}).",
+        brush_dataset.registered_images,
+        brush_dataset.model_dir.display(),
+        brush_dataset.path.display()
+    ));
+
     if stages.len() > 1 {
-        let res: Vec<String> = stages.iter().map(|s| s.max_resolution.to_string()).collect();
+        let res: Vec<String> = stages
+            .iter()
+            .map(|s| s.max_resolution.to_string())
+            .collect();
         ctx.log(format!(
             "Progressive resolution schedule: {} px",
             res.join(" then ")
@@ -468,12 +558,13 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
                 .latest
                 .clone()
                 .ok_or("The previous resolution stage produced no checkpoint.")?;
-            let n = tokio::task::block_in_place(|| seed_init_ply(ctx, &prev, stage.max_resolution))?;
+            let n =
+                tokio::task::block_in_place(|| seed_init_ply(ctx, &prev, stage.max_resolution))?;
             if n > 0 {
                 ctx.log(format!("Carrying {n} Gaussians into the next stage."));
             }
         }
-        run_stage(ctx, stage, &mut watcher, is_last).await?;
+        run_stage(ctx, &brush_dataset.path, stage, &mut watcher, is_last).await?;
     }
 
     watcher
@@ -484,6 +575,67 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_text_model(dir: &Path, registered_images: usize) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("cameras.txt"),
+            "1 PINHOLE 640 480 500 500 320 240\n",
+        )
+        .unwrap();
+        let images = (1..=registered_images)
+            .map(|id| format!("{id} 1 0 0 0 0 0 0 1 img_{id:05}.jpg\n\n"))
+            .collect::<String>();
+        std::fs::write(dir.join("images.txt"), images).unwrap();
+    }
+
+    #[test]
+    fn brush_input_uses_the_largest_sparse_model_as_sparse_zero() {
+        let workspace = std::env::temp_dir().join(format!(
+            "instasplatter_brush_dataset_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        write_text_model(&workspace.join("sparse").join("0"), 4);
+        write_text_model(&workspace.join("sparse").join("1"), 42);
+        std::fs::create_dir_all(workspace.join("images")).unwrap();
+        std::fs::write(workspace.join("images").join("img_00001.jpg"), b"image").unwrap();
+
+        let prepared = prepare_brush_dataset(&workspace).unwrap();
+        let model = crate::colmap::read_model(&prepared.path.join("sparse").join("0")).unwrap();
+        assert_eq!(
+            crate::colmap::read_model(&workspace.join("sparse/0"))
+                .unwrap()
+                .images
+                .len(),
+            4
+        );
+        assert_eq!(
+            crate::colmap::read_model(&workspace.join("sparse/1"))
+                .unwrap()
+                .images
+                .len(),
+            42
+        );
+        assert_eq!(model.images.len(), 42);
+        assert_eq!(prepared.registered_images, 42);
+        assert_eq!(prepared.model_dir, workspace.join("sparse").join("1"));
+        assert_eq!(
+            std::fs::read(prepared.path.join("images/img_00001.jpg")).unwrap(),
+            b"image"
+        );
+
+        std::fs::write(workspace.join("init.ply"), b"seed").unwrap();
+        stage_brush_init(&workspace, &prepared.path).unwrap();
+        assert_eq!(
+            std::fs::read(prepared.path.join("init.ply")).unwrap(),
+            b"seed"
+        );
+        std::fs::remove_file(workspace.join("init.ply")).unwrap();
+        stage_brush_init(&workspace, &prepared.path).unwrap();
+        assert!(!prepared.path.join("init.ply").exists());
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
 
     #[test]
     fn a_non_progressive_run_is_a_single_stage() {
@@ -587,7 +739,13 @@ mod tests {
         let dir = std::env::temp_dir().join("instasplatter_scan_exports_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for n in ["export_500.ply", "export_1000.ply", "init.ply", "export_x.ply", "notes.txt"] {
+        for n in [
+            "export_500.ply",
+            "export_1000.ply",
+            "init.ply",
+            "export_x.ply",
+            "notes.txt",
+        ] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
         let map = scan_exports(&dir);

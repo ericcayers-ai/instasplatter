@@ -7,16 +7,27 @@
 
 ---
 
-## Automated unit gates (this run)
+## Automated unit gates (run of 2026-07-17)
 
 | Gate | Command | Result | Evidence |
 | --- | --- | --- | --- |
-| Rust unit suite | `cd src-tauri && cargo test` | **PASS** — 263 passed, 0 failed | [`cargo-test.log`](./assets/verify/v0.10/cargo-test.log) |
+| Rust unit suite | `cd src-tauri && cargo test` | **PASS** — 263 passed, 0 failed *(2026-07-17 run; **not the current count** — see amendment below)* | `cargo-test.log` *(referenced file absent; see amendment)* |
 | Geospatial subset | same log (`test geospatial::…`) | **PASS** — 55 geospatial tests ok | same |
 | Typecheck | `npx tsc --noEmit` | **PASS** — exit 0 | [`tsc-noEmit.log`](./assets/verify/v0.10/tsc-noEmit.log) |
 | Frontend build | `npm run build` | **PASS** — vite build ok | [`npm-build.log`](./assets/verify/v0.10/npm-build.log) |
 
 No unit regressions found; no code fixes required for this verify pass.
+
+> **Amendment — 2026-10-11.** The table above records the **2026-07-17** run only. Its
+> `263 passed` figure is retained deliberately as the historical record and has **not** been
+> rewritten. Re-run on 2026-10-11 against the current tree: `cd src-tauri && cargo test` →
+> **exit 0, `328 passed; 0 failed; 0 ignored; 0 measured`**, and `npx tsc --noEmit` → pass. The
+> suite has grown by 65 tests since this pass.
+>
+> Separately, the three log files cited as evidence above (`cargo-test.log`, `tsc-noEmit.log`,
+> `npm-build.log`) are **not present in the working tree and are not tracked in git**, so those
+> evidence links are dangling. This amendment added no replacement logs; regenerating them is an
+> open task.
 
 ---
 
@@ -55,11 +66,11 @@ No unit regressions found; no code fixes required for this verify pass.
 | C1 | Real DEM download / stage / condition | `catalog.rs` USGS/Copernicus/OpenTopo fetchers; `dem.rs` stage+condition tests | **PASS** unit; live USGS fetch **CONDITIONAL** (`usgs_3dep_fetch_smoke_or_skip`) |
 | C2 | Soft preview bed from DEM samples | `softSolver.buildBedFromDemSamples`; `PreviewEngine.setDemBed`; store wires `sample_geo_dem` | **PASS** |
 | C3 | HAND rapid inundation labelled Live preview | `handInundation.ts` authority label; blended in `preview/engine.ts` | **PASS** |
-| C4 | Scientific path when ANUGA ready; Demo badge honest | `GeoViewport` / `CesiumGlobe` authority badge; hydro registry + GPL refuse tests; `manifest_marks_demo_non_authoritative` | **PASS** unit; ANUGA live run **CONDITIONAL** (sidecar installed) |
+| C4 | Current ANUGA compatibility worker remains non-authoritative; Demo badge honest | `tools/sidecars/anuga/test_contract.py`; hydro registry + GPL refuse tests; `manifest_marks_demo_non_authoritative` | **PASS** contract/unit; live ANUGA API smoke optional and still reports scaffold |
 | C5 | Flood lab scenario defaults | `PLACEHOLDER_SCENARIO` / hydrograph templates in `defaults.ts` | **PASS** |
 | C6 | NFHL / HydroSHEDS / gauges / OSM waterways layers | `DEFAULT_GEO_LAYERS` + `GeoLayerTree` FETCHABLE set + MapLibre sources | **PASS** (code); live connector fetch **CONDITIONAL** (network) |
 | C7 | DEM-only exports (no splat) | `exports::export_dem_only_workspace_without_splat_or_prior_run` + offline flood bundle tests | **PASS** |
-| C8 | Soft + HAND without ANUGA = non-authoritative | Authority badge Demo / Live preview when not calibrated ANUGA | **PASS** (code); UI **MANUAL** |
+| C8 | Soft + HAND and the current ANUGA scaffold are non-authoritative | Authority badge Demo / Live preview / Scaffold; no calibrated ANUGA run is available | **PASS** (code/contract); UI **MANUAL** |
 
 ---
 
@@ -95,7 +106,7 @@ No unit regressions found; no code fixes required for this verify pass.
 | B4 | Preview flood idle | Soft/HAND engine with DEM bed | **MANUAL** — `10-flood-idle.png` |
 | B5 | Wet / peak | Scrub hydrograph timeline | **MANUAL** — `11-flood-wet.png`, `12-flood-peak.png` |
 | B6 | Export depth/hazard + manifest | DEM-only export unit test | **PASS** unit; UI **MANUAL** — `13-flood-export.png` |
-| B7 | ANUGA scientific (optional) | When launcher found under `tools/` | **CONDITIONAL** — Scientific badge only if calibrated ANUGA |
+| B7 | ANUGA compatibility scaffold (optional) | When launcher found under `tools/`; bounded flat-bed API smoke only | **NON-AUTHORITATIVE** — must report scaffold even if evolve completes |
 
 ---
 
@@ -111,7 +122,7 @@ Full capture instructions: [`assets/verify/v0.10/MANUAL-CAPTURE-CHECKLIST.md`](.
 | `04-enu-flood.png` | ENU 3D flood | **MANUAL** |
 | `05-2d-overlay.png` | MapLibre flood overlay | **MANUAL** |
 | `06-badge-demo.png` | Demo authority badge | **MANUAL** |
-| `07-badge-scientific.png` | Scientific badge (ANUGA) | **CONDITIONAL** / MANUAL |
+| `07-badge-scientific.png` | Scientific badge | **BLOCKED** — current ANUGA worker cannot produce a Scientific badge |
 | `08-connector-progress.png` | Catalog fetch progress | **CONDITIONAL** / MANUAL |
 | `09-recon-splat-geo.png` | Recon splat in Geo ENU | **MANUAL** / CONDITIONAL on sample MP4 |
 | `10-flood-idle.png` … `13-flood-export.png` | DEM-only flood sequence | **MANUAL** |
@@ -126,7 +137,7 @@ Headless Tauri WebDriver screenshots were **not** captured in this verify sessio
 | --- | --- | --- |
 | Live USGS 3DEP / FEMA / NWIS / STAC fetches | CONDITIONAL | Network available; connector returns asset or clear skip message |
 | OpenTopography without API key | CONDITIONAL (expected) | Clear error without key — covered by unit `opentopo_without_key_errors_clearly` |
-| ANUGA Scientific badge | CONDITIONAL | ANUGA launcher installed + calibrated run |
+| ANUGA Scientific badge | BLOCKED | Implement DEM sampling/forcing, scenario boundary conditions, calibration, and validation before enabling a scientific run |
 | Cesium ion World Terrain | CONDITIONAL / Experimental | Exp Mode + user token; never required for Standard |
 | GUI screenshots | MANUAL pending | Operator runs checklist; drop PNGs into `docs/assets/verify/v0.10/` |
 | Recon+splat E2E | MANUAL / CONDITIONAL | Local smoke MP4 from `SMOKE-TEST.md` + GPU train |

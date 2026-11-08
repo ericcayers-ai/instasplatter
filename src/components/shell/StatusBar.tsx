@@ -84,20 +84,24 @@ export default function StatusBar() {
     const tone =
       scientific?.state === "running"
         ? "live"
-        : scientific?.state === "done"
-          ? "ok"
-          : preview?.validation === "validated"
+        : scientific?.state === "failed"
+          ? "err"
+          : scientific?.state === "done"
             ? "ok"
-            : "idle";
+            : preview?.validation === "validated"
+              ? "ok"
+              : "idle";
     return (
       <footer className="status-ribbon" role="status">
         <div className="status-ribbon__live min-w-0 overflow-hidden">
           <Pill tone={tone}>
             {scientific?.state === "running"
               ? "Live"
-              : preview?.validation === "validated"
-                ? "Validated"
-                : "Ready"}
+              : scientific?.state === "failed"
+                ? "Failed"
+                : preview?.validation === "validated"
+                  ? "Validated"
+                  : "Ready"}
           </Pill>
           {floodPct != null && (
             <>

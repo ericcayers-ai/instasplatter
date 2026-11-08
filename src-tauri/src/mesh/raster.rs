@@ -108,7 +108,9 @@ fn max_eigenvalue(m: [f32; 3]) -> f32 {
 fn surfel_normal(cloud: &SplatCloud, i: usize, eye: [f32; 3]) -> [f32; 3] {
     let s = cloud.scale(i);
     let r = cloud.rot_matrix(i);
-    let axis = (0..3).min_by(|&a, &b| s[a].partial_cmp(&s[b]).unwrap()).unwrap();
+    let axis = (0..3)
+        .min_by(|&a, &b| s[a].partial_cmp(&s[b]).unwrap())
+        .unwrap();
     let mut n = [r[0][axis], r[1][axis], r[2][axis]];
     let p = cloud.positions[i];
     let to_eye = [eye[0] - p[0], eye[1] - p[1], eye[2] - p[2]];
@@ -119,12 +121,7 @@ fn surfel_normal(cloud: &SplatCloud, i: usize, eye: [f32; 3]) -> [f32; 3] {
 }
 
 /// Render depth and normals for `image`, whose intrinsics are `camera`.
-pub fn render(
-    cloud: &SplatCloud,
-    camera: &Camera,
-    image: &Image,
-    opts: RenderOptions,
-) -> DepthMap {
+pub fn render(cloud: &SplatCloud, camera: &Camera, image: &Image, opts: RenderOptions) -> DepthMap {
     let (w0, h0) = (camera.width as f32, camera.height as f32);
     let s = if opts.max_dim > 0 {
         (opts.max_dim as f32 / w0.max(h0)).min(1.0)
@@ -228,7 +225,11 @@ pub fn render(
         .collect();
 
     // Front to back, so compositing can stop once the pixel is opaque.
-    splats.par_sort_by(|a, b| a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal));
+    splats.par_sort_by(|a, b| {
+        a.depth
+            .partial_cmp(&b.depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // ---- Bucket into tiles, preserving depth order ------------------------
     let tiles_x = width.div_ceil(TILE);
@@ -267,7 +268,9 @@ pub fn render(
                     let dx = x as f32 + 0.5 - s.cx;
                     let dy = y as f32 + 0.5 - s.cy;
                     let power = -0.5
-                        * (s.conic[0] * dx * dx + 2.0 * s.conic[1] * dx * dy + s.conic[2] * dy * dy);
+                        * (s.conic[0] * dx * dx
+                            + 2.0 * s.conic[1] * dx * dy
+                            + s.conic[2] * dy * dy);
                     if power > 0.0 || power < -12.0 {
                         continue;
                     }
@@ -371,17 +374,31 @@ mod tests {
     #[test]
     fn a_splat_in_front_of_the_camera_reports_its_depth() {
         let cloud = one_splat([0.0, 0.0, 3.0], 0.25);
-        let map = render(&cloud, &camera(128, 128, 128.0), &identity_image(), RenderOptions { max_dim: 128 });
+        let map = render(
+            &cloud,
+            &camera(128, 128, 128.0),
+            &identity_image(),
+            RenderOptions { max_dim: 128 },
+        );
         assert_eq!((map.width, map.height), (128, 128));
         let d = map.at(64, 64);
         assert!((d - 3.0).abs() < 1e-3, "centre depth {d}");
-        assert!(map.valid_pixels() > 20, "only {} pixels", map.valid_pixels());
+        assert!(
+            map.valid_pixels() > 20,
+            "only {} pixels",
+            map.valid_pixels()
+        );
     }
 
     #[test]
     fn a_splat_behind_the_camera_renders_nothing() {
         let cloud = one_splat([0.0, 0.0, -3.0], 0.25);
-        let map = render(&cloud, &camera(64, 64, 64.0), &identity_image(), RenderOptions { max_dim: 64 });
+        let map = render(
+            &cloud,
+            &camera(64, 64, 64.0),
+            &identity_image(),
+            RenderOptions { max_dim: 64 },
+        );
         assert_eq!(map.valid_pixels(), 0);
         assert!(map.depth.iter().all(|d| *d == 0.0));
     }
@@ -389,7 +406,12 @@ mod tests {
     #[test]
     fn an_empty_cloud_renders_an_empty_map() {
         let cloud = SplatCloud::default();
-        let map = render(&cloud, &camera(32, 32, 32.0), &identity_image(), RenderOptions { max_dim: 32 });
+        let map = render(
+            &cloud,
+            &camera(32, 32, 32.0),
+            &identity_image(),
+            RenderOptions { max_dim: 32 },
+        );
         assert_eq!(map.valid_pixels(), 0);
         assert_eq!(map.depth.len(), 32 * 32);
     }
@@ -398,7 +420,12 @@ mod tests {
     fn a_transparent_splat_is_not_trusted_as_a_surface() {
         let mut cloud = one_splat([0.0, 0.0, 3.0], 0.25);
         cloud.opacity_logit = vec![-3.0]; // about 0.05 opacity
-        let map = render(&cloud, &camera(64, 64, 64.0), &identity_image(), RenderOptions { max_dim: 64 });
+        let map = render(
+            &cloud,
+            &camera(64, 64, 64.0),
+            &identity_image(),
+            RenderOptions { max_dim: 64 },
+        );
         assert_eq!(map.valid_pixels(), 0, "a faint splat must not define depth");
     }
 
@@ -407,12 +434,19 @@ mod tests {
         let mut cloud = one_splat([0.0, 0.0, 5.0], 0.3);
         // A second, nearer splat covering the same pixels.
         cloud.positions.push([0.0, 0.0, 2.0]);
-        cloud.scales_log.push([0.3f32.ln(), 0.3f32.ln(), 0.015f32.ln()]);
+        cloud
+            .scales_log
+            .push([0.3f32.ln(), 0.3f32.ln(), 0.015f32.ln()]);
         cloud.rot_wxyz.push([1.0, 0.0, 0.0, 0.0]);
         cloud.opacity_logit.push(8.0);
         cloud.sh_dc.push([1.0, 1.0, 1.0]);
 
-        let map = render(&cloud, &camera(128, 128, 128.0), &identity_image(), RenderOptions { max_dim: 128 });
+        let map = render(
+            &cloud,
+            &camera(128, 128, 128.0),
+            &identity_image(),
+            RenderOptions { max_dim: 128 },
+        );
         let d = map.at(64, 64);
         assert!((d - 2.0).abs() < 0.05, "occlusion not respected: depth {d}");
     }
@@ -420,7 +454,12 @@ mod tests {
     #[test]
     fn the_render_is_downscaled_and_the_intrinsics_follow() {
         let cloud = one_splat([0.0, 0.0, 3.0], 0.25);
-        let map = render(&cloud, &camera(800, 600, 700.0), &identity_image(), RenderOptions { max_dim: 400 });
+        let map = render(
+            &cloud,
+            &camera(800, 600, 700.0),
+            &identity_image(),
+            RenderOptions { max_dim: 400 },
+        );
         assert_eq!((map.width, map.height), (400, 300));
         assert!((map.fx - 350.0).abs() < 1e-3);
         assert!((map.cx - 200.0).abs() < 1e-3);
@@ -431,8 +470,16 @@ mod tests {
     fn the_normal_of_a_flat_splat_faces_the_camera() {
         // Thin along z, so the surfel normal is +-z; it must point at the eye.
         let cloud = one_splat([0.0, 0.0, 3.0], 0.4);
-        let map = render(&cloud, &camera(64, 64, 64.0), &identity_image(), RenderOptions { max_dim: 64 });
+        let map = render(
+            &cloud,
+            &camera(64, 64, 64.0),
+            &identity_image(),
+            RenderOptions { max_dim: 64 },
+        );
         let n = map.normal[64 / 2 * 64 + 32];
-        assert!(n[2] < -0.9, "normal {n:?} does not face the camera at the origin");
+        assert!(
+            n[2] < -0.9,
+            "normal {n:?} does not face the camera at the origin"
+        );
     }
 }

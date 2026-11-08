@@ -417,7 +417,12 @@ mod tests {
 
     fn quad() -> Mesh {
         Mesh {
-            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ],
             normals: Vec::new(),
             colors: Vec::new(),
             indices: vec![0, 1, 2, 0, 2, 3],
@@ -481,7 +486,11 @@ mod tests {
             let n = [r * theta.cos(), y, r * theta.sin()];
 
             // Tangent frame; the thin axis is the third column.
-            let seed = if n[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+            let seed = if n[1].abs() < 0.9 {
+                [0.0, 1.0, 0.0]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
             let t1 = unit(cross(seed, n));
             let t2 = cross(n, t1);
             let m = [
@@ -491,7 +500,8 @@ mod tests {
             ];
 
             c.positions.push(n);
-            c.scales_log.push([0.09f32.ln(), 0.09f32.ln(), 0.008f32.ln()]);
+            c.scales_log
+                .push([0.09f32.ln(), 0.09f32.ln(), 0.008f32.ln()]);
             c.rot_wxyz.push(mat3_to_quat(m));
             c.opacity_logit.push(8.0);
             c.sh_dc.push([1.2, -0.5, 0.0]);
@@ -566,8 +576,15 @@ mod tests {
         })
         .expect("extraction failed");
 
-        assert!(mesh.triangle_count() > 500, "{} triangles", mesh.triangle_count());
-        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "progress went backwards");
+        assert!(
+            mesh.triangle_count() > 500,
+            "{} triangles",
+            mesh.triangle_count()
+        );
+        assert!(
+            seen.windows(2).all(|w| w[0] <= w[1]),
+            "progress went backwards"
+        );
 
         // Every vertex sits on the unit sphere. The tolerance covers the splat
         // thickness, one voxel, and the outward bias of a mean depth taken
@@ -578,7 +595,10 @@ mod tests {
             .iter()
             .filter(|p| (norm(**p) - 1.0).abs() > 0.12)
             .count();
-        assert!(off * 50 < n_verts, "{off} of {n_verts} vertices are off the sphere");
+        assert!(
+            off * 50 < n_verts,
+            "{off} of {n_verts} vertices are off the sphere"
+        );
 
         // Fusing many noisy views leaves a few pockets near the silhouettes,
         // so a handful of normals face the wrong way. Assert the surface is
@@ -589,7 +609,10 @@ mod tests {
             .zip(&mesh.normals)
             .filter(|(p, n)| p[0] * n[0] + p[1] * n[1] + p[2] * n[2] <= 0.0)
             .count();
-        assert!(inward * 50 < n_verts, "{inward} of {n_verts} normals face inward");
+        assert!(
+            inward * 50 < n_verts,
+            "{inward} of {n_verts} normals face inward"
+        );
 
         // Enclosed volume, which only comes out right if the winding is
         // globally consistent and the surface closes.
@@ -631,8 +654,22 @@ mod tests {
     fn extraction_refuses_an_empty_splat_or_a_scene_with_no_cameras() {
         let cloud = sphere_shell(100);
         let model = ring_of_cameras(4, 64);
-        assert!(extract(&SplatCloud::default(), &model, None, MeshOptions::draft(), |_, _| Ok(())).is_err());
-        assert!(extract(&cloud, &Model::default(), None, MeshOptions::draft(), |_, _| Ok(())).is_err());
+        assert!(extract(
+            &SplatCloud::default(),
+            &model,
+            None,
+            MeshOptions::draft(),
+            |_, _| Ok(())
+        )
+        .is_err());
+        assert!(extract(
+            &cloud,
+            &Model::default(),
+            None,
+            MeshOptions::draft(),
+            |_, _| Ok(())
+        )
+        .is_err());
     }
 
     #[test]
@@ -665,6 +702,9 @@ mod tests {
         // past the end of it.
         assert!(mesh.colors.is_empty() || mesh.colors.len() == mesh.positions.len());
         assert_eq!(mesh.normals.len(), mesh.positions.len());
-        assert!(mesh.indices.iter().all(|&i| (i as usize) < mesh.positions.len()));
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|&i| (i as usize) < mesh.positions.len()));
     }
 }

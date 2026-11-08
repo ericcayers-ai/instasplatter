@@ -14,6 +14,7 @@ pub mod exports;
 pub mod hydro;
 pub mod hydro_adapters;
 pub mod preview;
+pub mod realitylog_export;
 pub mod registration;
 pub mod sat_splat;
 pub mod sky;

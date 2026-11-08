@@ -126,32 +126,15 @@ impl SidecarArtifactV2 {
 
 fn license_for(source: &str) -> &'static str {
     match source {
-        "depth-anything-3" | "mapanything" | "roma-v2" | "colmap" | "mvs" | "gs-2d" => {
-            "Apache-2.0"
-        }
+        "depth-anything-3" | "mapanything" | "roma-v2" | "colmap" | "mvs" | "gs-2d" => "Apache-2.0",
         "depth-anything-v2" => "Apache-2.0",
         "vggt-commercial" => "commercial",
         "fixer" => "NVIDIA-OML",
-        "vggt-omega"
-        | "mast3r"
-        | "dust3r"
-        | "difix"
-        | "vggt-research"
-        | "pi3x"
-        | "stream-vggt"
-        | "vggt-long"
-        | "mast3r-slam"
-        | "slam3r"
-        | "monst3r"
-        | "easi3r"
-        | "city-gaussian"
-        | "urban-gs"
-        | "horizon-gs"
-        | "gof"
-        | "pgsr"
-        | "rade-gs"
-        | "sugar"
-        | "milo" => "NC-research",
+        "vggt-omega" | "mast3r" | "dust3r" | "difix" | "vggt-research" | "pi3x" | "stream-vggt"
+        | "vggt-long" | "mast3r-slam" | "slam3r" | "monst3r" | "easi3r" | "city-gaussian"
+        | "urban-gs" | "horizon-gs" | "gof" | "pgsr" | "rade-gs" | "sugar" | "milo" => {
+            "NC-research"
+        }
         _ => "unknown",
     }
 }
@@ -223,6 +206,96 @@ fn launcher_ready(name: &str) -> bool {
     launcher(name).exists() && !is_stub_sidecar(name)
 }
 
+const RESEARCH_ENTRYPOINTS: &[&str] = &[
+    "run_upstream.py",
+    "demo.py",
+    "demo_colmap.py",
+    "infer.py",
+    "scripts/demo.py",
+    "scripts/demo_colmap.py",
+    "scripts/infer.py",
+];
+
+fn research_entrypoint_ready(dir: &Path) -> bool {
+    if RESEARCH_ENTRYPOINTS
+        .iter()
+        .any(|entrypoint| dir.join(entrypoint).is_file())
+    {
+        return true;
+    }
+
+    ["upstream", "repo"].iter().any(|base| {
+        let base = dir.join(base);
+        RESEARCH_ENTRYPOINTS
+            .iter()
+            .any(|entrypoint| base.join(entrypoint).is_file())
+            || base.join("run.py").is_file()
+    })
+}
+
+fn has_nonempty_model_weights(dir: &Path) -> bool {
+    const EXTENSIONS: &[&str] = &["bin", "ckpt", "onnx", "pt", "pth", "safetensors"];
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+
+    entries.filter_map(Result::ok).any(|entry| {
+        let path = entry.path();
+        if !path.is_file()
+            || path
+                .metadata()
+                .map(|metadata| metadata.len() == 0)
+                .unwrap_or(true)
+        {
+            return false;
+        }
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| {
+                EXTENSIONS
+                    .iter()
+                    .any(|supported| extension.eq_ignore_ascii_case(supported))
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn research_weights_ready(dir: &Path) -> bool {
+    [dir.to_path_buf(), dir.join("upstream"), dir.join("repo")]
+        .iter()
+        .any(|base| {
+            has_nonempty_model_weights(base)
+                || ["weights", "checkpoints", "models"]
+                    .iter()
+                    .any(|child| has_nonempty_model_weights(&base.join(child)))
+        })
+}
+
+/// Research adapters are installable wrappers; their bundled `run.py` is not
+/// evidence that upstream code or model weights have been installed.
+fn research_install_ready_in_dir(dir: &Path) -> bool {
+    dir.is_dir()
+        && !dir.join(".stub").exists()
+        && dir.join("ACCEPTED").is_file()
+        && launcher_in_dir(dir).is_some()
+        && research_entrypoint_ready(dir)
+        && research_weights_ready(dir)
+}
+
+fn research_install_dir(name: &str) -> Option<PathBuf> {
+    sidecar_search_dirs(name)
+        .into_iter()
+        .find(|dir| research_install_ready_in_dir(dir))
+}
+
+fn research_ready(name: &str) -> bool {
+    research_install_dir(name).is_some()
+}
+
+fn research_launcher(name: &str) -> Option<PathBuf> {
+    research_install_dir(name).and_then(|dir| launcher_in_dir(&dir))
+}
+
 /// True when the user dropped weights / ACCEPTED / an upstream checkout.
 fn install_marker_ready(name: &str) -> bool {
     const MARKERS: &[&str] = &[
@@ -237,7 +310,9 @@ fn install_marker_ready(name: &str) -> bool {
         "upstream",
         "repo",
     ];
-    sidecar_search_dirs(name).iter().any(|d| MARKERS.iter().any(|m| d.join(m).exists()))
+    sidecar_search_dirs(name)
+        .iter()
+        .any(|d| MARKERS.iter().any(|m| d.join(m).exists()))
 }
 
 fn neural_ready(name: &str) -> bool {
@@ -253,31 +328,31 @@ pub fn status() -> SidecarStatus {
         depth_anything_v2: neural_ready("depth-anything-v2"),
         depth_anything_3: neural_ready("depth-anything-3"),
         vggt_commercial: vggt_c,
-        vggt_omega: launcher_ready("vggt-omega"),
-        vggt_research: launcher_ready("vggt-research"),
-        mast3r: launcher_ready("mast3r"),
-        dust3r: launcher_ready("dust3r"),
-        pi3x: launcher_ready("pi3x"),
-        stream_vggt: launcher_ready("stream-vggt"),
-        vggt_long: launcher_ready("vggt-long"),
-        mast3r_slam: launcher_ready("mast3r-slam"),
-        slam3r: launcher_ready("slam3r"),
-        monst3r: launcher_ready("monst3r"),
-        easi3r: launcher_ready("easi3r"),
-        city_gaussian: launcher_ready("city-gaussian"),
-        urban_gs: launcher_ready("urban-gs"),
-        horizon_gs: launcher_ready("horizon-gs"),
+        vggt_omega: research_ready("vggt-omega"),
+        vggt_research: research_ready("vggt-research"),
+        mast3r: research_ready("mast3r"),
+        dust3r: research_ready("dust3r"),
+        pi3x: research_ready("pi3x"),
+        stream_vggt: research_ready("stream-vggt"),
+        vggt_long: research_ready("vggt-long"),
+        mast3r_slam: research_ready("mast3r-slam"),
+        slam3r: research_ready("slam3r"),
+        monst3r: research_ready("monst3r"),
+        easi3r: research_ready("easi3r"),
+        city_gaussian: research_ready("city-gaussian"),
+        urban_gs: research_ready("urban-gs"),
+        horizon_gs: research_ready("horizon-gs"),
         gs_2d: launcher_ready("gs-2d"),
-        gof: launcher_ready("gof"),
-        pgsr: launcher_ready("pgsr"),
-        rade_gs: launcher_ready("rade-gs"),
-        sugar: launcher_ready("sugar"),
-        milo: launcher_ready("milo"),
+        gof: research_ready("gof"),
+        pgsr: research_ready("pgsr"),
+        rade_gs: research_ready("rade-gs"),
+        sugar: research_ready("sugar"),
+        milo: research_ready("milo"),
         mapanything: neural_ready("mapanything"),
         // RoMa fails cleanly at runtime if the pip package is absent.
         roma_v2: launcher_ready("roma-v2"),
         fixer: neural_ready("fixer"),
-        difix: launcher_ready("difix"),
+        difix: research_ready("difix"),
     }
 }
 
@@ -317,16 +392,29 @@ async fn invoke_launcher(
         return Ok(None);
     }
 
-    let launch = launcher(name);
-    if !launch.exists() {
-        return Ok(None);
-    }
-    if is_stub_sidecar(name) {
-        ctx.notice(format!(
-            "{name} is still a stub — install real weights and delete the .stub marker."
-        ));
-        return Err(format!("{name} stub (not wired)"));
-    }
+    let launch = if solver::is_research_sidecar(name) {
+        match research_launcher(name) {
+            Some(path) => path,
+            None => {
+                ctx.log(format!(
+                    "Skipping {name}: requires ACCEPTED, an upstream entrypoint, and non-empty model weights."
+                ));
+                return Ok(None);
+            }
+        }
+    } else {
+        let path = launcher(name);
+        if !path.exists() {
+            return Ok(None);
+        }
+        if is_stub_sidecar(name) {
+            ctx.notice(format!(
+                "{name} is still a stub — install real weights and delete the .stub marker."
+            ));
+            return Err(format!("{name} stub (not wired)"));
+        }
+        path
+    };
     ctx.log(format!("Running {name} sidecar…"));
 
     let sparse = crate::colmap::find_model_dir(&ctx.workspace);
@@ -377,10 +465,7 @@ async fn invoke_launcher(
             .await
             .map_err(|e| e.to_string())?;
     }
-    let out = child
-        .wait_with_output()
-        .await
-        .map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
     if let Some(pid) = pid {
         ctx.child_pids.lock().unwrap().retain(|p| *p != pid);
     }
@@ -416,9 +501,8 @@ fn consume_point_ply(ply_path: &Path) -> Result<(Vec<[f32; 3]>, Vec<[u8; 3]>), S
                 .sh_dc
                 .iter()
                 .map(|dc| {
-                    let to_u8 = |v: f32| {
-                        ((0.5 + crate::splat::SH_C0 * v) * 255.0).clamp(0.0, 255.0) as u8
-                    };
+                    let to_u8 =
+                        |v: f32| ((0.5 + crate::splat::SH_C0 * v) * 255.0).clamp(0.0, 255.0) as u8;
                     [to_u8(dc[0]), to_u8(dc[1]), to_u8(dc[2])]
                 })
                 .collect();
@@ -480,7 +564,9 @@ pub async fn try_neural_poses(
                 };
 
                 if !looks_ok {
-                    ctx.log(format!("[{name}] SfM output was not a usable COLMAP model."));
+                    ctx.log(format!(
+                        "[{name}] SfM output was not a usable COLMAP model."
+                    ));
                     continue;
                 }
 
@@ -582,10 +668,7 @@ pub async fn try_neural_poses(
 
 /// Guaranteed COLMAP triangulation + bundle adjustment after neural init when a feature DB exists.
 /// Always attempts BA (plan: guaranteed BA after neural init); falls back gracefully.
-pub async fn maybe_refine_poses_with_colmap(
-    ctx: &JobCtx,
-    images_dir: &Path,
-) -> Result<(), String> {
+pub async fn maybe_refine_poses_with_colmap(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     let model_dir = match crate::colmap::find_model_dir(&ctx.workspace) {
         Some(d) => d,
         None => return Ok(()),
@@ -603,9 +686,7 @@ pub async fn maybe_refine_poses_with_colmap(
             "1"
         } else {
             if ctx.settings.sift_gpu && !crate::engines::colmap_is_cuda() {
-                ctx.log(
-                    "Post-neural BA: CUDA COLMAP not installed — extracting features on CPU.",
-                );
+                ctx.log("Post-neural BA: CUDA COLMAP not installed — extracting features on CPU.");
             }
             "0"
         };
@@ -731,20 +812,15 @@ pub async fn try_neural_points(
     }
 
     let st = status();
-    let profile = solver::detect_capture_profile(
-        images_dir,
-        &ctx.workspace,
-        ctx.settings.experimental_mode,
-    );
+    let profile =
+        solver::detect_capture_profile(images_dir, &ctx.workspace, ctx.settings.experimental_mode);
     let order = solver::densify_neural_order(&ctx.settings, &st, profile);
     if order.is_empty() {
         return Ok(None);
     }
 
     // Dynamic 4D adapters never enter static fusion — log availability only.
-    if matches!(profile, solver::CaptureProfile::DynamicScene)
-        && ctx.settings.experimental_mode
-    {
+    if matches!(profile, solver::CaptureProfile::DynamicScene) && ctx.settings.experimental_mode {
         let four = super::experimental::experimental_four_d_candidates(&st);
         if !four.is_empty() {
             ctx.log(format!(
@@ -753,9 +829,7 @@ pub async fn try_neural_points(
             ));
         }
     }
-    if matches!(profile, solver::CaptureProfile::LargeScene)
-        && ctx.settings.experimental_mode
-    {
+    if matches!(profile, solver::CaptureProfile::LargeScene) && ctx.settings.experimental_mode {
         let large = super::experimental::experimental_large_scene_candidates(&st);
         if !large.is_empty() {
             ctx.log(format!(
@@ -786,13 +860,14 @@ pub async fn try_neural_points(
                     };
                     let art = SidecarArtifactV2::new_local(name, conf, px.len());
                     let meta = ply_path.with_extension("v2.json");
-                    let gate = super::experimental::ExperimentalValidationGate::for_fusion_candidate(
-                        true, // launcher already refused NC outside Experimental
-                        true,
-                        write_artifact_v2(&meta, &art).is_ok(),
-                        art.frame == "colmap/enu",
-                        !art.scale_status.is_empty(),
-                    );
+                    let gate =
+                        super::experimental::ExperimentalValidationGate::for_fusion_candidate(
+                            true, // launcher already refused NC outside Experimental
+                            true,
+                            write_artifact_v2(&meta, &art).is_ok(),
+                            art.frame == "colmap/enu",
+                            !art.scale_status.is_empty(),
+                        );
                     if !gate.all_clear() {
                         ctx.log(format!(
                             "[{name}] densify rejected by fusion validation gates."
@@ -846,8 +921,7 @@ pub async fn try_roma_densify(
         return Ok(None);
     }
     let q = ctx.settings.roma_quality.as_str();
-    match invoke_launcher(ctx, "roma-v2", images_dir, None, Some("densify"), Some(q)).await
-    {
+    match invoke_launcher(ctx, "roma-v2", images_dir, None, Some("densify"), Some(q)).await {
         Ok(Some(ply_path)) => match consume_point_ply(&ply_path) {
             Ok((xyz, rgb)) if xyz.len() >= 32 => {
                 ctx.log(format!(
@@ -907,8 +981,7 @@ pub async fn try_polish(ctx: &JobCtx, result_ply: &Path) -> Result<bool, String>
     for name in order {
         ctx.check_cancel()?;
         ctx.stage_progress("finalize", 0.7, &format!("Polishing with {name}…"));
-        match invoke_launcher(ctx, name, &images, Some(result_ply), Some("polish"), None).await
-        {
+        match invoke_launcher(ctx, name, &images, Some(result_ply), Some("polish"), None).await {
             Ok(Some(out)) => {
                 if out != result_ply {
                     std::fs::copy(&out, result_ply).map_err(|e| e.to_string())?;
@@ -933,4 +1006,68 @@ pub async fn try_polish(ctx: &JobCtx, result_ply: &Path) -> Result<bool, String>
         ctx.notice(format!("Polish: {}", labels.join(" → ")));
     }
     Ok(any)
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempSidecarDir(PathBuf);
+
+    impl TempSidecarDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "instasplatter-sidecar-readiness-{}-{nonce}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempSidecarDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn research_template_launcher_without_install_is_not_ready() {
+        let dir = TempSidecarDir::new();
+        std::fs::write(dir.0.join("run.py"), "# adapter template").unwrap();
+
+        assert!(!research_install_ready_in_dir(&dir.0));
+    }
+
+    #[test]
+    fn research_install_requires_marker_entrypoint_and_weights() {
+        let dir = TempSidecarDir::new();
+        std::fs::write(dir.0.join("run.py"), "# adapter wrapper").unwrap();
+        assert!(!research_install_ready_in_dir(&dir.0));
+
+        std::fs::write(dir.0.join("ACCEPTED"), "").unwrap();
+        let weights = dir.0.join("weights");
+        std::fs::create_dir_all(&weights).unwrap();
+        let weights_file = weights.join("model.safetensors");
+        std::fs::write(&weights_file, "weights").unwrap();
+
+        // The template run.py is not an accepted upstream entrypoint.
+        assert!(!research_install_ready_in_dir(&dir.0));
+
+        let upstream = dir.0.join("upstream");
+        std::fs::create_dir_all(&upstream).unwrap();
+        std::fs::write(upstream.join("demo.py"), "# upstream entrypoint").unwrap();
+        assert!(research_install_ready_in_dir(&dir.0));
+
+        std::fs::remove_file(weights_file).unwrap();
+        assert!(!research_install_ready_in_dir(&dir.0));
+    }
 }

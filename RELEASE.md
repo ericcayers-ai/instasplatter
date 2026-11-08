@@ -88,7 +88,7 @@ Rust unit tests cover linear algebra, COLMAP and PLY readers and writers, the SP
 
 ## What is new in v0.10.0
 
-**Geospatial + Cesium + disaster overlays.** CesiumJS **Globe** view mode beside MapLibre 2D and ENU 3D; real DEM staging/conditioning for AOI; catalog connectors (USGS 3DEP, Copernicus, HydroSHEDS, NFHL, gauges, STAC); stronger flood realism (DEM-backed soft preview / HAND path) with honest Live preview / Demo / Scientific badges; Experimental multi-hazard **data** stubs only (no fake physics). Multi-platform installer CI: Windows NSIS (primary) + Linux AppImage/deb + macOS dmg (best-effort, unsigned).
+**Geospatial + Cesium + disaster overlays.** CesiumJS **Globe** view mode beside MapLibre 2D and ENU 3D; real DEM staging/conditioning for AOI; catalog connectors (USGS 3DEP, Copernicus, HydroSHEDS, NFHL, gauges, STAC); DEM-backed soft preview / HAND path with honest Live preview / Demo badges. The ANUGA worker remains a non-authoritative compatibility scaffold; no Scientific run is available yet. Experimental multi-hazard **data** stubs only (no fake physics). Multi-platform installer CI: Windows NSIS (primary) + Linux AppImage/deb + macOS dmg (best-effort, unsigned).
 
 Verification matrix and evidence: [`docs/E2E-GEO-V010.md`](docs/E2E-GEO-V010.md), [`docs/assets/verify/v0.10/`](docs/assets/verify/v0.10/). Design: [`docs/superpowers/specs/2026-07-17-geo-disaster-cesium-design.md`](docs/superpowers/specs/2026-07-17-geo-disaster-cesium-design.md).
 

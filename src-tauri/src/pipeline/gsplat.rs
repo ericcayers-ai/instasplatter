@@ -38,7 +38,10 @@ struct Request<'a> {
 }
 
 fn launcher() -> PathBuf {
-    let user_dir = app_data_dir().join("engines").join("sidecars").join("gsplat-train");
+    let user_dir = app_data_dir()
+        .join("engines")
+        .join("sidecars")
+        .join("gsplat-train");
     let dev_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("tools")
@@ -47,7 +50,9 @@ fn launcher() -> PathBuf {
     let bundled_dir = crate::bundled_sidecars_path("gsplat-train");
 
     for dir in [Some(&user_dir), bundled_dir.as_ref(), Some(&dev_dir)] {
-        let Some(dir) = dir else { continue; };
+        let Some(dir) = dir else {
+            continue;
+        };
         #[cfg(windows)]
         {
             let bat = dir.join("run.bat");
@@ -67,7 +72,10 @@ pub fn is_installed() -> bool {
     // Only the user-installed engines dir counts as "installed" for routing
     // decisions. The dev path and bundled resources are launch fallbacks, not
     // an installation status, so tests and CI resolve to "brush" correctly.
-    let user_dir = app_data_dir().join("engines").join("sidecars").join("gsplat-train");
+    let user_dir = app_data_dir()
+        .join("engines")
+        .join("sidecars")
+        .join("gsplat-train");
     #[cfg(windows)]
     {
         if user_dir.join("run.bat").exists() {
@@ -97,8 +105,8 @@ pub async fn train(ctx: &JobCtx, resume: Option<(PathBuf, u32)>) -> Result<PathB
         );
     }
 
-    let model_dir = colmap::find_model_dir(&ctx.workspace)
-        .ok_or("No sparse model for gsplat training.")?;
+    let model_dir =
+        colmap::find_model_dir(&ctx.workspace).ok_or("No sparse model for gsplat training.")?;
     ensure_sparse_txt(&model_dir)?;
 
     let exports = exports_dir(&ctx.workspace);

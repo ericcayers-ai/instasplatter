@@ -7,6 +7,7 @@ import type {
   DemSampleGrid,
   EngineStatus,
   FloodEngineStatus,
+  FloodScenarioOverrides,
   GeoEvent,
   HardwareProfile,
   JobEvent,
@@ -45,6 +46,7 @@ import type {
   GeoTool,
   GeoViewMode,
   GeoWaterStyle,
+  HydrographSample,
 } from "../geospatial/types";
 import type { ExtentPlan } from "../lib/ipc";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -180,6 +182,8 @@ interface AppStore {
     splat: boolean;
     mesh: boolean;
   };
+  /** Opt-in display processing for the standalone reconstruction viewport. */
+  postProcessing: { tonemap: boolean; fxaa: boolean };
   /** First-enable Experimental Mode license modal. */
   experimentalModalOpen: boolean;
 
@@ -187,6 +191,8 @@ interface AppStore {
   geoLayers: GeoLayer[];
   /** Normalised scenario time 0–1 (linked to hydrograph). */
   geoFloodTime: number;
+  /** Hydrograph samples from the active run; null means the labelled preview curve. */
+  geoHydrograph: HydrographSample[] | null;
   /** Live preview playhead. */
   geoFloodPlaying: boolean;
   /** Prefer coarser grid / no particles. */
@@ -208,6 +214,10 @@ interface AppStore {
   geoScientificExtent: GeoJSON.FeatureCollection | null;
   /** Committed AOI (WGS84). Null until the user draws/edits a box. */
   geoAoiWgs84: AoiWgs84 | null;
+  /** AOI has changed but its extent plan/persistence is still pending. */
+  geoAoiPending: boolean;
+  /** A scientific flood start request is awaiting its authoritative run id. */
+  geoFloodStarting: boolean;
   /** Esri satellite (default) or low-bandwidth Carto/OSM. */
   geoBasemapMode: GeoBasemapMode;
   /** Last extent plan from AOI commit (preview cell size etc.). */
@@ -255,7 +265,11 @@ interface AppStore {
   generateSatSplat: () => Promise<void>;
   /** Fetch catalog overlay (nfhl / hydrosheds / gauges / osm-waterways) into layer tree. */
   fetchGeoOverlayLayer: (layerId: string) => Promise<void>;
-  startScientificFlood: (opts?: { allowDemo?: boolean; enableSwmm?: boolean }) => Promise<void>;
+  startScientificFlood: (opts?: {
+    allowDemo?: boolean;
+    enableSwmm?: boolean;
+    scenarioOverrides?: FloodScenarioOverrides;
+  }) => Promise<void>;
   cancelScientificFlood: () => Promise<void>;
   exportFloodProducts: () => Promise<void>;
   handleGeoEvent: (e: GeoEvent) => void;
@@ -291,6 +305,7 @@ interface AppStore {
   setSplatCount: (n: number) => void;
   setFps: (n: number) => void;
   setReconLayer: (id: keyof AppStore["reconLayers"], visible: boolean) => void;
+  setPostProcessing: (id: keyof AppStore["postProcessing"], enabled: boolean) => void;
   exportSplatAction: (rotation?: number[] | null) => Promise<void>;
   exportMeshAction: () => Promise<void>;
   /** Experimental Mode: splat → Sponge Schematic v2 `.schem`. */
@@ -309,6 +324,69 @@ function freshStages(): StageInfo[] {
 }
 
 let initStarted = false;
+let geoAoiMutationGeneration = 0;
+let geoDemRequestGeneration = 0;
+let pendingUserGeoDemSourcePath: string | null = null;
+let pendingGeoStartGeneration: number | null = null;
+const invalidatedGeoRunIds = new Set<string>();
+
+function invalidateGeoRun(run: GeoScientificRun | null) {
+  if (!run?.runId) return;
+  invalidatedGeoRunIds.add(run.runId);
+  if (run.state === "running") {
+    void api.cancelScientificFlood(run.runId).catch(() => {});
+  }
+}
+
+function floodModeSummary(mode: string | null | undefined) {
+  switch (mode?.toLowerCase()) {
+    case "demo":
+      return {
+        detail: "Demo run complete (synthetic and not authoritative)",
+        engineLabel: "Demo flood preview",
+        chip: "Flood: demo complete",
+        note: "Synthetic demo output — not a validated flood simulation.",
+        authority: "demo",
+        label: "Demo mode — synthetic extents",
+      };
+    case "scaffold":
+      return {
+        detail: "Solver scaffold complete (not authoritative)",
+        engineLabel: "ANUGA scaffold · non-authoritative",
+        chip: "Flood: scaffold complete · validation required",
+        note: "The ANUGA adapter path is a scaffold; its flat-bed output is not a scientific result.",
+        authority: "live-preview",
+        label: "ANUGA scaffold — non-authoritative",
+      };
+    case "anuga":
+      return {
+        detail: "ANUGA run complete · scenario validation required",
+        engineLabel: "ANUGA run · validation required",
+        chip: "Flood: solver complete · validation required",
+        note: "Solver output is not promoted as scientific until the scenario is calibrated and validated.",
+        authority: "live-preview",
+        label: "ANUGA run — validation required",
+      };
+    case "preview":
+      return {
+        detail: "Live preview complete (not authoritative)",
+        engineLabel: "Live flood preview",
+        chip: "Flood: preview complete",
+        note: "Live preview output — not a validated flood simulation.",
+        authority: "live-preview",
+        label: "Live preview — non-authoritative",
+      };
+    default:
+      return {
+        detail: `Unverified flood mode${mode ? `: ${mode}` : ""} · not authoritative`,
+        engineLabel: mode ? `Unverified flood engine · ${mode}` : "Unverified flood engine",
+        chip: "Flood: unverified result",
+        note: "This result mode is not recognized as validated; treat it as non-authoritative.",
+        authority: "live-preview",
+        label: "Unverified mode — non-authoritative",
+      };
+  }
+}
 
 export const useStore = create<AppStore>((set, get) => ({
   screen: "home",
@@ -368,11 +446,13 @@ export const useStore = create<AppStore>((set, get) => ({
     splat: true,
     mesh: true,
   },
+  postProcessing: { tonemap: false, fxaa: false },
   experimentalModalOpen: false,
   aboutOpen: false,
 
   geoLayers: DEFAULT_GEO_LAYERS.map((l) => ({ ...l })),
   geoFloodTime: 0.35,
+  geoHydrograph: null,
   geoFloodPlaying: false,
   geoFloodLowPower: false,
   geoSunHourUtc: null,
@@ -386,6 +466,8 @@ export const useStore = create<AppStore>((set, get) => ({
   geoFloodEngine: null,
   geoScientificExtent: null,
   geoAoiWgs84: null,
+  geoAoiPending: false,
+  geoFloodStarting: false,
   geoBasemapMode: "satellite",
   geoExtentPlan: null,
   geoAoiRevision: 0,
@@ -422,56 +504,59 @@ export const useStore = create<AppStore>((set, get) => ({
         api.getEngineStatus(),
         api.getSuite().catch(() => "reconstruction" as Suite),
       ]);
-    document.documentElement.dataset.suite = suite;
-    set({ profile, settings, resolved, suite });
-    void get().refreshProjects();
-    // Engine status can change once install_engines finishes, so events that
-    // affect it are not tracked live; a plain re-read on init is enough here.
-    set({ engineStatus });
-    void api.getFloodEngineStatus().then((geoFloodEngine) => set({ geoFloodEngine })).catch(() => {});
-    await api.onJobEvent((e) => get().handleJobEvent(e));
-    await api.onGeoEvent((e) => get().handleGeoEvent(e));
-    await api.onSimEvent((e) => get().handleSimEvent(e));
-    // Dev/agent hook: reopen a finished workspace after projects load.
-    void (async () => {
-      await get().refreshProjects();
-      const openWs = await api.takeOpenWorkspace().catch(() => null);
-      if (openWs) void get().resumeProject(openWs);
-    })();
-    await api.onQueueSnapshot((snap) => {
-      set({ queueItems: snap.items, queuePaused: snap.paused });
-      const running = snap.items.find((i) => i.state === "running");
-      if (
-        running?.jobId &&
-        get().jobId !== running.jobId &&
-        get().screen === "home" &&
-        (running.suite ?? "reconstruction") === "reconstruction"
-      ) {
-        // Promote the active batch item into the processing screen.
-        set({
-          screen: "processing",
-          jobId: running.jobId,
-          inputPath: running.inputPath,
-          workspace: running.workspace,
-          stages: freshStages(),
-          logs: [],
-          notices: [],
-          pipelineChips: {},
-          cameras: [],
-          registeredCameras: 0,
-          totalCameras: 0,
-          trackingConfidence: 0,
-          liveTrackingStatus: get().resolved?.liveInit ? "starting" : "off",
-          jobStartedAt: Date.now(),
-          jobSettingsSnapshot: get().resolved,
-        });
-      }
-    });
-    const snap = await api.listQueue().catch(() => null);
-    if (snap) set({ queueItems: snap.items, queuePaused: snap.paused });
-    // Dev/test hook: start a job immediately if requested via env var.
-    const auto = await api.getAutostart().catch(() => null);
-    if (auto && !get().jobId) void get().startJob(auto);
+      document.documentElement.dataset.suite = suite;
+      set({ profile, settings, resolved, suite });
+      void get().refreshProjects();
+      // Engine status can change once install_engines finishes, so events that
+      // affect it are not tracked live; a plain re-read on init is enough here.
+      set({ engineStatus });
+      void api
+        .getFloodEngineStatus()
+        .then((geoFloodEngine) => set({ geoFloodEngine }))
+        .catch(() => {});
+      await api.onJobEvent((e) => get().handleJobEvent(e));
+      await api.onGeoEvent((e) => get().handleGeoEvent(e));
+      await api.onSimEvent((e) => get().handleSimEvent(e));
+      // Dev/agent hook: reopen a finished workspace after projects load.
+      void (async () => {
+        await get().refreshProjects();
+        const openWs = await api.takeOpenWorkspace().catch(() => null);
+        if (openWs) void get().resumeProject(openWs);
+      })();
+      await api.onQueueSnapshot((snap) => {
+        set({ queueItems: snap.items, queuePaused: snap.paused });
+        const running = snap.items.find((i) => i.state === "running");
+        if (
+          running?.jobId &&
+          get().jobId !== running.jobId &&
+          get().screen === "home" &&
+          (running.suite ?? "reconstruction") === "reconstruction"
+        ) {
+          // Promote the active batch item into the processing screen.
+          set({
+            screen: "processing",
+            jobId: running.jobId,
+            inputPath: running.inputPath,
+            workspace: running.workspace,
+            stages: freshStages(),
+            logs: [],
+            notices: [],
+            pipelineChips: {},
+            cameras: [],
+            registeredCameras: 0,
+            totalCameras: 0,
+            trackingConfidence: 0,
+            liveTrackingStatus: get().resolved?.liveInit ? "starting" : "off",
+            jobStartedAt: Date.now(),
+            jobSettingsSnapshot: get().resolved,
+          });
+        }
+      });
+      const snap = await api.listQueue().catch(() => null);
+      if (snap) set({ queueItems: snap.items, queuePaused: snap.paused });
+      // Dev/test hook: start a job immediately if requested via env var.
+      const auto = await api.getAutostart().catch(() => null);
+      if (auto && !get().jobId) void get().startJob(auto);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("Init failed:", message);
@@ -527,21 +612,31 @@ export const useStore = create<AppStore>((set, get) => ({
   setGeoBasemapMode: (mode) => set({ geoBasemapMode: mode }),
 
   clearGeoAoi: () => {
+    geoAoiMutationGeneration += 1;
+    geoDemRequestGeneration += 1;
+    invalidateGeoRun(get().geoScientificRun);
     setLocalDemTerrainUrl(null);
     setDemHeightmap(null);
-    set({
+    set((state) => ({
       geoAoiWgs84: null,
+      geoAoiPending: false,
       geoExtentPlan: null,
-      geoAoiRevision: get().geoAoiRevision + 1,
+      geoAoiRevision: state.geoAoiRevision + 1,
       geoDemProduct: null,
       geoDemSample: null,
-      geoDemRevision: get().geoDemRevision + 1,
+      geoDemRevision: state.geoDemRevision + 1,
+      geoScientificRun: null,
+      geoPreview: null,
+      geoFloodTime: 0,
+      geoHydrograph: null,
+      geoFloodPlaying: false,
+      pipelineChips: { ...state.pipelineChips, flood: undefined, export: undefined },
       geoScenario: {
-        ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
+        ...(state.geoScenario ?? PLACEHOLDER_SCENARIO),
         aoiWgs84: null,
       },
       geoInspectHint: "Draw an AOI to bind the flood domain",
-    });
+    }));
   },
 
   commitGeoAoi: async (raw) => {
@@ -550,6 +645,30 @@ export const useStore = create<AppStore>((set, get) => ({
       return;
     }
     const aoi = normalizeAoi(raw);
+    const mutationGeneration = ++geoAoiMutationGeneration;
+    geoDemRequestGeneration += 1;
+    invalidateGeoRun(get().geoScientificRun);
+    setLocalDemTerrainUrl(null);
+    setDemHeightmap(null);
+    set((state) => ({
+      geoAoiWgs84: aoi,
+      geoAoiPending: true,
+      geoExtentPlan: null,
+      geoAoiRevision: state.geoAoiRevision + 1,
+      geoScientificRun: null,
+      geoPreview: null,
+      geoDemProduct: null,
+      geoDemSample: null,
+      geoDemRevision: state.geoDemRevision + 1,
+      geoFloodTime: 0,
+      geoHydrograph: null,
+      geoFloodPlaying: false,
+      pipelineChips: { ...state.pipelineChips, flood: undefined, export: undefined },
+      geoScenario: {
+        ...(state.geoScenario ?? PLACEHOLDER_SCENARIO),
+        aoiWgs84: aoi,
+      },
+    }));
     let domain = domainFromAoi(aoi, get().geoFloodLowPower);
     const { origin, demBoundsEnu } = aoiToEnuBox(aoi);
     let extentPlan: ExtentPlan | null = null;
@@ -568,6 +687,8 @@ export const useStore = create<AppStore>((set, get) => ({
       // Planner is pure; if invoke fails (tests / missing IPC), keep local domain.
     }
 
+    if (mutationGeneration !== geoAoiMutationGeneration) return;
+
     let workspace = get().workspace;
     if (!workspace) {
       const geo = get().queueItems.find(
@@ -580,6 +701,7 @@ export const useStore = create<AppStore>((set, get) => ({
     if (workspace) {
       try {
         const result = await api.commitFloodAoi(workspace, scenarioId, aoi);
+        if (mutationGeneration !== geoAoiMutationGeneration) return;
         extentPlan = result.extentPlan ?? extentPlan;
         domain = coarsenDomainDxFromPlan(
           domainFromAoi(aoi, get().geoFloodLowPower),
@@ -592,14 +714,11 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     }
 
+    if (mutationGeneration !== geoAoiMutationGeneration) return;
+
     set({
-      geoAoiWgs84: aoi,
+      geoAoiPending: false,
       geoExtentPlan: extentPlan,
-      geoAoiRevision: get().geoAoiRevision + 1,
-      geoScenario: {
-        ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
-        aoiWgs84: aoi,
-      },
       geoTool: "pan",
       geoInspectHint: `${persistNote} · ${domain.cols}×${domain.rows} @ ${domain.dxM.toFixed(1)} m`,
       geoFloodPlaying: false,
@@ -608,10 +727,21 @@ export const useStore = create<AppStore>((set, get) => ({
     });
 
     // Stage DEM + sample bed for soft/HAND (non-blocking).
-    void get().prepareGeoDemForAoi();
+    const selectedSourcePath = pendingUserGeoDemSourcePath;
+    void get().prepareGeoDemForAoi(
+      selectedSourcePath ? { sourcePath: selectedSourcePath } : undefined,
+    );
   },
 
   prepareGeoDemForAoi: async (opts) => {
+    if (get().geoAoiPending) return;
+    if (!opts?.sourcePath && opts?.provider) pendingUserGeoDemSourcePath = null;
+    const mutationGeneration = geoAoiMutationGeneration;
+    const requestGeneration = ++geoDemRequestGeneration;
+    const isCurrentRequest = () =>
+      mutationGeneration === geoAoiMutationGeneration &&
+      requestGeneration === geoDemRequestGeneration &&
+      !get().geoAoiPending;
     const aoi = get().geoAoiWgs84;
     let workspace = get().workspace;
     if (!workspace) {
@@ -626,7 +756,7 @@ export const useStore = create<AppStore>((set, get) => ({
     const plan = get().geoExtentPlan;
     const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
     const provider = opts?.provider ?? "auto";
-    const sourcePath = opts?.sourcePath?.trim() || null;
+    const sourcePath = opts?.sourcePath?.trim() || pendingUserGeoDemSourcePath;
     const openTopoKey = readStoredOpenTopoApiKey();
 
     try {
@@ -644,7 +774,9 @@ export const useStore = create<AppStore>((set, get) => ({
         if (provider === "usgs-3dep" || provider === "auto") {
           try {
             await tryFetch("usgs-3dep");
+            if (!isCurrentRequest()) return;
           } catch (err) {
+            if (!isCurrentRequest()) return;
             fetchNotes.push(`USGS 3DEP: ${String(err)}`);
             if (provider === "usgs-3dep") {
               set({ geoInspectHint: `USGS 3DEP fetch failed: ${String(err)}` });
@@ -663,7 +795,9 @@ export const useStore = create<AppStore>((set, get) => ({
           if (openTopoKey) {
             try {
               await tryFetch("opentopography");
+              if (!isCurrentRequest()) return;
             } catch (err) {
+              if (!isCurrentRequest()) return;
               fetchNotes.push(`OpenTopography: ${String(err)}`);
               if (provider === "opentopography") {
                 set({ geoInspectHint: `OpenTopography fetch failed: ${String(err)}` });
@@ -679,6 +813,7 @@ export const useStore = create<AppStore>((set, get) => ({
         cellSizeM: cell,
         crs: "EPSG:4326",
       });
+      if (!isCurrentRequest()) return;
 
       // Globe: optional CTB layer.json; in-app heightmap from samples is the default.
       if (dem.terrainTilesUrl) {
@@ -692,6 +827,7 @@ export const useStore = create<AppStore>((set, get) => ({
       }
 
       const sample = await api.sampleGeoDem(workspace, domain.cols, domain.rows, aoi);
+      if (!isCurrentRequest()) return;
       setDemHeightmap({
         cols: sample.cols,
         rows: sample.rows,
@@ -733,6 +869,7 @@ export const useStore = create<AppStore>((set, get) => ({
         },
       });
     } catch (err) {
+      if (!isCurrentRequest()) return;
       set({
         geoInspectHint: `DEM stage: ${String(err)}`,
       });
@@ -748,6 +885,22 @@ export const useStore = create<AppStore>((set, get) => ({
       });
       return;
     }
+    pendingUserGeoDemSourcePath = path;
+    const mutationGeneration = geoAoiMutationGeneration;
+    const requestGeneration = ++geoDemRequestGeneration;
+    const isCurrentRequest = () =>
+      mutationGeneration === geoAoiMutationGeneration &&
+      requestGeneration === geoDemRequestGeneration;
+    const resampleSourceForNewAoi = () => {
+      if (
+        mutationGeneration !== geoAoiMutationGeneration &&
+        requestGeneration + 1 === geoDemRequestGeneration &&
+        aoiIsValid(get().geoAoiWgs84) &&
+        !get().geoAoiPending
+      ) {
+        void get().prepareGeoDemForAoi({ sourcePath: path });
+      }
+    };
 
     let workspace = get().workspace;
     if (!workspace) {
@@ -777,16 +930,22 @@ export const useStore = create<AppStore>((set, get) => ({
           await new Promise((r) => setTimeout(r, 100));
         }
       } catch (err) {
-        set({ geoInspectHint: `GeoTIFF workspace: ${String(err)}` });
+        if (isCurrentRequest()) set({ geoInspectHint: `GeoTIFF workspace: ${String(err)}` });
         return;
       }
     }
 
     if (!workspace) {
-      set({
-        geoInspectHint:
-          "Could not open a geospatial workspace for this GeoTIFF. Try Add sources again, then Stage DEM.",
-      });
+      if (isCurrentRequest()) {
+        set({
+          geoInspectHint:
+            "Could not open a geospatial workspace for this GeoTIFF. Try Add sources again, then Stage DEM.",
+        });
+      }
+      return;
+    }
+    if (!isCurrentRequest()) {
+      resampleSourceForNewAoi();
       return;
     }
 
@@ -801,12 +960,24 @@ export const useStore = create<AppStore>((set, get) => ({
           cellSizeM: 10,
           crs: "EPSG:4326",
         });
+        if (mutationGeneration !== geoAoiMutationGeneration) {
+          // The AOI may have been committed while the AOI-free staging request was in flight.
+          // Re-sample the selected source against the new AOI instead of publishing this result.
+          resampleSourceForNewAoi();
+          return;
+        }
+        if (!isCurrentRequest()) return;
         set({
           geoDemProduct: dem,
           geoDemRevision: get().geoDemRevision + 1,
           geoLayers: get().geoLayers.map((l) =>
             l.id === "dtm"
-              ? { ...l, status: dem.synthetic ? "empty" : "ready", placeholder: dem.synthetic, visible: !dem.synthetic }
+              ? {
+                  ...l,
+                  status: dem.synthetic ? "empty" : "ready",
+                  placeholder: dem.synthetic,
+                  visible: !dem.synthetic,
+                }
               : l,
           ),
           geoInspectHint: dem.synthetic
@@ -821,16 +992,20 @@ export const useStore = create<AppStore>((set, get) => ({
           },
         });
       } catch (err) {
+        if (!isCurrentRequest()) return;
         set({ geoInspectHint: `GeoTIFF DEM: ${String(err)}` });
       }
       return;
     }
 
+    // `prepareGeoDemForAoi` gets a new shared request token and owns the AOI-bound write.
+    if (!isCurrentRequest()) return;
     await get().prepareGeoDemForAoi({ sourcePath: path });
   },
 
   generateSplatDemFromRecon: async () => {
     const aoi = get().geoAoiWgs84;
+    const mutationGeneration = geoAoiMutationGeneration;
     let workspace = get().workspace;
     if (!workspace) {
       const geo = get().queueItems.find(
@@ -839,7 +1014,9 @@ export const useStore = create<AppStore>((set, get) => ({
       workspace = geo?.workspace ?? get().queueItems.find((i) => i.workspace)?.workspace ?? null;
     }
     if (!workspace) {
-      set({ geoInspectHint: "Open a reconstruction workspace before generating a DEM from splat." });
+      set({
+        geoInspectHint: "Open a reconstruction workspace before generating a DEM from splat.",
+      });
       return;
     }
     if (!aoiIsValid(aoi)) {
@@ -849,6 +1026,13 @@ export const useStore = create<AppStore>((set, get) => ({
       });
       return;
     }
+
+    const requestGeneration = ++geoDemRequestGeneration;
+    const isCurrentRequest = () =>
+      mutationGeneration === geoAoiMutationGeneration &&
+      requestGeneration === geoDemRequestGeneration &&
+      !get().geoAoiPending &&
+      aoiIsValid(get().geoAoiWgs84);
 
     const domain = domainFromAoi(aoi!, get().geoFloodLowPower);
     const plan = get().geoExtentPlan;
@@ -860,6 +1044,7 @@ export const useStore = create<AppStore>((set, get) => ({
         aoiWgs84: aoi,
         cellSizeM: cell,
       });
+      if (!isCurrentRequest()) return;
 
       if (dem.terrainTilesUrl) {
         try {
@@ -872,6 +1057,7 @@ export const useStore = create<AppStore>((set, get) => ({
       }
 
       const sample = await api.sampleGeoDem(workspace, domain.cols, domain.rows, aoi);
+      if (!isCurrentRequest()) return;
       setDemHeightmap({
         cols: sample.cols,
         rows: sample.rows,
@@ -893,8 +1079,7 @@ export const useStore = create<AppStore>((set, get) => ({
               }
             : l,
         ),
-        geoInspectHint:
-          "Splat→DEM proxy bed staged (non-authoritative vs USGS / OpenTopo)",
+        geoInspectHint: "Splat→DEM proxy bed staged (non-authoritative vs USGS / OpenTopo)",
         geoScenario: {
           ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
           authority: "live-preview",
@@ -902,6 +1087,7 @@ export const useStore = create<AppStore>((set, get) => ({
         },
       });
     } catch (err) {
+      if (!isCurrentRequest()) return;
       set({
         geoInspectHint: String(err),
       });
@@ -932,7 +1118,10 @@ export const useStore = create<AppStore>((set, get) => ({
     const plan = get().geoExtentPlan;
     const cell = plan?.demResolutionM ?? plan?.previewCellM ?? domain.dxM;
 
-    set({ geoSatSplatBusy: true, geoInspectHint: "Generating Satellite Splat from public elevation + imagery catalogs…" });
+    set({
+      geoSatSplatBusy: true,
+      geoInspectHint: "Generating Satellite Splat from public elevation + imagery catalogs…",
+    });
     try {
       const product = await api.generateSatSplat(workspace, aoi!, {
         cellSizeM: cell,
@@ -944,7 +1133,9 @@ export const useStore = create<AppStore>((set, get) => ({
         geoSatSplatProduct: product,
         geoSatSplatBusy: false,
         geoInspectHint: `Satellite Splat ready — ${product.points} pts from ${product.demSource}${
-          product.imagerySource ? ` + ${product.imagerySource}` : " (elevation colormap, no imagery)"
+          product.imagerySource
+            ? ` + ${product.imagerySource}`
+            : " (elevation colormap, no imagery)"
         }.`,
       });
     } catch (err) {
@@ -1021,38 +1212,64 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   startScientificFlood: async (opts) => {
-    let workspace = get().workspace;
-    if (!workspace) {
-      // Prefer an existing geospatial project workspace from the queue.
-      const geo = get().queueItems.find(
-        (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
-      );
-      workspace = geo?.workspace ?? null;
-    }
-    if (!workspace) {
-      set({
-        geoScientificRun: {
-          runId: "",
-          state: "failed",
-          progress: 0,
-          detail: "Open or enqueue a geospatial project first (Add sources).",
-        },
-      });
+    if (get().geoFloodStarting) return;
+    if (get().geoAoiPending || !aoiIsValid(get().geoAoiWgs84)) {
+      set({ geoInspectHint: "Commit a valid AOI before starting a flood run." });
       return;
     }
-    const scenarioId = get().geoScenario?.id ?? PLACEHOLDER_SCENARIO.id;
-    const demPath = get().geoDemProduct?.dtmPath ?? null;
+    const mutationGeneration = geoAoiMutationGeneration;
+    pendingGeoStartGeneration = mutationGeneration;
+    set({ geoFloodStarting: true, geoHydrograph: null });
     try {
+      let workspace = get().workspace;
+      if (!workspace) {
+        // Prefer an existing geospatial project workspace from the queue.
+        const geo = get().queueItems.find(
+          (i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace,
+        );
+        workspace = geo?.workspace ?? null;
+      }
+      if (!workspace) {
+        set({
+          geoScientificRun: {
+            runId: "",
+            state: "failed",
+            progress: 0,
+            detail: "Open or enqueue a geospatial project first (Add sources).",
+          },
+        });
+        return;
+      }
+      const scenarioId = get().geoScenario?.id ?? PLACEHOLDER_SCENARIO.id;
+      const demPath = get().geoDemProduct?.dtmPath ?? null;
       // Ensure DEM is staged with AOI before ANUGA.
       if (!get().geoDemProduct) {
         await get().prepareGeoDemForAoi();
+      }
+      if (
+        mutationGeneration !== geoAoiMutationGeneration ||
+        get().geoAoiPending ||
+        !aoiIsValid(get().geoAoiWgs84)
+      ) {
+        return;
       }
       const st = await api.startScientificFlood(workspace, scenarioId, {
         allowDemo: opts?.allowDemo ?? true,
         enableSwmm: opts?.enableSwmm ?? false,
         demPath: get().geoDemProduct?.dtmPath ?? demPath,
+        scenarioOverrides: opts?.scenarioOverrides,
       });
+      if (mutationGeneration !== geoAoiMutationGeneration || !aoiIsValid(get().geoAoiWgs84)) {
+        invalidatedGeoRunIds.add(st.runId);
+        if (st.state === "running") {
+          void api.cancelScientificFlood(st.runId).catch(() => {});
+        }
+        return;
+      }
+      invalidatedGeoRunIds.delete(st.runId);
       const demSynthetic = get().geoDemProduct?.synthetic ?? true;
+      const mode = st.mode ?? (demSynthetic ? "demo" : undefined);
+      const presentation = floodModeSummary(mode);
       set({
         workspace,
         geoScientificRun: {
@@ -1060,30 +1277,39 @@ export const useStore = create<AppStore>((set, get) => ({
           state: st.state,
           progress: st.progress,
           detail: st.detail,
-          mode: st.mode ?? (demSynthetic ? "demo" : undefined),
+          mode,
           label: st.label,
           massBalance: st.massBalance,
         },
         geoScenario: {
           ...(get().geoScenario ?? PLACEHOLDER_SCENARIO),
-          engineLabel: demSynthetic
-            ? "Demo (synthetic DEM)…"
-            : "ANUGA scientific (starting…)",
-          note: demSynthetic
-            ? "Synthetic DEM — Demo badge until a real DEM is staged."
-            : "Streaming scientific checkpoints over sim://event.",
-          authority: demSynthetic ? "demo" : "scientific",
+          engineLabel:
+            st.state === "running" ? `${presentation.engineLabel} · starting` : presentation.engineLabel,
+          note: presentation.note,
+          authority: presentation.authority,
+          rainfallTemplate:
+            opts?.scenarioOverrides?.rainfallTemplate ?? get().geoScenario?.rainfallTemplate,
+          manningPreset: opts?.scenarioOverrides?.manningPreset ?? get().geoScenario?.manningPreset,
+          manningN: opts?.scenarioOverrides?.manningN ?? get().geoScenario?.manningN,
+          outletBc: opts?.scenarioOverrides?.outletBc ?? get().geoScenario?.outletBc,
         },
       });
     } catch (err) {
-      set({
-        geoScientificRun: {
-          runId: "",
-          state: "failed",
-          progress: 0,
-          detail: String(err),
-        },
-      });
+      if (mutationGeneration === geoAoiMutationGeneration) {
+        set({
+          geoScientificRun: {
+            runId: "",
+            state: "failed",
+            progress: 0,
+            detail: String(err),
+          },
+        });
+      }
+    } finally {
+      if (pendingGeoStartGeneration === mutationGeneration) {
+        pendingGeoStartGeneration = null;
+        set({ geoFloodStarting: false });
+      }
     }
   },
 
@@ -1103,6 +1329,19 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   exportFloodProducts: async () => {
+    const state = get();
+    if (
+      state.geoAoiPending ||
+      state.geoFloodStarting ||
+      !aoiIsValid(state.geoAoiWgs84) ||
+      !state.geoDemProduct
+    ) {
+      set({ geoInspectHint: "Bind an AOI and stage a DEM before exporting products." });
+      return;
+    }
+    if (state.geoScientificRun?.state === "running") return;
+    const mutationGeneration = geoAoiMutationGeneration;
+    const aoiRevision = state.geoAoiRevision;
     let workspace = get().workspace;
     if (!workspace) {
       const geo = get().queueItems.find(
@@ -1124,9 +1363,34 @@ export const useStore = create<AppStore>((set, get) => ({
       });
       return;
     }
-    const runId = get().geoScientificRun?.runId || null;
+    const currentRun = get().geoScientificRun;
+    const runId = currentRun?.state === "done" ? currentRun.runId || null : null;
     try {
+      if (!runId) {
+        const existingRuns = await api.listFloodRunStatus(workspace);
+        if (
+          mutationGeneration !== geoAoiMutationGeneration ||
+          get().geoAoiRevision !== aoiRevision ||
+          get().geoAoiPending
+        ) {
+          return;
+        }
+        if (existingRuns.length > 0) {
+          set({
+            geoInspectHint:
+              "This project has an earlier flood run. Start a new run for the current AOI before exporting.",
+          });
+          return;
+        }
+      }
       const result = await api.exportFloodProducts(workspace, runId);
+      if (
+        mutationGeneration !== geoAoiMutationGeneration ||
+        get().geoAoiRevision !== aoiRevision ||
+        get().geoAoiPending
+      ) {
+        return;
+      }
       const n = result.artifacts.length;
       const auth = result.authoritative
         ? "calibrated scientific"
@@ -1148,6 +1412,13 @@ export const useStore = create<AppStore>((set, get) => ({
         },
       }));
     } catch (err) {
+      if (
+        mutationGeneration !== geoAoiMutationGeneration ||
+        get().geoAoiRevision !== aoiRevision ||
+        get().geoAoiPending
+      ) {
+        return;
+      }
       set((s) => ({
         geoScientificRun: {
           runId: s.geoScientificRun?.runId ?? "",
@@ -1167,17 +1438,33 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   handleGeoEvent: (e) => {
+    if (
+      "runId" in e &&
+      e.runId &&
+      pendingGeoStartGeneration !== null &&
+      pendingGeoStartGeneration !== geoAoiMutationGeneration
+    ) {
+      // A run can emit before startScientificFlood returns its id. If its AOI was
+      // invalidated in that interval, reject and cancel the event immediately.
+      invalidatedGeoRunIds.add(e.runId);
+      if (e.kind === "runProgress") {
+        void api.cancelScientificFlood(e.runId).catch(() => {});
+      }
+      return;
+    }
+    if ("runId" in e && e.runId && invalidatedGeoRunIds.has(e.runId)) return;
     switch (e.kind) {
       case "runProgress":
         set((s) => ({
-          geoScientificRun: s.geoScientificRun?.runId === e.runId
-            ? { ...s.geoScientificRun, progress: e.progress, detail: e.detail, state: "running" }
-            : s.geoScientificRun ?? {
-                runId: e.runId,
-                state: "running",
-                progress: e.progress,
-                detail: e.detail,
-              },
+          geoScientificRun:
+            s.geoScientificRun?.runId === e.runId
+              ? { ...s.geoScientificRun, progress: e.progress, detail: e.detail, state: "running" }
+              : (s.geoScientificRun ?? {
+                  runId: e.runId,
+                  state: "running",
+                  progress: e.progress,
+                  detail: e.detail,
+                }),
           pipelineChips: {
             ...s.pipelineChips,
             flood: `Flood: ${e.detail || "running"} (${Math.round(e.progress * 100)}%)`,
@@ -1185,31 +1472,34 @@ export const useStore = create<AppStore>((set, get) => ({
         }));
         break;
       case "runDone":
+        {
+          const presentation = floodModeSummary(e.mode);
         set((s) => ({
           geoScientificRun: {
             runId: e.runId,
             state: "done",
             progress: 1,
-            detail: e.mode === "demo" ? "Demo run complete (not authoritative)" : "Scientific run complete",
+            detail: presentation.detail,
             mode: e.mode,
             massBalance: e.massBalance,
-            label: e.mode === "demo" ? "Demo mode — synthetic extents" : undefined,
+            label: presentation.label,
           },
           pipelineChips: {
             ...s.pipelineChips,
-            flood: e.mode === "demo" ? "Flood: demo complete" : "Flood: scientific complete",
+            flood: presentation.chip,
           },
           geoScenario: {
             ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
-            engineLabel:
-              e.mode === "demo" ? "Demo (ANUGA missing)" : "ANUGA scientific",
+            engineLabel: presentation.engineLabel,
             note:
-              e.mode === "demo"
-                ? "Engine missing — extents are labelled synthetic for UI continuity."
-                : `Mass balance residual ≈ ${e.massBalance?.toFixed?.(4) ?? "n/a"}`,
+              e.mode === "anuga" && Number.isFinite(e.massBalance)
+                ? `${presentation.note} Mass balance residual ≈ ${e.massBalance?.toFixed?.(4)}.`
+                : presentation.note,
+            authority: presentation.authority,
           },
         }));
         break;
+        }
       case "runCancelled":
         set({
           geoScientificRun: {
@@ -1221,6 +1511,13 @@ export const useStore = create<AppStore>((set, get) => ({
         });
         break;
       case "engineMissing":
+        if (
+          !aoiIsValid(get().geoAoiWgs84) ||
+          get().geoAoiPending ||
+          get().geoScientificRun?.state !== "running"
+        ) {
+          break;
+        }
         set((s) => ({
           geoScientificRun: s.geoScientificRun
             ? { ...s.geoScientificRun, detail: e.message, mode: "demo" }
@@ -1254,9 +1551,24 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   handleSimEvent: (e) => {
+    if (
+      pendingGeoStartGeneration !== null &&
+      pendingGeoStartGeneration !== geoAoiMutationGeneration
+    ) {
+      invalidatedGeoRunIds.add(e.runId);
+      if (e.kind === "checkpoint") {
+        void api.cancelScientificFlood(e.runId).catch(() => {});
+      }
+      return;
+    }
+    if (invalidatedGeoRunIds.has(e.runId)) return;
     if (e.kind === "checkpoint") {
       const duration = get().geoScenario?.durationHours ?? PLACEHOLDER_SCENARIO.durationHours;
       const t01 = duration > 0 ? Math.min(1, Math.max(0, e.simTimeHours / duration)) : e.progress;
+      const usesSyntheticBed = get().geoDemProduct?.synthetic ?? true;
+      const checkpointMode =
+        usesSyntheticBed && ["anuga", "scaffold"].includes(e.mode.toLowerCase()) ? "demo" : e.mode;
+      const presentation = floodModeSummary(checkpointMode);
       set((s) => ({
         geoFloodTime: t01,
         geoScientificRun: {
@@ -1264,23 +1576,23 @@ export const useStore = create<AppStore>((set, get) => ({
           state: "running",
           progress: e.progress,
           detail: e.detail,
-          mode: e.mode,
+          mode: checkpointMode,
         },
         pipelineChips: {
           ...s.pipelineChips,
           flood: `Flood: ${e.detail || e.mode || "checkpoint"} (${Math.round(e.progress * 100)}%)`,
         },
-        geoScenario:
-          e.mode === "demo"
-            ? {
-                ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
-                engineLabel: "Demo (ANUGA missing)",
-              }
-            : s.geoScenario,
+        geoScenario: {
+          ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
+          engineLabel: presentation.engineLabel,
+          note: presentation.note,
+          authority: presentation.authority,
+        },
       }));
       // Checkpoint GeoJSON is loaded lazily when path is absolute and readable
       // from the webview later; progress alone advances the scrubber for now.
     } else if (e.kind === "done") {
+      const presentation = floodModeSummary(e.mode);
       set((s) => ({
         geoScientificRun: {
           runId: e.runId,
@@ -1293,13 +1605,25 @@ export const useStore = create<AppStore>((set, get) => ({
         },
         geoScenario: {
           ...(s.geoScenario ?? PLACEHOLDER_SCENARIO),
-          engineLabel: e.mode === "demo" ? "Demo (ANUGA missing)" : "ANUGA scientific",
-          note: e.label ?? (e.mode === "demo" ? "Synthetic extents — not authoritative." : "Scientific run finished."),
+          engineLabel: presentation.engineLabel,
+          note: e.label ? `${presentation.note} ${e.label}` : presentation.note,
+          authority: presentation.authority,
         },
       }));
     } else if (e.kind === "hydrograph") {
-      // Path available for future File API load into the scrubber series.
-      void e.path;
+      const samples = (e.samples ?? [])
+        .filter(
+          (sample) =>
+            Number.isFinite(sample.hours) &&
+            sample.hours >= 0 &&
+            Number.isFinite(sample.stageM) &&
+            Number.isFinite(sample.dischargeCms) &&
+            sample.dischargeCms >= 0,
+        )
+        .sort((a, b) => a.hours - b.hours);
+      if (samples.length >= 2) {
+        set({ geoHydrograph: samples });
+      }
     }
   },
 
@@ -1331,13 +1655,7 @@ export const useStore = create<AppStore>((set, get) => ({
     set({
       geoTool: tool,
       geoInspectHint:
-        tool === "pan"
-          ? null
-          : tool === "inspect"
-            ? "Inspect: click the map for coordinates"
-            : tool === "measure"
-              ? "Measure: click the map (stub)"
-              : "Profile: click the map (stub)",
+        tool === "inspect" ? "Inspect: click the map for coordinates" : null,
     });
   },
 
@@ -1407,8 +1725,7 @@ export const useStore = create<AppStore>((set, get) => ({
   resumeProject: async (workspace) => {
     const summary = get().recentProjects.find((p) => p.workspace === workspace);
     const openCompleted =
-      !!summary &&
-      (summary.completed || (!!summary.resultPath && !summary.resumable));
+      !!summary && (summary.completed || (!!summary.resultPath && !summary.resumable));
 
     // Completed jobs are view-only — resume_project rejects them (not resumable).
     if (openCompleted && summary?.resultPath) {
@@ -1526,7 +1843,10 @@ export const useStore = create<AppStore>((set, get) => ({
       const st = await api.getEngineStatus();
       if (!st.colmap || !st.brush) {
         set((s) => ({
-          logs: [...s.logs, { time: Date.now(), line: "Downloading reconstruction engines (first run)." }],
+          logs: [
+            ...s.logs,
+            { time: Date.now(), line: "Downloading reconstruction engines (first run)." },
+          ],
         }));
         await api.installEngines();
         set({ engineStatus: await api.getEngineStatus() });
@@ -1553,7 +1873,10 @@ export const useStore = create<AppStore>((set, get) => ({
       const snap = await api.listQueue();
       set({ queueItems: snap.items, queuePaused: snap.paused });
     } catch (err) {
-      set({ jobError: String(err), screen: activeSuite === "reconstruction" ? "processing" : "home" });
+      set({
+        jobError: String(err),
+        screen: activeSuite === "reconstruction" ? "processing" : "home",
+      });
     }
   },
 
@@ -1624,12 +1947,12 @@ export const useStore = create<AppStore>((set, get) => ({
       case "stageProgress":
         set((s) => ({
           stages: s.stages.map((st) =>
-            st.id === e.stage ? { ...st, progress: e.progress, detail: e.detail, state: "active" } : st,
+            st.id === e.stage
+              ? { ...st, progress: e.progress, detail: e.detail, state: "active" }
+              : st,
           ),
           queueItems: s.queueItems.map((q) =>
-            q.jobId === e.jobId
-              ? { ...q, progress: e.progress, detail: e.detail }
-              : q,
+            q.jobId === e.jobId ? { ...q, progress: e.progress, detail: e.detail } : q,
           ),
         }));
         break;
@@ -1649,7 +1972,8 @@ export const useStore = create<AppStore>((set, get) => ({
           let liveTrackingStatus = s.liveTrackingStatus;
           if (/live camera tracking is on/i.test(msg)) liveTrackingStatus = "starting";
           else if (/live tracking degraded/i.test(msg)) liveTrackingStatus = "degraded";
-          else if (/falling back to the batch camera solver/i.test(msg)) liveTrackingStatus = "fallback";
+          else if (/falling back to the batch camera solver/i.test(msg))
+            liveTrackingStatus = "fallback";
           else if (/^Cameras:\s*Live tracking/i.test(msg)) liveTrackingStatus = "tracking";
           return { notices: [...s.notices, msg], pipelineChips: chips, liveTrackingStatus };
         });
@@ -1719,6 +2043,8 @@ export const useStore = create<AppStore>((set, get) => ({
   setFps: (n) => set({ fps: n }),
   setReconLayer: (id, visible) =>
     set((s) => ({ reconLayers: { ...s.reconLayers, [id]: visible } })),
+  setPostProcessing: (id, enabled) =>
+    set((s) => ({ postProcessing: { ...s.postProcessing, [id]: enabled } })),
 
   exportSplatAction: async (rotation) => {
     const { resultPath, workspace, settings } = get();
@@ -1729,7 +2055,10 @@ export const useStore = create<AppStore>((set, get) => ({
       { ext: "splat", label: "Web splat" },
       { ext: "spz", label: "Niantic SPZ" },
     ];
-    const ordered = [...formats.filter((f) => f.ext === preferred), ...formats.filter((f) => f.ext !== preferred)];
+    const ordered = [
+      ...formats.filter((f) => f.ext === preferred),
+      ...formats.filter((f) => f.ext !== preferred),
+    ];
     const dest = await save({
       title: "Export splat",
       defaultPath: `scene.${ordered[0].ext}`,
@@ -1779,8 +2108,7 @@ export const useStore = create<AppStore>((set, get) => ({
     if (!resultPath) return;
     if (!resolved?.experimentalMode) {
       set({
-        meshStatus:
-          "Minecraft schematic export needs Experimental Mode (TitleBar toggle).",
+        meshStatus: "Minecraft schematic export needs Experimental Mode (TitleBar toggle).",
       });
       return;
     }

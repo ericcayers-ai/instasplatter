@@ -50,6 +50,7 @@ export default function AboutPanel() {
         ref={trapRef}
         role="dialog"
         aria-labelledby="about-title"
+        aria-modal="true"
         className="flex max-h-[min(90vh,40rem)] w-full max-w-lg flex-col overflow-hidden rounded border border-edge bg-panel2 shadow-lg"
       >
         <div className="flex items-center justify-between border-b border-edge px-5 py-3">

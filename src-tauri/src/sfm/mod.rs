@@ -183,14 +183,7 @@ fn keypoint_colour(frame: &Frame, thumb: &Thumb, i: usize) -> [u8; 3] {
 
 /// Accept a triangulated point only if both cameras see it in front of them,
 /// the rays meet at a real angle, and it reprojects where it was observed.
-fn point_is_good(
-    a: &Pose,
-    b: &Pose,
-    xa: [f64; 2],
-    xb: [f64; 2],
-    p: V3,
-    max_err: f64,
-) -> bool {
+fn point_is_good(a: &Pose, b: &Pose, xa: [f64; 2], xb: [f64; 2], p: V3, max_err: f64) -> bool {
     if a.apply(p)[2] <= 1e-6 || b.apply(p)[2] <= 1e-6 {
         return false;
     }
@@ -227,8 +220,14 @@ fn find_seed(
             if median_displacement(&frames[i], &frames[j], &m) < MIN_SEED_DISPLACEMENT_PX {
                 continue;
             }
-            let x1: Vec<[f64; 2]> = m.iter().map(|&(a, _)| bearing(&frames[i], a, intr)).collect();
-            let x2: Vec<[f64; 2]> = m.iter().map(|&(_, b)| bearing(&frames[j], b, intr)).collect();
+            let x1: Vec<[f64; 2]> = m
+                .iter()
+                .map(|&(a, _)| bearing(&frames[i], a, intr))
+                .collect();
+            let x2: Vec<[f64; 2]> = m
+                .iter()
+                .map(|&(_, b)| bearing(&frames[j], b, intr))
+                .collect();
 
             let tv = match ransac_essential(&x1, &x2, intr.mean_focal(), RANSAC_PX, 600, rng) {
                 Some(tv) => tv,
@@ -451,7 +450,12 @@ where
 
         let pairs: Vec<(usize, Vec<(usize, usize)>)> = refs
             .iter()
-            .map(|&r| (r, match_frames(&frames[k], &frames[r], MatchOptions::default())))
+            .map(|&r| {
+                (
+                    r,
+                    match_frames(&frames[k], &frames[r], MatchOptions::default()),
+                )
+            })
             .collect();
 
         // 3D-2D correspondences: a keypoint in `k` matched to a keypoint in a
@@ -518,7 +522,14 @@ where
             .map(|&(_, a)| bearing(&frames[k], a, intr))
             .collect();
 
-        let mut pnp = ransac_pnp(&pts, &obs, intr.mean_focal(), RANSAC_PX, PNP_ITERS, &mut rng);
+        let mut pnp = ransac_pnp(
+            &pts,
+            &obs,
+            intr.mean_focal(),
+            RANSAC_PX,
+            PNP_ITERS,
+            &mut rng,
+        );
         let mut confidence = pnp
             .as_ref()
             .map(|(pose, inliers)| {
@@ -529,9 +540,14 @@ where
 
         // Marginal first pass: spend more RANSAC before giving up on the frame.
         if pnp.is_none() || confidence < MIN_CONFIDENCE {
-            if let Some(retry) =
-                ransac_pnp(&pts, &obs, intr.mean_focal(), RANSAC_PX * 1.25, PNP_ITERS_RETRY, &mut rng)
-            {
+            if let Some(retry) = ransac_pnp(
+                &pts,
+                &obs,
+                intr.mean_focal(),
+                RANSAC_PX * 1.25,
+                PNP_ITERS_RETRY,
+                &mut rng,
+            ) {
                 let retry_conf = retry.1.len() as f32 / cand.len() as f32;
                 if pnp.is_none() || retry_conf > confidence {
                     confidence = retry_conf;
@@ -621,7 +637,13 @@ where
 
         // Periodic prune keeps drifted tracks from anchoring later PnP.
         if order.len() % PRUNE_EVERY == 0 {
-            prune(&frames, &recon.poses, &mut recon.tracks, intr, RANSAC_PX * 2.5);
+            prune(
+                &frames,
+                &recon.poses,
+                &mut recon.tracks,
+                intr,
+                RANSAC_PX * 2.5,
+            );
             // Rebuild keypoint→track index after prune may have dropped tracks.
             for map in kp_track.iter_mut() {
                 map.clear();
@@ -686,7 +708,10 @@ fn adjust_with_frames(
     let mut sel: Vec<usize> = (0..recon.tracks.len())
         .filter(|&t| {
             recon.tracks[t].obs.len() >= 2
-                && recon.tracks[t].obs.iter().any(|(f, _)| free_set.contains(f))
+                && recon.tracks[t]
+                    .obs
+                    .iter()
+                    .any(|(f, _)| free_set.contains(f))
         })
         .collect();
     if sel.is_empty() {
@@ -921,7 +946,13 @@ fn build_model(
 
 /// World-space frustum for the viewport: the camera centre, and the four
 /// image corners pushed out to `depth`.
-fn frustum(pose: &Pose, intr: Intrinsics, w: usize, h: usize, depth: f64) -> ([f32; 3], [[f32; 3]; 4]) {
+fn frustum(
+    pose: &Pose,
+    intr: Intrinsics,
+    w: usize,
+    h: usize,
+    depth: f64,
+) -> ([f32; 3], [[f32; 3]; 4]) {
     let apex = pose.center();
     let rt = m3_transpose(pose.r);
     let corner = |u: f64, v: f64| -> [f32; 3] {
@@ -1113,7 +1144,13 @@ fn run_blocking(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     });
     ctx.check_cancel()?;
 
-    let dropped = prune(&frames, &recon.poses, &mut recon.tracks, intr, RANSAC_PX * 2.0);
+    let dropped = prune(
+        &frames,
+        &recon.poses,
+        &mut recon.tracks,
+        intr,
+        RANSAC_PX * 2.0,
+    );
     let registered = recon.registered().len();
     if recon.tracks.len() < 200 {
         return Err("too few stable points survived refinement".into());
@@ -1397,7 +1434,10 @@ mod tests {
         let mut recon = reconstruct(&frames, &thumbs, intr(), |_| Ok(()), |_| Ok(())).unwrap();
 
         // A clean reconstruction loses nothing.
-        assert_eq!(prune(&frames, &recon.poses, &mut recon.tracks, intr(), 4.0), 0);
+        assert_eq!(
+            prune(&frames, &recon.poses, &mut recon.tracks, intr(), 4.0),
+            0
+        );
 
         // Move one point far away; every one of its observations is now wrong.
         let victim = 0usize;
@@ -1435,7 +1475,11 @@ mod tests {
         for p in &model.points {
             assert!(p.track.len() >= 2);
             for &(img, kp) in &p.track {
-                let img = model.images.iter().find(|i| i.id == img).expect("bad image id");
+                let img = model
+                    .images
+                    .iter()
+                    .find(|i| i.id == img)
+                    .expect("bad image id");
                 assert!((kp as usize) < img.points2d.len());
                 assert_eq!(img.points2d[kp as usize].2, p.id, "observation disagrees");
             }
@@ -1472,8 +1516,16 @@ mod tests {
         for i in 0..4 {
             for j in (i + 1)..4 {
                 let d = norm(sub(
-                    [corners[i][0] as f64, corners[i][1] as f64, corners[i][2] as f64],
-                    [corners[j][0] as f64, corners[j][1] as f64, corners[j][2] as f64],
+                    [
+                        corners[i][0] as f64,
+                        corners[i][1] as f64,
+                        corners[i][2] as f64,
+                    ],
+                    [
+                        corners[j][0] as f64,
+                        corners[j][1] as f64,
+                        corners[j][2] as f64,
+                    ],
                 ));
                 assert!(d > 0.1, "corners {i} and {j} coincide");
             }

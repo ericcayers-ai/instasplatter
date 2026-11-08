@@ -216,7 +216,10 @@ mod tests {
         assert!(match_frames(&a, &b, MatchOptions::default()).is_empty());
 
         // Relaxing the ratio lets it through, confirming that is why it failed.
-        let loose = MatchOptions { ratio: 0.99, ..Default::default() };
+        let loose = MatchOptions {
+            ratio: 0.99,
+            ..Default::default()
+        };
         assert_eq!(match_frames(&a, &b, loose).len(), 1);
     }
 
@@ -225,11 +228,18 @@ mod tests {
         // b0 is a's best choice, but b0's own best choice is a1, not a0.
         let a = frame(&[flip_bits(desc(9), 20), desc(9)]);
         let b = frame(&[desc(9)]);
-        let strict = MatchOptions { ratio: 0.99, ..Default::default() };
+        let strict = MatchOptions {
+            ratio: 0.99,
+            ..Default::default()
+        };
         let m = match_frames(&a, &b, strict);
         assert_eq!(m, vec![(1, 0)]);
 
-        let loose = MatchOptions { cross_check: false, ratio: 0.99, ..Default::default() };
+        let loose = MatchOptions {
+            cross_check: false,
+            ratio: 0.99,
+            ..Default::default()
+        };
         assert_eq!(match_frames(&a, &b, loose).len(), 2);
     }
 

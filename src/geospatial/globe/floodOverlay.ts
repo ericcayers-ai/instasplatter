@@ -130,6 +130,7 @@ export function clearFloodOverlay(viewer: Viewer): void {
 export function rasterizeDemRelief(
   grid: DemHeightmapGrid,
   image?: ImageData,
+  hillshade?: ArrayLike<number>,
 ): ImageData {
   const cols = grid.cols;
   const rows = grid.rows;
@@ -184,10 +185,14 @@ export function rasterizeDemRelief(
       const ny = -dzdy;
       const nz = 1;
       const inv = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
-      const shade = Math.max(
+      const fallbackShade = Math.max(
         0.25,
         Math.min(1, (nx * inv * lx + ny * inv * ly + nz * inv * lz) * 0.85 + 0.15),
       );
+      const sunShade = hillshade?.[srcRow * cols + i];
+      const shade = Number.isFinite(sunShade)
+        ? Math.max(0.25, Math.min(1, 0.25 + 0.75 * Number(sunShade)))
+        : fallbackShade;
 
       const o = (j * cols + i) * 4;
       data[o] = Math.round(r * shade);
@@ -209,6 +214,7 @@ export async function applyDemReliefOverlay(
   grid: DemHeightmapGrid | null,
   visible: boolean,
   opacity: number,
+  hillshade?: ArrayLike<number>,
 ): Promise<void> {
   if (!grid || !visible || grid.cols < 2 || grid.rows < 2) {
     removeTaggedLayers(viewer, "__isDemRelief");
@@ -216,7 +222,7 @@ export async function applyDemReliefOverlay(
     return;
   }
 
-  const image = rasterizeDemRelief(grid);
+  const image = rasterizeDemRelief(grid, undefined, hillshade);
   syncCanvas(canvas, image);
   const dataUrl = canvas.toDataURL("image/png");
   await addSingleTileOverlay(

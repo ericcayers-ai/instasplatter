@@ -48,9 +48,9 @@ impl ScalarType {
     fn read(self, b: &[u8]) -> f32 {
         match self {
             ScalarType::F32 => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-            ScalarType::F64 => f64::from_le_bytes([
-                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-            ]) as f32,
+            ScalarType::F64 => {
+                f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f32
+            }
             ScalarType::U8 => b[0] as f32,
             ScalarType::I8 => (b[0] as i8) as f32,
             ScalarType::U16 => u16::from_le_bytes([b[0], b[1]]) as f32,
@@ -171,7 +171,9 @@ pub fn read_ply_bytes(bytes: &[u8]) -> Result<SplatCloud, String> {
             k += 1;
         }
         if k % 3 != 0 {
-            return Err(format!("PLY has {k} f_rest properties, which is not a multiple of 3."));
+            return Err(format!(
+                "PLY has {k} f_rest properties, which is not a multiple of 3."
+            ));
         }
         k / 3
     };
@@ -187,7 +189,11 @@ pub fn read_ply_bytes(bytes: &[u8]) -> Result<SplatCloud, String> {
         rot_wxyz: Vec::with_capacity(n),
         opacity_logit: Vec::with_capacity(n),
         sh_dc: Vec::with_capacity(n),
-        sh_rest: Vec::with_capacity(if is_splat { n * rest_per_channel * 3 } else { 0 }),
+        sh_rest: Vec::with_capacity(if is_splat {
+            n * rest_per_channel * 3
+        } else {
+            0
+        }),
         rest_per_channel: if is_splat { rest_per_channel } else { 0 },
     };
 
@@ -218,9 +224,7 @@ pub fn read_ply_bytes(bytes: &[u8]) -> Result<SplatCloud, String> {
                 .rot_wxyz
                 .push([sc("rot_0"), sc("rot_1"), sc("rot_2"), sc("rot_3")]);
             cloud.opacity_logit.push(sc("opacity"));
-            cloud
-                .sh_dc
-                .push([sc("f_dc_0"), sc("f_dc_1"), sc("f_dc_2")]);
+            cloud.sh_dc.push([sc("f_dc_0"), sc("f_dc_1"), sc("f_dc_2")]);
             for p in &rest_props {
                 cloud.sh_rest.push(get(body, p));
             }
@@ -308,7 +312,6 @@ pub fn write_ply_to<W: Write>(w: &mut W, cloud: &SplatCloud) -> std::io::Result<
     }
     w.write_all(&buf)
 }
-
 
 #[cfg(test)]
 mod tests {

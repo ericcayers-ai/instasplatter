@@ -49,9 +49,10 @@ export function floodSnapshotFromTime(
     validation?: GeoFloodSnapshot["validation"];
   } | null,
   durationHours: number = PLACEHOLDER_SCENARIO.durationHours,
+  series: HydrographSample[] = PLACEHOLDER_HYDROGRAPH,
 ): GeoFloodSnapshot {
-  const { hours, stageM, dischargeCms } = sampleHydrograph(t01, PLACEHOLDER_HYDROGRAPH, durationHours);
-  const peakStage = Math.max(...PLACEHOLDER_HYDROGRAPH.map((s) => s.stageM));
+  const { hours, stageM, dischargeCms } = sampleHydrograph(t01, series, durationHours);
+  const peakStage = Math.max(...series.map((s) => s.stageM));
   const intensity = peakStage > 0 ? Math.min(1, stageM / peakStage) : 0;
 
   let maxDepthM = Math.max(0, stageM - 0.3);

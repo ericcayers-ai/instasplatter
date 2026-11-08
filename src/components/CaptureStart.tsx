@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   CAPTURE_IMAGE_EXTENSIONS,
@@ -7,6 +7,7 @@ import {
 } from "../lib/captureInput";
 import { api, type PresetName } from "../lib/ipc";
 import { applyPresetPatch } from "../lib/presets";
+import { useFocusTrap } from "../lib/focusTrap";
 import { useStore } from "../state/store";
 
 const PRESETS: PresetName[] = ["draft", "eco", "balanced", "high", "max"];
@@ -25,8 +26,10 @@ export function useCaptureStart() {
   const [pending, setPending] = useState<PendingVideo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState("Adding files…");
+  const trapRef = useFocusTrap(pending !== null);
 
-  const launch = async (rawPaths: string[]) => {
+  const launch = useCallback(async (rawPaths: string[]) => {
     setError(null);
     const selection = classifyCapturePaths(rawPaths);
     try {
@@ -43,6 +46,7 @@ export function useCaptureStart() {
         // events fired, so surface a busy state instead of leaving the drop
         // zone looking unresponsive.
         setBusy(true);
+        setBusyMessage("Adding files…");
         const stagedDirectory = await api.stageImageSelection(selection.paths);
         await startJob(stagedDirectory);
         return;
@@ -57,7 +61,7 @@ export function useCaptureStart() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [profile, resolved, startJob]);
 
   const chooseImages = async () => {
     const selected = await open({
@@ -67,6 +71,29 @@ export function useCaptureStart() {
     });
     if (!selected) return;
     await launch(Array.isArray(selected) ? selected : [selected]);
+  };
+
+  const choosePanoramas = async () => {
+    const selected = await open({
+      title: "Choose 360° panoramas",
+      multiple: true,
+      filters: [{ name: "Images", extensions: CAPTURE_IMAGE_EXTENSIONS }],
+    });
+    if (!selected) return;
+    setError(null);
+    setBusy(true);
+    setBusyMessage("Projecting panoramas…");
+    try {
+      const stagedDirectory = await api.stagePanoramaSelection(
+        Array.isArray(selected) ? selected : [selected],
+      );
+      await startJob(stagedDirectory);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      setBusyMessage("Adding files…");
+    }
   };
 
   const chooseFolder = async () => {
@@ -115,6 +142,7 @@ export function useCaptureStart() {
   const dialog = pending ? (
     <div className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-bg/75 p-4 backdrop-blur-[2px]">
       <div
+        ref={trapRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="capture-confirm-title"
@@ -140,7 +168,9 @@ export function useCaptureStart() {
                 type="button"
                 aria-pressed={pending.preset === preset}
                 disabled={!!resolved?.experimentalMode}
-                onClick={() => setPending((current) => (current ? { ...current, preset } : current))}
+                onClick={() =>
+                  setPending((current) => (current ? { ...current, preset } : current))
+                }
               >
                 {preset[0].toUpperCase() + preset.slice(1)}
               </button>
@@ -168,7 +198,12 @@ export function useCaptureStart() {
           <button type="button" className="btn" onClick={() => setPending(null)}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" onClick={() => void confirmVideo()} autoFocus>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void confirmVideo()}
+            autoFocus
+          >
             {pending.paths.length === 1 ? "Start reconstruction" : "Add to queue"}
           </button>
         </div>
@@ -178,11 +213,13 @@ export function useCaptureStart() {
 
   return {
     chooseImages,
+    choosePanoramas,
     chooseFolder,
     chooseVideos,
     launch,
     dialog,
     error,
     busy,
+    busyMessage,
   };
 }

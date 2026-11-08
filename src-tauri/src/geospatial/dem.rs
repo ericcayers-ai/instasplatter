@@ -77,10 +77,7 @@ pub struct DemHillshadeGrid {
 /// `shade = max(0, cos(zenith)·cos(slope) + sin(zenith)·sin(slope)·cos(azimuth − aspect))`
 /// with slope/aspect from central-difference height gradients on the grid.
 /// Returns one value per cell in [0, 1] (row-major, same indexing as `z`).
-pub fn hillshade_grid(
-    grid: &DemSampleGrid,
-    sun: &crate::geospatial::sun::SunPosition,
-) -> Vec<f32> {
+pub fn hillshade_grid(grid: &DemSampleGrid, sun: &crate::geospatial::sun::SunPosition) -> Vec<f32> {
     let cols = grid.cols.max(1) as usize;
     let rows = grid.rows.max(1) as usize;
     let n = cols * rows;
@@ -258,7 +255,16 @@ pub fn condition_dem_with_opts(
     }
 
     let dest = dest_dir.join(format!("dtm_flood.{ext}"));
-    fs::copy(source, &dest).map_err(|e| format!("Failed to stage DEM: {e}"))?;
+    let source_resolved = source
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve DEM source: {e}"))?;
+    let already_staged = dest
+        .canonicalize()
+        .map(|dest_resolved| dest_resolved == source_resolved)
+        .unwrap_or(false);
+    if !already_staged {
+        fs::copy(source, &dest).map_err(|e| format!("Failed to stage DEM: {e}"))?;
+    }
 
     let cell = cell_size_m.unwrap_or(30.0);
     let nodata_v = nodata.unwrap_or(-9999.0);
@@ -275,9 +281,7 @@ pub fn condition_dem_with_opts(
             aoi[0], aoi[1], aoi[2], aoi[3]
         ));
     } else {
-        notes.push(
-            "No AOI supplied — staged full source extent; clip metadata omitted.".into(),
-        );
+        notes.push("No AOI supplied — staged full source extent; clip metadata omitted.".into());
     }
 
     // Sidecar metadata for hydro / mesh planner / Cesium terrain prep.
@@ -582,9 +586,7 @@ pub fn sample_dem_grid(
         z: synthetic_undulation(cols, rows),
         synthetic: true,
         bed_source: "synthetic".into(),
-        notes: vec![
-            "No real DEM — synthetic undulation bed (Demo / Live preview only).".into(),
-        ],
+        notes: vec!["No real DEM — synthetic undulation bed (Demo / Live preview only).".into()],
         source_path: None,
     })
 }
@@ -598,7 +600,10 @@ pub fn resolve_terrain_tiles_url(derived_or_workspace: &Path) -> Option<String> 
             .join("derived")
             .join("terrain")
             .join("layer.json"),
-        derived_or_workspace.join("derived").join("terrain").join("layer.json"),
+        derived_or_workspace
+            .join("derived")
+            .join("terrain")
+            .join("layer.json"),
     ];
     for layer in &candidates {
         if layer.exists() {
@@ -726,7 +731,11 @@ fn load_preview_json(path: &Path) -> Result<DemSampleGrid, String> {
     let z: Vec<f32> = v
         .get("z")
         .and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|n| n.as_f64().map(|f| f as f32)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| n.as_f64().map(|f| f as f32))
+                .collect()
+        })
         .unwrap_or_default();
     if z.len() != (cols as usize) * (rows as usize) {
         return Err("preview z length mismatch".into());
@@ -845,8 +854,10 @@ fn resample_raw(
             let z10 = sample(x1, y0);
             let z01 = sample(x0, y1);
             let z11 = sample(x1, y1);
-            out[(j * cols + i) as usize] =
-                z00 * (1.0 - fx) * (1.0 - fy) + z10 * fx * (1.0 - fy) + z01 * (1.0 - fx) * fy + z11 * fx * fy;
+            out[(j * cols + i) as usize] = z00 * (1.0 - fx) * (1.0 - fy)
+                + z10 * fx * (1.0 - fy)
+                + z01 * (1.0 - fx) * fy
+                + z11 * fx * fy;
         }
     }
     out
@@ -932,7 +943,9 @@ fn decode_float_geotiff(path: &Path) -> Result<(u32, u32, Vec<f32>, Option<f32>)
         return Err("TIFF missing ImageWidth/Length".into());
     }
     if compression != 1 {
-        return Err(format!("Compressed TIFF ({compression}) not supported without GDAL"));
+        return Err(format!(
+            "Compressed TIFF ({compression}) not supported without GDAL"
+        ));
     }
     if bits != 32 || sample_format != 3 {
         // Try image crate for 8/16-bit elevation encodings.
@@ -1229,6 +1242,26 @@ mod tests {
     }
 
     #[test]
+    fn stages_existing_derived_dem_without_copying_it_onto_itself() {
+        let ws = temp_ws();
+        let derived = ws.join("geo").join("derived");
+        fs::create_dir_all(&derived).unwrap();
+        let src = derived.join("dtm_flood.tif");
+        fs::write(&src, b"already-staged-dem").unwrap();
+
+        let prod = prepare_flood_dem(&ws, Some(&src), 2.0, Some("local-ENU-m")).unwrap();
+
+        assert!(!prod.synthetic);
+        assert_eq!(fs::read(&src).unwrap(), b"already-staged-dem");
+        assert_eq!(
+            prod.dtm_path.as_deref(),
+            Some(src.to_string_lossy().as_ref())
+        );
+        assert!(derived.join("dtm_flood.meta.json").exists());
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
     fn conditions_with_aoi_and_resolution() {
         let ws = temp_ws();
         let src = ws.join("geo").join("catalog").join("usgs_3dep_aoi.tif");
@@ -1263,7 +1296,10 @@ mod tests {
     #[test]
     fn prefers_catalog_dem_over_synthetic() {
         let ws = temp_ws();
-        let src = ws.join("geo").join("catalog").join("opentopo_cop30_aoi.tif");
+        let src = ws
+            .join("geo")
+            .join("catalog")
+            .join("opentopo_cop30_aoi.tif");
         fs::write(&src, b"real-ish").unwrap();
         let prod = prepare_flood_dem(&ws, None, 30.0, Some("EPSG:4326")).unwrap();
         assert!(!prod.synthetic);
@@ -1362,7 +1398,7 @@ mod tests {
         write_tag(277, 3, 1, 1); // SamplesPerPixel
         write_tag(278, 4, 1, h); // RowsPerStrip
         write_tag(279, 4, 1, strip_bytes); // StripByteCounts
-        // next IFD = 0
+                                           // next IFD = 0
         buf.extend_from_slice(&0u32.to_le_bytes());
         while buf.len() < data_offset as usize {
             buf.push(0);

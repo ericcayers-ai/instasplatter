@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""ANUGA scientific flood sidecar for InstaSplatter.
+"""ANUGA compatibility scaffold for InstaSplatter.
 
 Contract: JSON on stdin → JSON progress/done lines on stdout; grids under
-outputDir. When ANUGA is not installed and demoMode is true, emits labelled
-synthetic progressive extents (not scientifically authoritative).
+outputDir. Installed ANUGA is used only for a bounded flat-bed API smoke;
+all map outputs are synthetic and every run is marked non-authoritative.
+When ANUGA is unavailable and demoMode is true, emits labelled demo extents.
 Does **not** vendor GPL engines.
 """
 
@@ -82,8 +83,8 @@ def write_mass_balance(out: Path, residual: float, mode: str) -> Path:
                 "relativeResidual": residual,
                 "mode": mode,
                 "note": (
-                    "Demo mass balance is synthetic."
-                    if mode == "demo"
+                    "Demo/scaffold mass-balance value is synthetic."
+                    if mode in {"demo", "scaffold"}
                     else "Volume residual / total inflow (approx)."
                 ),
             },
@@ -95,7 +96,7 @@ def write_mass_balance(out: Path, residual: float, mode: str) -> Path:
 
 
 def write_hydrograph(out: Path, duration_h: float, peak_stage: float) -> Path:
-    """Stage/discharge series for the UI scrubber."""
+    """Synthetic stage/discharge samples for the preview timeline, not solver output."""
     samples = []
     steps = max(8, int(duration_h) + 1)
     for i in range(steps + 1):
@@ -111,6 +112,32 @@ def write_hydrograph(out: Path, duration_h: float, peak_stage: float) -> Path:
     path = out / "hydrograph.json"
     path.write_text(json.dumps({"samples": samples}, indent=2), encoding="utf-8")
     return path
+
+
+def emit_hydrograph_progress(
+    path: Path,
+    samples: list[dict[str, Any]],
+    index: int,
+    steps: int,
+    last_sample_count: int,
+) -> int:
+    """Stream a growing, finite sample window to the live chart."""
+    if len(samples) < 2:
+        return last_sample_count
+    fraction = min(1.0, max(0.0, index / max(steps, 1)))
+    sample_count = min(len(samples), max(2, round(2 + fraction * (len(samples) - 2))))
+    if index >= steps:
+        sample_count = len(samples)
+    if sample_count <= last_sample_count:
+        return last_sample_count
+    emit(
+        {
+            "kind": "hydrograph",
+            "path": str(path),
+            "samples": samples[:sample_count],
+        }
+    )
+    return sample_count
 
 
 def flood_polygon(bounds: list[float], wet: float, t_h: float) -> dict[str, Any]:
@@ -151,7 +178,7 @@ def write_checkpoint(out: Path, bounds: list[float], wet: float, t_h: float, idx
 
 
 def write_final_grids_stub(out: Path, bounds: list[float], max_depth: float, mode: str) -> list[str]:
-    """Decimated display products; full rasters land when ANUGA is wired."""
+    """Write synthetic display placeholders, not ANUGA result rasters."""
     paths: list[str] = []
     depth = out / "depth_max.geojson"
     depth.write_text(
@@ -198,8 +225,10 @@ def run_demo(req: dict[str, Any]) -> None:
     peak = 0.8 + params["rain_mm_h"] / 40.0
 
     hydro_path = write_hydrograph(out, duration, peak)
+    hydro_samples = json.loads(hydro_path.read_text(encoding="utf-8"))["samples"]
     result_paths = [str(hydro_path)]
     n_steps = 12
+    last_hydrograph_count = 0
     for i in range(n_steps + 1):
         u = i / n_steps
         t_h = duration * u
@@ -215,6 +244,9 @@ def run_demo(req: dict[str, Any]) -> None:
                 "simTimeHours": t_h,
                 "mode": "demo",
             }
+        )
+        last_hydrograph_count = emit_hydrograph_progress(
+            hydro_path, hydro_samples, i, n_steps, last_hydrograph_count
         )
         time.sleep(0.05)
 
@@ -251,10 +283,12 @@ def run_demo(req: dict[str, Any]) -> None:
 
 
 def try_domain_evolve(anuga: Any, req: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | None:
-    """Best-effort real ANUGA Domain.evolve when DEM + mesh knobs are present.
+    """Run a bounded ANUGA API smoke on a flat bed, never a scientific solve.
 
-    Returns result dict on success, None to fall back to labelled scaffold.
-    Never claims authoritative scientific output without evolve completing.
+    The current path checks that a DEM path exists but does not sample that DEM,
+    apply the scenario's rainfall/infiltration or boundary conditions, or
+    calibrate against observations. Completing ``Domain.evolve`` therefore
+    cannot promote the generated display products beyond scaffold status.
     """
     dem = (req.get("dem") or {}).get("path")
     if not dem or not Path(dem).exists():
@@ -264,7 +298,7 @@ def try_domain_evolve(anuga: Any, req: dict[str, Any], params: dict[str, Any]) -
     if len(bounds) < 4:
         return None
     try:
-        # Prefer rectangular domain from DEM path when ANUGA helpers exist.
+        # Build a small rectangular domain to smoke-test ANUGA API compatibility.
         # Import surface varies by ANUGA version; fail soft → scaffold.
         from anuga import Domain, rectangular_cross, Reflective_boundary  # type: ignore
         import numpy as np  # type: ignore
@@ -275,7 +309,8 @@ def try_domain_evolve(anuga: Any, req: dict[str, Any], params: dict[str, Any]) -
         points, vertices, boundary = rectangular_cross(int(max(4, length / max(dx, 1.0))), int(max(4, width / max(dx, 1.0))), len1=length, len2=width)
         domain = Domain(points, vertices, boundary)
         domain.set_name(str(params.get("name") or "instasplatter"))
-        # Flat bed + constant rainfall forcing proxy via stage elevation.
+        # This deliberately remains a flat-bed, fixed-stage API smoke.
+        # The DEM and scenario forcing/boundaries are not wired into the domain.
         def elevation(x, y):
             return 0.0 * x + 0.0 * y
 
@@ -285,7 +320,7 @@ def try_domain_evolve(anuga: Any, req: dict[str, Any], params: dict[str, Any]) -
         Br = Reflective_boundary(domain)
         domain.set_boundary({"left": Br, "right": Br, "top": Br, "bottom": Br})
         duration_s = float(params["duration_h"]) * 3600.0
-        # Short evolve for contract validation; full production runs pin larger budgets.
+        # Bounded evolve smoke only; a short run is not a validated flood model.
         evolve_t = min(duration_s, 60.0)
         for _t in domain.evolve(yieldstep=max(1.0, evolve_t / 10.0), finaltime=evolve_t):
             pass
@@ -302,7 +337,7 @@ def try_domain_evolve(anuga: Any, req: dict[str, Any], params: dict[str, Any]) -
 
 
 def run_anuga(req: dict[str, Any], anuga: Any, version: str) -> None:
-    """Run Domain.evolve when possible; otherwise labelled scaffold (not authoritative)."""
+    """Run the ANUGA compatibility scaffold, always marked non-authoritative."""
     out = Path(req["outputDir"])
     out.mkdir(parents=True, exist_ok=True)
     params = scenario_params(req)
@@ -313,12 +348,15 @@ def run_anuga(req: dict[str, Any], anuga: Any, version: str) -> None:
         fail(3, f"DEM not found: {dem}")
 
     evolved = try_domain_evolve(anuga, req, params)
-    # Authoritative host export requires mode=="anuga". Only emit that after evolve.
-    mode = "anuga" if evolved else "scaffold"
+    # Domain.evolve currently runs on a flat bed with fixed stage and reflective
+    # edges. It does not consume the DEM or scenario forcing/boundaries, and the
+    # display outputs are synthetic. Never report mode="anuga" from this path.
+    mode = "scaffold"
     label = (
-        f"ANUGA Domain.evolve ({version})"
+        "Scaffold — bounded ANUGA flat-bed evolve smoke only; DEM forcing, "
+        "scenario boundaries, and calibration are not implemented. Not authoritative."
         if evolved
-        else "Scaffold — ANUGA imported but Domain.evolve not completed (needs DEM/mesh); not authoritative"
+        else "Scaffold — ANUGA imported but compatibility evolve did not run; not authoritative."
     )
 
     hydro_path = write_hydrograph(
@@ -326,8 +364,10 @@ def run_anuga(req: dict[str, Any], anuga: Any, version: str) -> None:
         params["duration_h"],
         (evolved["max_depth"] if evolved else 0.8) + params["rain_mm_h"] / 35.0,
     )
+    hydro_samples = json.loads(hydro_path.read_text(encoding="utf-8"))["samples"]
     result_paths = [str(hydro_path)]
     n_steps = 10
+    last_hydrograph_count = 0
     for i in range(n_steps + 1):
         u = i / n_steps
         t_h = params["duration_h"] * u
@@ -344,6 +384,9 @@ def run_anuga(req: dict[str, Any], anuga: Any, version: str) -> None:
                 "simTimeHours": t_h,
                 "mode": mode,
             }
+        )
+        last_hydrograph_count = emit_hydrograph_progress(
+            hydro_path, hydro_samples, i, n_steps, last_hydrograph_count
         )
         time.sleep(0.02)
 
@@ -363,7 +406,8 @@ def run_anuga(req: dict[str, Any], anuga: Any, version: str) -> None:
                 "meshMaxAreaM2": extent.get("meshMaxAreaM2"),
                 "label": label,
                 "note": label,
-                "evolved": bool(evolved),
+                "authoritative": False,
+                "flatBedEvolveSmokeCompleted": bool(evolved),
             },
             indent=2,
         ),

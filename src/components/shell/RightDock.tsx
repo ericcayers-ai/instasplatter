@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../../state/store";
 import GeoScenarioInspector from "../../geospatial/GeoScenarioInspector";
+import VpsPanel from "../../geospatial/VpsPanel";
 import { floodSnapshotFromTime, hazardClassLabel } from "../../geospatial/floodPreview";
 import DockSection from "./DockSection";
 import type { ShellFocus } from "./shellFocus";
@@ -208,6 +209,8 @@ export default function RightDock({ focus }: { focus: ShellFocus | null }) {
   const setLogConsoleOpen = useStore((s) => s.setLogConsoleOpen);
   const reconLayers = useStore((s) => s.reconLayers);
   const setReconLayer = useStore((s) => s.setReconLayer);
+  const postProcessing = useStore((s) => s.postProcessing);
+  const setPostProcessing = useStore((s) => s.setPostProcessing);
   const totalCameras = useStore((s) => s.totalCameras);
   const sparseCloudPath = useStore((s) => s.sparseCloudPath);
   const denseCloudPath = useStore((s) => s.denseCloudPath);
@@ -224,6 +227,14 @@ export default function RightDock({ focus }: { focus: ShellFocus | null }) {
           <div className="geo-scenario-root">
             <GeoScenarioInspector />
           </div>
+          <DockSection
+            id="dock-localise"
+            title="Localise"
+            focused={false}
+            defaultOpen={false}
+          >
+            <VpsPanel />
+          </DockSection>
           <DockSection
             id="dock-log"
             title="Log"
@@ -290,8 +301,21 @@ export default function RightDock({ focus }: { focus: ShellFocus | null }) {
               disabled={!latestSplatPath}
               onChange={(v) => setReconLayer("splat", v)}
             />
-            <div className="mt-1 text-[10px] leading-snug text-ink-dim">
-              Additional shading options will appear here in a future update.
+            <div className="my-1 border-t border-edge" />
+            <VizToggle
+              label="AgX tone mapping"
+              checked={postProcessing.tonemap}
+              disabled={!latestSplatPath}
+              onChange={(v) => setPostProcessing("tonemap", v)}
+            />
+            <VizToggle
+              label="FXAA edge smoothing"
+              checked={postProcessing.fxaa}
+              disabled={!latestSplatPath}
+              onChange={(v) => setPostProcessing("fxaa", v)}
+            />
+            <div className="text-[10px] leading-snug text-ink-dim">
+              Display processing applies to the reconstruction viewport and can be combined.
             </div>
           </div>
         </DockSection>

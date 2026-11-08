@@ -14,10 +14,10 @@ import {
   type AoiWgs84,
 } from "./aoi";
 import {
-  CARTO_ATTRIBUTION,
-  CARTO_DARK_TILES,
   ESRI_WORLD_IMAGERY_ATTRIBUTION,
   ESRI_WORLD_IMAGERY_TILES,
+  ESRI_WORLD_STREET_MAP_ATTRIBUTION,
+  ESRI_WORLD_STREET_MAP_TILES,
   GEO_MAP_CENTER,
   GEO_MAP_ZOOM,
 } from "./defaults";
@@ -63,9 +63,9 @@ function buildBaseStyle(mode: GeoBasemapMode): StyleSpecification {
       },
       "carto-dark": {
         type: "raster",
-        tiles: [...CARTO_DARK_TILES],
+        tiles: [ESRI_WORLD_STREET_MAP_TILES],
         tileSize: 256,
-        attribution: CARTO_ATTRIBUTION,
+        attribution: ESRI_WORLD_STREET_MAP_ATTRIBUTION,
         maxzoom: 20,
       },
     },
@@ -245,6 +245,24 @@ function syncFloodCanvas(
   }
   const ctx = canvas.getContext("2d");
   if (ctx) ctx.putImageData(image, 0, 0);
+}
+
+function setInspectHintAt(
+  engine: FloodPreviewEngine | null,
+  lng: number,
+  lat: number,
+  setInspectHint: (hint: string | null) => void,
+) {
+  const sample = engine?.hasBoundDomain() ? engine.sampleAtLngLat(lng, lat) : null;
+  if (sample) {
+    setInspectHint(
+      `Inspect ${lat.toFixed(5)}, ${lng.toFixed(5)} — depth ${sample.depthM.toFixed(2)} m · |v| ${sample.speedMs.toFixed(2)} m/s (${engine?.getBackend() ?? "?"})`,
+    );
+  } else if (!engine?.hasBoundDomain()) {
+    setInspectHint("Draw an AOI first, then inspect flood depth under the cursor");
+  } else {
+    setInspectHint(`Inspect ${lat.toFixed(5)}, ${lng.toFixed(5)} — outside flood domain`);
+  }
 }
 
 function ensurePreviewLayers(
@@ -498,27 +516,8 @@ export default function GeoMap({ className }: GeoMapProps) {
 
     map.on("click", (e) => {
       const t = useStore.getState().geoTool;
-      if (t === "drawAoi") return;
       if (t === "inspect") {
-        const eng = engineRef.current;
-        const sample = eng?.hasBoundDomain()
-          ? eng.sampleAtLngLat(e.lngLat.lng, e.lngLat.lat)
-          : null;
-        if (sample) {
-          setInspectHint(
-            `Inspect ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)} — depth ${sample.depthM.toFixed(2)} m · |v| ${sample.speedMs.toFixed(2)} m/s (${eng?.getBackend() ?? "?"})`,
-          );
-        } else if (!eng?.hasBoundDomain()) {
-          setInspectHint("Draw an AOI first, then inspect flood depth under the cursor");
-        } else {
-          setInspectHint(
-            `Inspect ${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)} — outside flood domain`,
-          );
-        }
-      } else if (t === "measure") {
-        setInspectHint("Measure: click two points (stub — distance tool not connected yet)");
-      } else if (t === "profile") {
-        setInspectHint("Profile: draw a section line (stub — cross-section tool not connected yet)");
+        setInspectHintAt(engineRef.current, e.lngLat.lng, e.lngLat.lat, setInspectHint);
       }
     });
 
@@ -835,15 +834,7 @@ export default function GeoMap({ className }: GeoMapProps) {
     if (!map) return;
     const canvas = map.getCanvas();
     canvas.style.cursor =
-      tool === "pan"
-        ? ""
-        : tool === "inspect"
-          ? "help"
-          : tool === "drawAoi"
-            ? "crosshair"
-            : tool === "measure"
-              ? "crosshair"
-              : "cell";
+      tool === "pan" ? "" : tool === "inspect" ? "help" : "crosshair";
   }, [tool]);
 
   return (
@@ -852,6 +843,16 @@ export default function GeoMap({ className }: GeoMapProps) {
       className={`geo-map h-full w-full min-h-0 ${className ?? ""}`}
       role="application"
       aria-label="Geospatial map viewport"
+      aria-description="With Inspect selected, press Enter or Space to sample the map center. Enter AOI coordinates in Settings to create or edit an area without dragging."
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if ((event.key !== "Enter" && event.key !== " ") || tool !== "inspect") return;
+        const map = mapRef.current;
+        if (!map) return;
+        event.preventDefault();
+        const center = map.getCenter();
+        setInspectHintAt(engineRef.current, center.lng, center.lat, setInspectHint);
+      }}
     />
   );
 }

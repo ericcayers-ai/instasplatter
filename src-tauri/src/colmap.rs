@@ -430,7 +430,10 @@ fn read_images_txt(path: &Path) -> Result<Vec<Image>, String> {
                     img.points2d.push((
                         p(chunk[0])?,
                         p(chunk[1])?,
-                        chunk[2].parse::<i64>().map(|v| v as u64).unwrap_or(u64::MAX),
+                        chunk[2]
+                            .parse::<i64>()
+                            .map(|v| v as u64)
+                            .unwrap_or(u64::MAX),
                     ));
                 }
             }
@@ -443,42 +446,63 @@ fn read_images_txt(path: &Path) -> Result<Vec<Image>, String> {
 
 // ---- Public API ------------------------------------------------------------
 
-/// Locate a sparse model directory under `root`, preferring `sparse/0`.
+/// Locate the valid sparse reconstruction with the most registered images.
+/// Candidate order is stable, so ties prefer the conventional `sparse/0` path.
 pub fn find_model_dir(root: &Path) -> Option<PathBuf> {
-    let has_model = |d: &Path| {
-        d.join("cameras.bin").exists() || d.join("cameras.txt").exists()
+    // Accept a workspace root, a `sparse` directory, or a model directory
+    // itself. Keep the existing path precedence for equal-sized models, then
+    // inspect every numbered reconstruction COLMAP wrote under `sparse/`.
+    let sparse = root.join("sparse");
+    let mut candidates = Vec::new();
+    candidates.push(sparse.join("0"));
+    let numbered_models = |parent: &Path| {
+        let mut found: Vec<(usize, PathBuf)> = fs::read_dir(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_dir() {
+                    return None;
+                }
+                Some((path.file_name()?.to_str()?.parse::<usize>().ok()?, path))
+            })
+            .collect();
+        found.sort_by_key(|(index, _)| *index);
+        found.into_iter().map(|(_, path)| path).collect::<Vec<_>>()
     };
-    // Accepts a workspace root, a `sparse` directory, or a model directory
-    // itself. The `0` cases matter because COLMAP writes its first (and for us
-    // only) reconstruction into a numbered subdirectory.
-    for cand in [
-        root.join("sparse").join("0"),
-        root.join("sparse"),
-        root.join("0"),
-        root.to_path_buf(),
-    ] {
-        if has_model(&cand) {
-            return Some(cand);
+    for candidate in numbered_models(&sparse) {
+        if candidate != sparse.join("0") {
+            candidates.push(candidate);
         }
     }
-    None
+    candidates.push(sparse);
+    for candidate in numbered_models(root) {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates.push(root.to_path_buf());
+
+    let mut best: Option<(PathBuf, usize)> = None;
+    for candidate in candidates {
+        let Ok((_, images)) = read_model_views(&candidate) else {
+            continue;
+        };
+        let registered = images.len();
+        if best
+            .as_ref()
+            .is_none_or(|(_, best_registered)| registered > *best_registered)
+        {
+            best = Some((candidate, registered));
+        }
+    }
+    best.map(|(path, _)| path)
 }
 
 /// Read a sparse model, binary preferred, falling back to text.
 pub fn read_model(dir: &Path) -> Result<Model, String> {
-    let (cameras, images) = if dir.join("cameras.bin").exists() {
-        (
-            read_cameras_bin(&dir.join("cameras.bin"))?,
-            read_images_bin(&dir.join("images.bin"))?,
-        )
-    } else if dir.join("cameras.txt").exists() {
-        (
-            read_cameras_txt(&dir.join("cameras.txt"))?,
-            read_images_txt(&dir.join("images.txt"))?,
-        )
-    } else {
-        return Err(format!("No COLMAP model found in {}.", dir.display()));
-    };
+    let (cameras, images) = read_model_views(dir)?;
 
     // COLMAP writes points3D with a capital D; Brush writes lowercase. Accept
     // either, and treat the point cloud as optional: poses are what we need.
@@ -490,15 +514,68 @@ pub fn read_model(dir: &Path) -> Result<Model, String> {
         .transpose()?
         .unwrap_or_default();
 
-    if images.is_empty() {
-        return Err("The COLMAP model contains no registered images.".into());
-    }
-
     Ok(Model {
         cameras,
         images,
         points,
     })
+}
+
+fn read_model_views(dir: &Path) -> Result<(HashMap<u32, Camera>, Vec<Image>), String> {
+    let read_binary = || -> Result<_, String> {
+        let cameras = read_cameras_bin(&dir.join("cameras.bin"))?;
+        let images = read_images_bin(&dir.join("images.bin"))?;
+        validate_registered_images(&cameras, &images)?;
+        Ok((cameras, images))
+    };
+    let read_text = || -> Result<_, String> {
+        let cameras = read_cameras_txt(&dir.join("cameras.txt"))?;
+        let images = read_images_txt(&dir.join("images.txt"))?;
+        validate_registered_images(&cameras, &images)?;
+        Ok((cameras, images))
+    };
+
+    let has_binary_pair = dir.join("cameras.bin").exists() && dir.join("images.bin").exists();
+    let has_text_pair = dir.join("cameras.txt").exists() && dir.join("images.txt").exists();
+    let (cameras, images) = if has_binary_pair {
+        match read_binary() {
+            Ok(model) => model,
+            Err(binary_error) if has_text_pair => read_text().map_err(|text_error| {
+                format!("Binary model invalid ({binary_error}); text model invalid ({text_error}).")
+            })?,
+            Err(error) => return Err(error),
+        }
+    } else if has_text_pair {
+        read_text()?
+    } else {
+        return Err(format!(
+            "No complete COLMAP model found in {}.",
+            dir.display()
+        ));
+    };
+    Ok((cameras, images))
+}
+
+fn validate_registered_images(
+    cameras: &HashMap<u32, Camera>,
+    images: &[Image],
+) -> Result<(), String> {
+    if images.is_empty() {
+        return Err("The COLMAP model contains no registered images.".into());
+    }
+    if cameras.is_empty() {
+        return Err("The COLMAP model contains no cameras.".into());
+    }
+    if let Some(image) = images
+        .iter()
+        .find(|image| !cameras.contains_key(&image.camera_id))
+    {
+        return Err(format!(
+            "COLMAP image {} references missing camera {}.",
+            image.name, image.camera_id
+        ));
+    }
+    Ok(())
 }
 
 /// Write a sparse model as text. Brush reads this layout directly, and it is
@@ -573,11 +650,7 @@ pub fn write_model_txt(dir: &Path, model: &Model) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     for pt in &model.points {
-        let track: Vec<String> = pt
-            .track
-            .iter()
-            .map(|(i, k)| format!("{i} {k}"))
-            .collect();
+        let track: Vec<String> = pt.track.iter().map(|(i, k)| format!("{i} {k}")).collect();
         writeln!(
             p,
             "{} {} {} {} {} {} {} {} {}",
@@ -722,14 +795,87 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn write_text_test_model(dir: &Path, registered_images: usize) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(
+            dir.join("cameras.txt"),
+            "1 PINHOLE 640 480 500 500 320 240\n",
+        )
+        .unwrap();
+        let mut images = String::new();
+        for id in 1..=registered_images {
+            images.push_str(&format!("{id} 1 0 0 0 0 0 0 1 img_{id:05}.jpg\n\n"));
+        }
+        fs::write(dir.join("images.txt"), images).unwrap();
+    }
+
     #[test]
-    fn find_model_dir_prefers_sparse_zero() {
-        let root = std::env::temp_dir().join("instasplatter_find_model_test");
+    fn find_model_dir_selects_largest_valid_registered_model() {
+        let root = std::env::temp_dir().join(format!(
+            "instasplatter_find_model_test_{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         let s0 = root.join("sparse").join("0");
-        fs::create_dir_all(&s0).unwrap();
-        fs::write(s0.join("cameras.txt"), "").unwrap();
+        let s1 = root.join("sparse").join("1");
+        let incomplete = root.join("sparse").join("2");
+        let corrupt = root.join("sparse").join("3");
+
+        write_text_test_model(&s0, 4);
+        write_text_test_model(&s1, 42);
+        fs::create_dir_all(&incomplete).unwrap();
+        fs::write(
+            incomplete.join("cameras.txt"),
+            "1 PINHOLE 640 480 500 500 320 240\n",
+        )
+        .unwrap();
+        fs::create_dir_all(&corrupt).unwrap();
+        fs::write(
+            corrupt.join("cameras.txt"),
+            "1 PINHOLE 640 480 500 500 320 240\n",
+        )
+        .unwrap();
+        fs::write(corrupt.join("images.txt"), "not a COLMAP image record\n").unwrap();
+
+        assert_eq!(read_model(&s0).unwrap().images.len(), 4);
+        assert_eq!(read_model(&s1).unwrap().images.len(), 42);
+        assert_eq!(find_model_dir(&root).unwrap(), s1);
+        assert_eq!(find_model_dir(&root.join("sparse")).unwrap(), s1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_model_dir_keeps_candidate_order_for_equal_sized_models() {
+        let root = std::env::temp_dir().join(format!(
+            "instasplatter_find_model_tie_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let s0 = root.join("sparse").join("0");
+        let s1 = root.join("sparse").join("1");
+        write_text_test_model(&s0, 4);
+        write_text_test_model(&s1, 4);
+
         assert_eq!(find_model_dir(&root).unwrap(), s0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_model_falls_back_to_complete_text_when_binary_pair_is_unusable() {
+        let root = std::env::temp_dir().join(format!(
+            "instasplatter_model_fallback_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        write_text_test_model(&root, 1);
+
+        // An incomplete binary pair and then a corrupt one must not mask the
+        // complete text model in the same directory.
+        fs::write(root.join("cameras.bin"), []).unwrap();
+        assert_eq!(read_model(&root).unwrap().images.len(), 1);
+        fs::write(root.join("images.bin"), []).unwrap();
+        assert_eq!(read_model(&root).unwrap().images.len(), 1);
+
         let _ = fs::remove_dir_all(&root);
     }
 

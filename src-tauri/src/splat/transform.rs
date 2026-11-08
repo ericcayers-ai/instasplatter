@@ -280,7 +280,9 @@ pub fn estimate_ground_normal(cloud: &SplatCloud) -> Option<[f64; 3]> {
     // cloud produce the same plane.
     let mut state: u64 = 0x2545_F491_4F6C_DD1D;
     let mut next = |m: usize| -> usize {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((state >> 33) as usize) % m
     };
 
@@ -404,7 +406,11 @@ mod tests {
         // 90 degrees about +z takes +x to +y.
         let r = rodrigues([0.0, 0.0, std::f64::consts::FRAC_PI_2]);
         rotate_cloud(&mut cloud, r, [0.0, 0.0, 0.0]).unwrap();
-        assert!(cloud.positions[0][0].abs() < 1e-6, "{:?}", cloud.positions[0]);
+        assert!(
+            cloud.positions[0][0].abs() < 1e-6,
+            "{:?}",
+            cloud.positions[0]
+        );
         assert!((cloud.positions[0][1] - 1.0).abs() < 1e-6);
         // The pivot point does not move.
         assert!(cloud.positions[1].iter().all(|v| v.abs() < 1e-6));
@@ -513,7 +519,10 @@ mod tests {
         let dir = normalize([0.3, 0.5, -0.8]);
         let before: f64 = eval_sh(
             1,
-            &cloud.sh_rest[0..3].iter().map(|v| *v as f64).collect::<Vec<_>>(),
+            &cloud.sh_rest[0..3]
+                .iter()
+                .map(|v| *v as f64)
+                .collect::<Vec<_>>(),
             dir,
         );
 
@@ -522,7 +531,10 @@ mod tests {
 
         let after: f64 = eval_sh(
             1,
-            &cloud.sh_rest[0..3].iter().map(|v| *v as f64).collect::<Vec<_>>(),
+            &cloud.sh_rest[0..3]
+                .iter()
+                .map(|v| *v as f64)
+                .collect::<Vec<_>>(),
             m3_mul_v(r, dir),
         );
         assert!((before - after).abs() < 1e-5, "{before} vs {after}");

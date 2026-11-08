@@ -10,7 +10,7 @@ The geospatial suite today (v0.9.x) can draw an AOI, run a soft flood preview, a
 
 ## Goals (v0.10)
 
-1. **Flood-only simulated physics** — inundation remains the sole authoritative simulation path (ANUGA scientific when installed; soft preview / HAND labelled non-authoritative until promotion gates pass).
+1. **Flood-only simulated physics** — inundation remains the only candidate for an authoritative simulation path. The current ANUGA worker is a bounded flat-bed API smoke scaffold; soft preview / HAND remain non-authoritative until real solver forcing, calibration, and promotion gates pass.
 2. **Real DEM + catalog** — USGS 3DEP / Copernicus GLO-30 (and related connectors) feed `dem` stage/condition for the AOI; no synthetic-only bed when a DEM is available.
 3. **Optional Globe view** — CesiumJS as a third mode beside MapLibre and ENU (`2d | 3d | globe`), dual-viewer + shared store.
 4. **Hazard data layers** — FEMA NFHL, HydroSHEDS, gauges, OSM waterways as overlays; earthquake / wildfire / landslide / tsunami = Experimental stubs only (no fake physics).
@@ -113,7 +113,7 @@ Experimental only: ion World Terrain when user supplies a token.
 AOI → fetch DEM → soft preview bed from DEM samples
                 → HAND rapid inundation (Live preview badge)
                 → NFHL / HydroSHEDS / gauges / OSM waterways as layer-tree layers
-                → ANUGA when sidecar ready (Scientific badge; Demo when missing)
+                → ANUGA compatibility scaffold (always non-authoritative in the current runner)
                 → exports: depth/hazard COG + scenario manifest for DEM-only workspaces
 ```
 
@@ -143,14 +143,14 @@ AOI → fetch DEM → soft preview bed from DEM samples
 | Local DEM terrain | ON | ON |
 | ion World Terrain / geocoder / ion basemaps | Off | Only if user ion token set + ack |
 | HAND / soft preview | Live preview (non-authoritative) | Same |
-| ANUGA | Scientific when installed | Same |
+| ANUGA | Compatibility scaffold only | Same |
 | Multi-hazard physics | Never | Never (stubs / feeds only) |
 | GPL hydro | Never in installer | External plugin only |
 
 ### Error handling / honesty
 
 - Missing DEM → clear connector error; soft preview may fall back to synthetic bed only with an honest badge  
-- Missing ANUGA → Demo / Live preview labels; never claim Scientific  
+- Current ANUGA scaffold → Scaffold label; never claim Scientific
 - HAND extents → always non-authoritative until compare gates pass  
 - Blank ion on Standard → no silent ion traffic; geocoder disabled  
 - OSM-derived layers → ODbL attribution in chrome / About  

@@ -1,7 +1,7 @@
-﻿# Scientific badge — screenshot pending
+# Scientific badge — unavailable in current runner
 
-**Status:** MANUAL — PNG not captured in headless verify session.
+**Status:** BLOCKED — current ANUGA worker is a non-authoritative flat-bed compatibility scaffold.
 
-CONDITIONAL: Capture Scientific badge only when ANUGA calibrated run succeeds. File target: 07-badge-scientific.png
+Capture only after DEM forcing, scenario boundaries, calibration, and validation are implemented. File target: 07-badge-scientific.png
 
 Replace this note with the PNG (or keep both) when captured. Checklist: [MANUAL-CAPTURE-CHECKLIST.md](./MANUAL-CAPTURE-CHECKLIST.md).

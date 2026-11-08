@@ -102,7 +102,7 @@ Two selectable tracks; profiler picks by scene size + hardware + "speed vs. qual
 | **Matching front-end** | **LightGlue** (+SuperPoint/ALIKED/DISK) or **RoMa** dense; **MASt3R** matches for wide baselines | — | Robust to viewpoint/appearance change |
 
 - [ ] Implement **VGGT/MASt3R fast init** to get a live splat on screen within seconds, then **refine poses with GLOMAP in the background** and hot-swap when ready ("progressive pose refinement").
-- [ ] Robust intrinsics: use EXIF focal as prior; solve for shared/​per-camera intrinsics; support unknown focal.
+- [ ] Robust intrinsics: use EXIF focal as prior; solve for shared/per-camera intrinsics; support unknown focal.
 - [ ] Handle **mixed cameras / mixed focal lengths / mixed resolutions** in one dataset (per-image intrinsics).
 
 ### Stage 3 — Initialization

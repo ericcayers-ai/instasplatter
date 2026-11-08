@@ -1,7 +1,7 @@
 # Paper / repo sweep evidence (2024–2026)
 
 **Sweep date:** 2026-07-14  
-**Workspace:** `C:\Users\ericc\OneDrive\Desktop\Programs\instasplatter`  
+**Workspace:** `C:\Users\<you>\OneDrive\Desktop\Programs\instasplatter`  
 **Method:** (1) Read existing `docs/RESEARCH-STACK.md`, `ROADMAP.md`, `ROADMAP-V2.md`.  
 (2) Web search for post-2024 3DGS / NVS / feed-forward SfM / splat→mesh work.  
 (3) Cross-check against the Awesome 3DGS index ([mrnerf/awesome-3D-gaussian-splatting](https://mrnerf.github.io/awesome-3D-gaussian-splatting/)) for breadth.  
@@ -179,3 +179,57 @@ Cloned `https://github.com/nerfstudio-project/gsplat` (Apache-2.0) into
 - settings `trainer` / `gsplat_*` (compose ON)
 
 See RESEARCH-STACK **gsplat parity** table for row-by-row status.
+
+
+---
+
+## Correction — 2026-11-03 (read before trusting Entries 47–62)
+
+The 2026-11-01 addendum below records entries 47, 48, 49, 61 as **integrated**. A measurement pass
+on 2026-11-03 found that status wrong for three of them:
+
+- **#47 / #61 (Gaussian Point Splatting, "64-bit atomic visibility buffer").** WGSL defines no `u64`
+  type, and the recorded shader had a depth/colour race (`atomicMin(depth)` then a separate colour
+  store). Nothing outside the smoke test imported `src/splat/pointSplatting.ts`, so no renderer path
+  ever ran it. Corrected shader (two-pass, 32-bit) and the adopt/reject decision now live in
+  `docs/POINT-SPLATTING-VERDICT.md`; the module is a **reference implementation**, not shipped.
+- **#48 (splat-to-mesh Saint-Venant flood).** The solver leaked 33% of injected volume on a closed
+  domain and could not hold a lake at rest. It is replaced by `src/geospatial/hazards/swe.ts` (HLL +
+  Audusse hydrostatic reconstruction + Toro dry-bed wave speeds), validated by 27 measured checks in
+  `floodValidation.smoke.ts`. Details and the honest limits: `docs/FLOOD-SIMULATION.md`.
+- **#49 (6-DoF VPS).** Nothing imported `vps.ts`, and `hdopM`/`vdopM` were `geomFactor * 0.45` — tuned
+  constants, not a derivation. Now wired (`VpsPanel.tsx` + IPC), with a derived first-order bound and
+  seeded random-subset RANSAC.
+- **#50–#62 rows** are references/deferred as recorded; none of them is shipped code.
+
+The repo-wide audit of documentation-vs-code drift, with the commands that produced each finding, is
+`docs/AUDIT-2026-11-03.md` §9.
+
+---
+
+## Addendum — 2026-11-01 Deep GitHub Gaussian Splatting, Splat-to-Mesh Flood & 6-DoF VPS Sweep (Entries 47–62)
+
+**Sweep date:** 2026-11-01  
+**Primary Additions Implemented in `src/`:**
+1. **Gaussian Point Splatting (SIGGRAPH '26, `JorisAR/gaussian-point-splatting`):** Clean-room implementation in `src/splat/pointSplatting.ts` (`packDepthColor64`, `unpackDepthColor64`, `computeAdaptivePointCount`, `cullGeospatialSplatChunks`, `rasterizeGaussianPointSplatting`, `WGSL_GAUSSIAN_POINT_SPLATTING_SHADER`). Replaces global $O(M \log M)$ radix sort with stochastic/quasi-random Halton point emission per Gaussian and 64-bit atomic depth-first visibility (`atomicMin`), scaling to city/geospatial scenes (100M–425M+ splats) with zero sorting pop.
+2. **Splat-to-Mesh Terrain Extraction & Saint-Venant Flood Simulation (`src/geospatial/hazards/floodSim.ts`):** Bridges `GaussianPrimitive3D[]` clouds directly into a ground-envelope DEM & 3D indexed mesh (`splatCloudToTerrainMeshAndDem`) and runs a mass-conserving 2D Shallow Water Equations (Saint-Venant hydrostatic reconstruction + Manning friction) solver (`stepShallowWaterSaintVenant`, `runSplatToMeshFloodSimulation`, `extractFloodWaterSurfaceMesh`).
+3. **Full Ground-Level + Geospatial 6-DoF Visual Positioning System (`src/geospatial/vps.ts`):** 4-stage coarse-to-fine visual localization (`retrieveCandidateVpsSubmaps`, `matchQueryToSplatAnchors`, `solvePnpRansac6DoF`, `localizeCameraVps`) operating across street-level scans and aerial/geospatial views with ENU $\leftrightarrow$ WGS84 registration.
+
+| # | Name | Year / Venue | Link | Category | License | Status | Integration in this repo | Grep / proof |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 47 | **Gaussian Point Splatting** | SIGGRAPH 2026 | [JorisAR/gaussian-point-splatting](https://github.com/JorisAR/gaussian-point-splatting) | large-scene / sorting-free raster | Research ref (clean-room TS/WGSL) | **integrated** | Sorting-free stochastic point splatting + 64-bit atomic depth+color buffer for geospatial scale | `src/splat/pointSplatting.ts`, `rasterizeGaussianPointSplatting` |
+| 48 | **Splat-to-Mesh Hydrostatic Flood Sim** | 2026 | in-repo (`floodSim.ts`) | mesh / hydro physics | Apache-2.0 | **integrated** | Lower-quantile ground DEM + mesh extraction from splats $\rightarrow$ 2D Saint-Venant SWE solver $\rightarrow$ 3D water surface mesh | `src/geospatial/hazards/floodSim.ts`, `runSplatToMeshFloodSimulation` |
+| 49 | **6-DoF Ground + Geospatial Splat VPS** | 2026 | in-repo (`vps.ts`) | localization / VPS | Apache-2.0 | **integrated** | NetVLAD/GeoCLIP submap retrieval + Lowe/mutual 2D-3D matching + PnP-RANSAC + LM refinement + WGS84 registration | `src/geospatial/vps.ts`, `localizeCameraVps` |
+| 50 | **3DGRUT** (3D Gaussian Ray Tracing + Unscented Transform) | 2025–26 NVIDIA | [nv-tlabs/3dgrut](https://github.com/nv-tlabs/3dgrut) | raytracing / fisheye / VR | Apache-2.0 | deferred (ref) | Exact shutter / fisheye / secondary ray reference for VR & wide-FOV cameras | `PAPER-SWEEP-2024+.md` |
+| 51 | **StopThePop** | SIGGRAPH 2024 | [r4dl/StopThePop-Rasterizer](https://github.com/r4dl/StopThePop-Rasterizer) | AA / sorting | MIT / GS-deriv | superseded by #47 | Per-pixel hierarchical sort; superseded for geospatial scale by sorting-free Gaussian Point Splatting (#47) | `pointSplatting.ts` |
+| 52 | **RadSplat** | 3DV 2025 | [m-niemeyer/radsplat](https://github.com/m-niemeyer/radsplat) | pruning / speed | Apache-2.0 / ref | opt-in | Ray-contribution max-operator pruning for 900+ FPS compact splats | `RESEARCH-STACK.md` |
+| 53 | **Hierarchical-3DGS** | SIGGRAPH 2024 | [graphdeco-inria/hierarchical-3d-gaussians](https://github.com/graphdeco-inria/hierarchical-3d-gaussians) | city / geospatial LOD | Inria NC | reimplemented | Chunked ENU bounding-sphere hierarchy & frustum culling in `cullGeospatialSplatChunks` | `pointSplatting.ts::cullGeospatialSplatChunks` |
+| 54 | **Octree-GS** | 2024–25 | [city-super/Octree-GS](https://github.com/city-super/Octree-GS) | LOD / large scene | Apache-2.0 | integrated (cull) | Anchor-based LOD & view-distance octree culling | `pointSplatting.ts` |
+| 55 | **Grendel-GS** | NeurIPS 2024 | [nyu-systems/Grendel-GS](https://github.com/nyu-systems/Grendel-GS) | distributed train | Apache-2.0 | deferred | Multi-GPU sparse all-to-all splat distribution (out of single-GPU RTX 4060 scope) | — |
+| 56 | **FlashGS** | CVPR 2025 | [FlashGS/FlashGS](https://github.com/FlashGS/FlashGS) | fast raster | MIT | deferred | Exact ellipse intersection culling in CUDA | — |
+| 57 | **Spark** | 2025 | [sparkjsdev/spark](https://github.com/sparkjsdev/spark) | WebGL/Three.js | MIT | reference | Web-native streaming splat chunks | `RESEARCH-STACK.md` |
+| 58 | **SuperSplat** | 2024–26 | [playcanvas/supersplat](https://github.com/playcanvas/supersplat) | editor / SOG | MIT | reference | PlayCanvas splat inspection & cleanup UX | `RESEARCH-STACK.md` |
+| 59 | **SplatLoc / GS-Loc / 6DGS** | 2024–25 | [various 3DGS visual localization repos] | VPS / 6-DoF | research / Apache | **reimplemented** | Clean-room 2D-3D anchor descriptor matching + PnP-RANSAC + LM polish in `src/geospatial/vps.ts` | `src/geospatial/vps.ts` |
+| 60 | **Gauzilla / Long-LRM** | 2025–26 | feed-forward large-scale GS | feed-forward | research | deferred | Feed-forward scene reconstruction | — |
+| 61 | **64-Bit Atomic Visibility Buffer** | SIGGRAPH 2026 | `JorisAR/gaussian-point-splatting` | WebGPU compute | Apache-2.0 (ours) | **integrated** | `packDepthColor64` + `WGSL_GAUSSIAN_POINT_SPLATTING_SHADER` | `src/splat/pointSplatting.ts` |
+| 62 | **Saint-Venant Hydrostatic Reconstruction** | Audusse 2004 / 2026 | `src/geospatial/hazards/floodSim.ts` | flood physics | Apache-2.0 | **integrated** | Positivity-preserving well-balanced SWE solver over splat-derived DEM & mesh | `src/geospatial/hazards/floodSim.ts` |

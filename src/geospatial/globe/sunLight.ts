@@ -33,8 +33,7 @@ export function sunFixLocal(
     (date.getUTCSeconds() + date.getUTCMilliseconds() / 1000) / 3600;
   let y = date.getUTCFullYear();
   let m = date.getUTCMonth() + 1;
-  const d =
-    date.getUTCDate() - 0.5 + hourUtc / 24; // JD at midday-ish handled below
+  const d = date.getUTCDate() + hourUtc / 24;
   if (m <= 2) {
     y -= 1;
     m += 12;
@@ -47,8 +46,6 @@ export function sunFixLocal(
     d +
     b -
     1524.5;
-  void d;
-
   const t = (jd - 2451545.0) / 36525;
   const l0 = (280.46646 + t * (36000.76983 + 0.0003032 * t)) % 360;
   const mAnom = (357.52911 + t * (35999.05029 - 0.0001537 * t)) * RAD;
@@ -62,14 +59,13 @@ export function sunFixLocal(
     ((l0 + cDeg - 0.00569 - 0.00478 * Math.sin(omega)) % 360) * RAD;
   const secs = 21.448 - t * (46.815 + 0.00059 * t) + t * t * 0.001813;
   const eps0 = (23 + (26 + secs / 60) / 60) * RAD;
-  const eps = eps0 + 0.00256 * Math.cos(omega);
+  const eps = eps0 + 0.00256 * RAD * Math.cos(omega);
 
   const dec = Math.asin(Math.sin(eps) * Math.sin(lambda));
   const yArg = Math.tan(eps / 2) ** 2;
   const twoL0 = (2 * l0) * RAD;
   const eotMin =
-    4 *
-    RAD *
+    (4 / RAD) *
     (yArg * Math.sin(twoL0) -
       2 * ecc * Math.sin(mAnom) +
       4 * ecc * yArg * Math.sin(mAnom) * Math.cos(twoL0) -

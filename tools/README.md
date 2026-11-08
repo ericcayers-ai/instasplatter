@@ -6,6 +6,7 @@
 |--------|---------|
 | `smoke-local.ps1` | Windows smoke harness — runs cargo test, tsc, checks sidecar adapters fail-clearly on empty input |
 | `upgrade_experimental_adapters.py` | Regenerates `run.py`/`run.bat`/`install.ps1` for 20 experimental sidecar adapters |
+| `bench/mast3r_sfm_bench.py` | MASt3R-SfM accuracy benchmark: scores our poses against a reference after gauge alignment; runs weight-free on synthetic ground truth. See `bench/README.md` |
 
 ## Brush Fork
 

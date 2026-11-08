@@ -13,11 +13,23 @@ const PRESETS: { id: PresetName | null; label: string }[] = [
   { id: "max", label: "Max" },
 ];
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+function Row({
+  label,
+  controlId,
+  hint,
+  children,
+}: {
+  label: string;
+  controlId: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5 py-2">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-xs">{label}</div>
+        <label htmlFor={controlId} className="text-xs">
+          {label}
+        </label>
         <div className="flex shrink-0 items-center gap-1.5">{children}</div>
       </div>
       {hint && <div className="text-[10px] leading-snug text-ink-dim">{hint}</div>}
@@ -26,6 +38,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 }
 
 function AutoNumber({
+  id,
   value,
   autoValue,
   min,
@@ -33,6 +46,7 @@ function AutoNumber({
   step,
   onChange,
 }: {
+  id: string;
   value: number | null | undefined;
   autoValue: number | undefined;
   min: number;
@@ -51,6 +65,7 @@ function AutoNumber({
         Auto
       </button>
       <input
+        id={id}
         type="number"
         disabled={isAuto}
         min={min}
@@ -65,16 +80,19 @@ function AutoNumber({
 }
 
 function AutoSelect({
+  id,
   value,
   options,
   onChange,
 }: {
+  id: string;
   value: string | null | undefined;
   options: { id: string | null; label: string }[];
   onChange: (v: string | null) => void;
 }) {
   return (
     <select
+      id={id}
       value={value ?? "__auto__"}
       onChange={(e) => onChange(e.target.value === "__auto__" ? null : e.target.value)}
       className="px-2 py-0.5 text-xs outline-none"
@@ -92,11 +110,13 @@ function AutoSelect({
 }
 
 function BoolSelect({
+  id,
   value,
   onChange,
   onLabel = "On",
   offLabel = "Off",
 }: {
+  id: string;
   value: boolean | null | undefined;
   onChange: (v: boolean | null) => void;
   onLabel?: string;
@@ -104,6 +124,7 @@ function BoolSelect({
 }) {
   return (
     <AutoSelect
+      id={id}
       value={value == null ? null : value ? "on" : "off"}
       options={[
         { id: "on", label: onLabel },
@@ -200,8 +221,9 @@ export function ReconstructionSettings() {
 
       <div className="-mx-3">
         <CollapsibleSection title="Input" defaultOpen>
-          <Row label="Max frames" hint="Frames used for reconstruction">
+          <Row controlId="setting-max-frames" label="Max frames" hint="Frames used for reconstruction">
             <AutoNumber
+              id="setting-max-frames"
               value={settings.maxFrames}
               autoValue={resolved?.maxFrames}
               min={10}
@@ -210,8 +232,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ maxFrames: v })}
             />
           </Row>
-          <Row label="Max resolution" hint="Longest image edge in pixels">
+          <Row controlId="setting-max-resolution" label="Max resolution" hint="Longest image edge in pixels">
             <AutoNumber
+              id="setting-max-resolution"
               value={settings.maxResolution}
               autoValue={resolved?.maxResolution}
               min={480}
@@ -220,8 +243,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ maxResolution: v })}
             />
           </Row>
-          <Row label="Blur rejection" hint="Fraction of blurriest frames dropped">
+          <Row controlId="setting-blur-rejection" label="Blur rejection" hint="Fraction of blurriest frames dropped">
             <AutoNumber
+              id="setting-blur-rejection"
               value={settings.blurRejectFraction}
               autoValue={resolved?.blurRejectFraction}
               min={0}
@@ -233,8 +257,9 @@ export function ReconstructionSettings() {
         </CollapsibleSection>
 
         <CollapsibleSection title="Cameras" defaultOpen>
-          <Row label="Matcher" hint="Sequential suits video, exhaustive suits unordered photos">
+          <Row controlId="setting-matcher" label="Matcher" hint="Sequential suits video, exhaustive suits unordered photos">
             <AutoSelect
+              id="setting-matcher"
               value={settings.matcher}
               options={[
                 { id: "sequential", label: "Sequential" },
@@ -244,6 +269,7 @@ export function ReconstructionSettings() {
             />
           </Row>
           <Row
+            controlId="setting-live-camera-tracking"
             label="Live camera tracking"
             hint={
               resolved?.liveInit
@@ -251,7 +277,7 @@ export function ReconstructionSettings() {
                 : "Off by default (Experimental). Register cameras one at a time instead of solving them all first."
             }
           >
-            <BoolSelect value={settings.liveInit} onChange={(v) => set({ liveInit: v })} />
+            <BoolSelect id="setting-live-camera-tracking" value={settings.liveInit} onChange={(v) => set({ liveInit: v })} />
           </Row>
           {resolved?.liveInit && (
             <div className="mb-1 text-[10px] leading-snug text-accent">
@@ -259,6 +285,7 @@ export function ReconstructionSettings() {
             </div>
           )}
           <Row
+            controlId="setting-gpu-feature-extraction"
             label="GPU feature extraction"
             hint={
               hasCuda && colmapCuda
@@ -268,13 +295,14 @@ export function ReconstructionSettings() {
                   : "Requires NVIDIA + working nvidia-smi. Without CUDA, features run on CPU (Brush still uses Vulkan/DX12)."
             }
           >
-            <BoolSelect value={settings.siftGpu} onChange={(v) => set({ siftGpu: v })} />
+            <BoolSelect id="setting-gpu-feature-extraction" value={settings.siftGpu} onChange={(v) => set({ siftGpu: v })} />
           </Row>
         </CollapsibleSection>
 
         <CollapsibleSection title="Training" defaultOpen>
-          <Row label="Total steps" hint="More steps means a sharper result and a longer run">
+          <Row controlId="setting-total-steps" label="Total steps" hint="More steps means a sharper result and a longer run">
             <AutoNumber
+              id="setting-total-steps"
               value={settings.totalSteps}
               autoValue={resolved?.totalSteps}
               min={500}
@@ -283,8 +311,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ totalSteps: v })}
             />
           </Row>
-          <Row label="Max splats" hint="Hard cap on Gaussian count (VRAM)">
+          <Row controlId="setting-max-splats" label="Max splats" hint="Hard cap on Gaussian count (VRAM)">
             <AutoNumber
+              id="setting-max-splats"
               value={settings.maxSplats}
               autoValue={resolved?.maxSplats}
               min={100000}
@@ -293,8 +322,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ maxSplats: v })}
             />
           </Row>
-          <Row label="SH degree" hint="Color detail (view-dependent effects)">
+          <Row controlId="setting-sh-degree" label="SH degree" hint="Color detail (view-dependent effects)">
             <AutoNumber
+              id="setting-sh-degree"
               value={settings.shDegree}
               autoValue={resolved?.shDegree}
               min={0}
@@ -303,8 +333,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ shDegree: v })}
             />
           </Row>
-          <Row label="Refine every" hint="Densification cadence in steps">
+          <Row controlId="setting-refine-every" label="Refine every" hint="Densification cadence in steps">
             <AutoNumber
+              id="setting-refine-every"
               value={settings.refineEvery}
               autoValue={resolved?.refineEvery}
               min={50}
@@ -313,8 +344,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ refineEvery: v })}
             />
           </Row>
-          <Row label="SSIM weight" hint="Structural vs. photometric loss balance">
+          <Row controlId="setting-ssim-weight" label="SSIM weight" hint="Structural vs. photometric loss balance">
             <AutoNumber
+              id="setting-ssim-weight"
               value={settings.ssimWeight}
               autoValue={resolved?.ssimWeight}
               min={0}
@@ -324,6 +356,7 @@ export function ReconstructionSettings() {
             />
           </Row>
           <Row
+            controlId="setting-trainer"
             label="Trainer"
             hint={
               hasCuda
@@ -334,6 +367,7 @@ export function ReconstructionSettings() {
             }
           >
             <AutoSelect
+              id="setting-trainer"
               value={settings.trainer ?? null}
               options={[
                 { id: "brush", label: "Brush (wgpu)" },
@@ -342,8 +376,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ trainer: v })}
             />
           </Row>
-          <Row label="Live update every" hint="Steps between Brush checkpoints">
+          <Row controlId="setting-live-update-every" label="Live update every" hint="Steps between Brush checkpoints">
             <AutoNumber
+              id="setting-live-update-every"
               value={settings.exportEvery}
               autoValue={resolved?.exportEvery}
               min={100}
@@ -355,7 +390,7 @@ export function ReconstructionSettings() {
         </CollapsibleSection>
 
         <CollapsibleSection title="Cleanliness" defaultOpen={false}>
-          <Row label="Clean vs. detailed" hint="Higher means stronger floater suppression">
+          <Row controlId="setting-clean-vs-detailed" label="Clean vs. detailed" hint="Higher means stronger floater suppression">
             <button
               type="button"
               onClick={() => set({ strictness: settings.strictness == null ? 0.5 : null })}
@@ -364,6 +399,7 @@ export function ReconstructionSettings() {
               Auto
             </button>
             <input
+              id="setting-clean-vs-detailed"
               type="range"
               min={0}
               max={1}
@@ -377,8 +413,9 @@ export function ReconstructionSettings() {
         </CollapsibleSection>
 
         <CollapsibleSection title="Output" defaultOpen={false}>
-          <Row label="Export format" hint="Offered first in the export dialog">
+          <Row controlId="setting-export-format" label="Export format" hint="Offered first in the export dialog">
             <AutoSelect
+              id="setting-export-format"
               value={settings.exportFormat ?? null}
               options={[
                 { id: "ply", label: "PLY" },
@@ -388,8 +425,9 @@ export function ReconstructionSettings() {
               onChange={(v) => set({ exportFormat: v })}
             />
           </Row>
-          <Row label="Keep intermediates" hint="Keep frames and the COLMAP database on disk">
+          <Row controlId="setting-keep-intermediates" label="Keep intermediates" hint="Keep frames and the COLMAP database on disk">
             <BoolSelect
+              id="setting-keep-intermediates"
               value={settings.keepIntermediates}
               onChange={(v) => set({ keepIntermediates: v })}
               onLabel="Keep"
@@ -399,8 +437,9 @@ export function ReconstructionSettings() {
         </CollapsibleSection>
 
         <CollapsibleSection title="Geospatial" defaultOpen={false}>
-          <Row label="Default suite" hint="Preferred suite when the app starts.">
+          <Row controlId="setting-default-suite" label="Default suite" hint="Preferred suite when the app starts.">
             <AutoSelect
+              id="setting-default-suite"
               value={settings.defaultSuite ?? null}
               options={[
                 { id: "reconstruction", label: "Reconstruction" },
@@ -415,8 +454,9 @@ export function ReconstructionSettings() {
         </CollapsibleSection>
 
         <CollapsibleSection title="Advanced" defaultOpen={false}>
-          <Row label="gsplat strategy" hint="MCMC (floater-resistant) or Default + AbsGrad.">
+          <Row controlId="setting-gsplat-strategy" label="gsplat strategy" hint="MCMC (floater-resistant) or Default + AbsGrad.">
             <AutoSelect
+              id="setting-gsplat-strategy"
               value={settings.gsplatStrategy ?? null}
               options={[
                 { id: "mcmc", label: "MCMC" },
@@ -430,29 +470,31 @@ export function ReconstructionSettings() {
               }
             />
           </Row>
-          <Row label="gsplat antialiased" hint="In-loop mip-style AA. On by default.">
-            <BoolSelect value={settings.gsplatAntialiased} onChange={(v) => set({ gsplatAntialiased: v })} />
+          <Row controlId="setting-gsplat-antialiased" label="gsplat antialiased" hint="In-loop mip-style AA. On by default.">
+            <BoolSelect id="setting-gsplat-antialiased" value={settings.gsplatAntialiased} onChange={(v) => set({ gsplatAntialiased: v })} />
           </Row>
-          <Row label="gsplat appearance" hint="Per-image appearance embeddings. On by default.">
-            <BoolSelect value={settings.gsplatAppearance} onChange={(v) => set({ gsplatAppearance: v })} />
+          <Row controlId="setting-gsplat-appearance" label="gsplat appearance" hint="Per-image appearance embeddings. On by default.">
+            <BoolSelect id="setting-gsplat-appearance" value={settings.gsplatAppearance} onChange={(v) => set({ gsplatAppearance: v })} />
           </Row>
-          <Row label="gsplat bilateral grid" hint="View-dependent color correction. On by default.">
+          <Row controlId="setting-gsplat-bilateral-grid" label="gsplat bilateral grid" hint="View-dependent color correction. On by default.">
             <BoolSelect
+              id="setting-gsplat-bilateral-grid"
               value={settings.gsplatBilateralGrid}
               onChange={(v) => set({ gsplatBilateralGrid: v })}
             />
           </Row>
-          <Row label="Progressive resolution" hint="Train at reduced resolution first. On by default.">
+          <Row controlId="setting-progressive-resolution" label="Progressive resolution" hint="Train at reduced resolution first. On by default.">
             <BoolSelect
+              id="setting-progressive-resolution"
               value={settings.progressiveResolution}
               onChange={(v) => set({ progressiveResolution: v })}
             />
           </Row>
-          <Row label="Mip-Splatting filter" hint="Bound Gaussians to camera sampling rate. On by default.">
-            <BoolSelect value={settings.mipFilter} onChange={(v) => set({ mipFilter: v })} />
+          <Row controlId="setting-mip-splatting-filter" label="Mip-Splatting filter" hint="Bound Gaussians to camera sampling rate. On by default.">
+            <BoolSelect id="setting-mip-splatting-filter" value={settings.mipFilter} onChange={(v) => set({ mipFilter: v })} />
           </Row>
-          <Row label="Dense init" hint="Compose COLMAP MVS with neural densifiers. On by default.">
-            <BoolSelect value={settings.denseInit} onChange={(v) => set({ denseInit: v })} />
+          <Row controlId="setting-dense-init" label="Dense init" hint="Compose COLMAP MVS with neural densifiers. On by default.">
+            <BoolSelect id="setting-dense-init" value={settings.denseInit} onChange={(v) => set({ denseInit: v })} />
           </Row>
         </CollapsibleSection>
 
@@ -465,11 +507,11 @@ export function ReconstructionSettings() {
           <div className="py-2 text-[10px] leading-snug text-ink-dim">
             Toggle Experimental Mode from the TitleBar (requires a one-time NC license ack).
           </div>
-          <Row label="Neural densifiers" hint="AND with MVS / RoMa when present.">
-            <BoolSelect value={settings.useNeuralInit} onChange={(v) => set({ useNeuralInit: v })} />
+          <Row controlId="setting-neural-densifiers" label="Neural densifiers" hint="AND with MVS / RoMa when present.">
+            <BoolSelect id="setting-neural-densifiers" value={settings.useNeuralInit} onChange={(v) => set({ useNeuralInit: v })} />
           </Row>
-          <Row label="Post polish" hint="NVIDIA Fixer when installed.">
-            <BoolSelect value={settings.postPolish} onChange={(v) => set({ postPolish: v })} />
+          <Row controlId="setting-post-polish" label="Post polish" hint="NVIDIA Fixer when installed.">
+            <BoolSelect id="setting-post-polish" value={settings.postPolish} onChange={(v) => set({ postPolish: v })} />
           </Row>
         </CollapsibleSection>
       </div>

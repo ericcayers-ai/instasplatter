@@ -128,7 +128,13 @@ mod tests {
             sample_cols: None,
             sample_rows: None,
         };
-        let report = compare_checkpoint(1.05, 0.42, 1_050.0, &cp, &PreviewCompareTolerance::default());
+        let report = compare_checkpoint(
+            1.05,
+            0.42,
+            1_050.0,
+            &cp,
+            &PreviewCompareTolerance::default(),
+        );
         assert!(report.within_tolerance);
     }
 
@@ -145,7 +151,8 @@ mod tests {
             sample_cols: None,
             sample_rows: None,
         };
-        let report = compare_checkpoint(1.0, 0.4, 2_000.0, &cp, &PreviewCompareTolerance::default());
+        let report =
+            compare_checkpoint(1.0, 0.4, 2_000.0, &cp, &PreviewCompareTolerance::default());
         assert!(!report.within_tolerance);
     }
 }

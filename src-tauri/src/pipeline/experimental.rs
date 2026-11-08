@@ -460,17 +460,12 @@ mod tests {
 
     #[test]
     fn fusion_gate_requires_all_checks() {
-        let ok = ExperimentalValidationGate::for_fusion_candidate(
-            true, true, true, true, true,
-        );
+        let ok = ExperimentalValidationGate::for_fusion_candidate(true, true, true, true, true);
         assert!(ok.all_clear());
-        let bad = ExperimentalValidationGate::for_fusion_candidate(
-            true, true, true, false, true,
-        );
+        let bad = ExperimentalValidationGate::for_fusion_candidate(true, true, true, false, true);
         assert!(!bad.all_clear());
-        let no_license = ExperimentalValidationGate::for_fusion_candidate(
-            false, true, true, true, true,
-        );
+        let no_license =
+            ExperimentalValidationGate::for_fusion_candidate(false, true, true, true, true);
         assert!(!no_license.all_clear());
     }
 
@@ -488,7 +483,9 @@ mod tests {
             assert!(ids.contains(&need), "missing {need}");
         }
         assert!(!routing_table().is_empty());
-        assert!(EXPERIMENTAL_ENGINES.iter().any(|e| e.kind == ExperimentalEngineKind::FourD));
+        assert!(EXPERIMENTAL_ENGINES
+            .iter()
+            .any(|e| e.kind == ExperimentalEngineKind::FourD));
         assert!(EXPERIMENTAL_ENGINES
             .iter()
             .any(|e| e.label.contains("CityGaussian")));

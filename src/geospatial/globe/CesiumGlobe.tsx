@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { Color, Entity, ImageryLayer, Rectangle, Viewer } from "cesium";
 import { applySunDrivenLighting } from "./sunLight";
 import { useStore } from "../../state/store";
+import { api } from "../../lib/ipc";
 import { aoiIsValid, coarsenDomainDxFromPlan, domainFromAoi, type AoiWgs84 } from "../aoi";
 import { FloodPreviewEngine } from "../preview";
 import { PreviewBadge } from "../PreviewBadge";
@@ -27,6 +28,7 @@ import { demAuthorityLabel } from "../demAuthority";
 
 const UI_THROTTLE_MS = 100;
 const FLOOD_OVERLAY_MS = 180;
+const SUN_QUARTER_HOUR_MS = 15 * 60 * 1000;
 const AOI_ENTITY_ID = "instasplatter-aoi";
 
 function ensureAoiEntity(viewer: Viewer, aoi: AoiWgs84 | null | undefined) {
@@ -66,6 +68,7 @@ export default function CesiumGlobe() {
   const demRevision = useStore((s) => s.geoDemRevision);
   const demSample = useStore((s) => s.geoDemSample);
   const demProduct = useStore((s) => s.geoDemProduct);
+  const workspace = useStore((s) => s.workspace);
   const floodTime = useStore((s) => s.geoFloodTime);
   const sunHourUtc = useStore((s) => s.geoSunHourUtc);
   const floodPlaying = useStore((s) => s.geoFloodPlaying);
@@ -80,8 +83,49 @@ export default function CesiumGlobe() {
   const setFloodTime = useStore((s) => s.setGeoFloodTime);
   const setFloodPlaying = useStore((s) => s.setGeoFloodPlaying);
   const setGeoSunHourUtc = useStore((s) => s.setGeoSunHourUtc);
+  const [sunClockNow, setSunClockNow] = useState(() => new Date());
+  const displayedSunTimeMs = (() => {
+    if (sunHourUtc == null) {
+      return Math.round(sunClockNow.getTime() / SUN_QUARTER_HOUR_MS) * SUN_QUARTER_HOUR_MS;
+    }
+    const manualTime = new Date(sunClockNow);
+    manualTime.setUTCHours(
+      Math.floor(sunHourUtc),
+      Math.round((sunHourUtc % 1) * 60),
+      0,
+      0,
+    );
+    return manualTime.getTime();
+  })();
+  const displayedSunTime = new Date(displayedSunTimeMs);
+  const displayedSunHourUtc =
+    sunHourUtc ??
+    displayedSunTime.getUTCHours() + displayedSunTime.getUTCMinutes() / 60;
+  const displayedSunHour = Math.floor(displayedSunHourUtc);
+  const displayedSunMinute = Math.round((displayedSunHourUtc - displayedSunHour) * 60);
   const setTool = useStore((s) => s.setGeoTool);
   const setInspectHint = useStore((s) => s.setGeoInspectHint);
+
+  useEffect(() => {
+    let timerId: number | undefined;
+    const scheduleNextClockUpdate = () => {
+      const nowMs = Date.now();
+      const now = new Date(nowMs);
+      const nextUpdateMs =
+        sunHourUtc == null
+          ? (Math.round(nowMs / SUN_QUARTER_HOUR_MS) + 0.5) * SUN_QUARTER_HOUR_MS
+          : Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+      timerId = window.setTimeout(() => {
+        setSunClockNow(new Date());
+        scheduleNextClockUpdate();
+      }, Math.max(1, nextUpdateMs - nowMs));
+    };
+
+    scheduleNextClockUpdate();
+    return () => {
+      if (timerId !== undefined) window.clearTimeout(timerId);
+    };
+  }, [sunHourUtc]);
 
   const [attribution, setAttribution] = useState(globeImageryAttribution("satellite"));
   const [terrainLabel, setTerrainLabel] = useState("Ellipsoid");
@@ -249,22 +293,16 @@ export default function CesiumGlobe() {
     // Mount once for Viewer lifetime.
   }, [setGeoPreview]);
 
-  // Re-aim the directional light whenever the observer AOI or the manual
-  // UTC hour changes (Item 3 acceptance: sky/shading follow adjusted time).
+  // Re-aim lighting from the same displayed timestamp used by the sun control.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
     const aoiNow = useStore.getState().geoAoiWgs84;
     const lat = aoiIsValid(aoiNow) ? (aoiNow![1] + aoiNow![3]) / 2 : 20.0;
     const lon = aoiIsValid(aoiNow) ? (aoiNow![0] + aoiNow![2]) / 2 : 0.0;
-    const manual = useStore.getState().geoSunHourUtc;
-    let when = new Date();
-    if (manual != null) {
-      when = new Date();
-      when.setUTCHours(Math.floor(manual), Math.round((manual % 1) * 60), 0, 0);
-    }
+    const when = new Date(displayedSunTimeMs);
     void applySunDrivenLighting(viewer, lat, lon, when);
-  }, [sunHourUtc, aoiRevision]);
+  }, [displayedSunTimeMs, aoiRevision]);
 
   // Experimental / ion / terrain policy when Experimental toggles.
   useEffect(() => {
@@ -398,24 +436,79 @@ export default function CesiumGlobe() {
       z: demSample.z,
     };
 
+    const sampleTime = new Date(displayedSunTimeMs);
+    const hourUtc = displayedSunHourUtc;
+    let stale = false;
     demReliefCancel.current = scheduleIdleWork(() => {
       if (!viewerRef.current || viewerRef.current.isDestroyed() || !demCanvasRef.current) {
         return;
       }
-      void applyDemReliefOverlay(
-        viewerRef.current,
-        demCanvasRef.current,
-        grid,
-        demVisible,
-        demOpacity,
-      );
+      void (async () => {
+        let shade: number[] | undefined;
+        if (workspace) {
+          try {
+            const solarGrid = await api.sampleGeoDemHillshade(
+              workspace,
+              grid.cols,
+              grid.rows,
+              {
+                year: sampleTime.getUTCFullYear(),
+                month: sampleTime.getUTCMonth() + 1,
+                day: sampleTime.getUTCDate(),
+                hourUtc,
+              },
+              aoi,
+            );
+            const sameBounds = solarGrid.bounds.every(
+              (value, index) => Math.abs(value - grid.bounds[index]) < 1e-7,
+            );
+            if (
+              sameBounds &&
+              solarGrid.cols === grid.cols &&
+              solarGrid.rows === grid.rows &&
+              solarGrid.shade.length === grid.cols * grid.rows &&
+              solarGrid.shade.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
+            ) {
+              shade = solarGrid.shade;
+            }
+          } catch {
+            // The static NW hillshade remains available when no staged DEM IPC is present.
+          }
+        }
+        if (
+          stale ||
+          !viewerRef.current ||
+          viewerRef.current.isDestroyed() ||
+          !demCanvasRef.current
+        ) {
+          return;
+        }
+        await applyDemReliefOverlay(
+          viewerRef.current,
+          demCanvasRef.current,
+          grid,
+          demVisible,
+          demOpacity,
+          shade,
+        );
+      })();
     }, 160);
 
     return () => {
+      stale = true;
       demReliefCancel.current?.();
       demReliefCancel.current = null;
     };
-  }, [demSample, demRevision, demVisible, demOpacity]);
+  }, [
+    demSample,
+    demRevision,
+    demVisible,
+    demOpacity,
+    displayedSunHourUtc,
+    displayedSunTimeMs,
+    workspace,
+    aoi,
+  ]);
 
   // Scrub / style → flood overlay (throttled).
   useEffect(() => {
@@ -543,14 +636,14 @@ export default function CesiumGlobe() {
               aria-label="Sun hour (UTC)"
               type="range"
               min={0}
-              max={23.99}
+              max={23.75}
               step={0.25}
-              value={sunHourUtc ?? new Date().getUTCHours() + new Date().getUTCMinutes() / 60}
+              value={displayedSunHourUtc}
               onChange={(e) => setGeoSunHourUtc(Number(e.target.value))}
               className="h-1 w-28 accent-[var(--color-accent,#4aa3ff)]"
             />
             <span className="tabular-nums">
-              {String(Math.floor(sunHourUtc ?? 12)).padStart(2, "0")}:00
+              {String(displayedSunHour).padStart(2, "0")}:{String(displayedSunMinute).padStart(2, "0")}
             </span>
           </label>
         </div>
@@ -570,22 +663,16 @@ export default function CesiumGlobe() {
           >
             Globe
           </span>
-          {aoiIsValid(aoi) ? (
-            <span className="rounded border border-[var(--color-hydro)]/35 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-hydro)] backdrop-blur-sm">
-              AOI bound
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="pointer-events-auto rounded border border-[var(--color-gauge)]/40 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-gauge)] backdrop-blur-sm"
-              onClick={() => {
-                setTool("drawAoi");
-                useStore.getState().setGeoViewMode("2d");
-              }}
-            >
-              Draw AOI in 2D
-            </button>
-          )}
+          <button
+            type="button"
+            className="pointer-events-auto rounded border border-[var(--color-gauge)]/40 bg-panel/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-gauge)] backdrop-blur-sm"
+            onClick={() => {
+              setTool("drawAoi");
+              useStore.getState().setGeoViewMode("2d");
+            }}
+          >
+            {aoiIsValid(aoi) ? "Edit AOI in 2D" : "Draw AOI in 2D"}
+          </button>
         </div>
       </div>
 

@@ -212,7 +212,11 @@ pub fn jacobi_eigen(a: &Mat) -> (Vec<f64>, Mat) {
 
     let mut idx: Vec<usize> = (0..n).collect();
     let vals: Vec<f64> = (0..n).map(|i| m[(i, i)]).collect();
-    idx.sort_by(|&i, &j| vals[i].partial_cmp(&vals[j]).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|&i, &j| {
+        vals[i]
+            .partial_cmp(&vals[j])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let sorted_vals: Vec<f64> = idx.iter().map(|&i| vals[i]).collect();
     let mut vecs = Mat::zeros(n, n);
@@ -457,11 +461,7 @@ pub fn rodrigues(w: V3) -> M3 {
     let theta = norm(w);
     if theta < 1e-12 {
         // First-order term is enough below this angle and avoids 0/0.
-        return [
-            [1.0, -w[2], w[1]],
-            [w[2], 1.0, -w[0]],
-            [-w[1], w[0], 1.0],
-        ];
+        return [[1.0, -w[2], w[1]], [w[2], 1.0, -w[0]], [-w[1], w[0], 1.0]];
     }
     let k = scale(w, 1.0 / theta);
     let (s, c) = (theta.sin(), theta.cos());
@@ -705,7 +705,11 @@ mod tests {
             // V is a proper rotation; U is orthogonal and carries the sign of
             // det(m), because the singular values are non-negative.
             assert!((m3_det(v) - 1.0).abs() < 1e-7, "det V = {}", m3_det(v));
-            assert!((m3_det(u).abs() - 1.0).abs() < 1e-7, "det U = {}", m3_det(u));
+            assert!(
+                (m3_det(u).abs() - 1.0).abs() < 1e-7,
+                "det U = {}",
+                m3_det(u)
+            );
             let utu = m3_mul(m3_transpose(u), u);
             for r in 0..3 {
                 for c in 0..3 {
@@ -759,9 +763,21 @@ mod tests {
         // made `u`'s last column the quotient of two roundoff quantities, and
         // the caller reads that column as the camera translation.
         let m: M3 = [
-            [-0.000_361_103_994_373_267_5, -0.452_325_372_937_519_23, 0.004_504_128_731_563_889],
-            [-0.274_090_319_024_212_16, 0.045_402_391_310_076_506, 4.537_543_149_981_465],
-            [-0.003_611_039_943_736_724, -4.523_253_729_376_218_5, 0.045_041_287_315_702_894],
+            [
+                -0.000_361_103_994_373_267_5,
+                -0.452_325_372_937_519_23,
+                0.004_504_128_731_563_889,
+            ],
+            [
+                -0.274_090_319_024_212_16,
+                0.045_402_391_310_076_506,
+                4.537_543_149_981_465,
+            ],
+            [
+                -0.003_611_039_943_736_724,
+                -4.523_253_729_376_218_5,
+                0.045_041_287_315_702_894,
+            ],
         ];
         let (u, s, v) = svd3(m);
         assert!(s[2] < 1e-6 * s[0], "expected a rank-2 matrix, got {s:?}");
@@ -769,16 +785,27 @@ mod tests {
         // Every column is a unit vector, and the frame is orthogonal.
         for c in 0..3 {
             let col: V3 = [u[0][c], u[1][c], u[2][c]];
-            assert!((norm(col) - 1.0).abs() < 1e-9, "column {c} has length {}", norm(col));
+            assert!(
+                (norm(col) - 1.0).abs() < 1e-9,
+                "column {c} has length {}",
+                norm(col)
+            );
         }
         let utu = m3_mul(m3_transpose(u), u);
         for r in 0..3 {
             for c in 0..3 {
                 let want = if r == c { 1.0 } else { 0.0 };
-                assert!((utu[r][c] - want).abs() < 1e-9, "u is not orthonormal: {utu:?}");
+                assert!(
+                    (utu[r][c] - want).abs() < 1e-9,
+                    "u is not orthonormal: {utu:?}"
+                );
             }
         }
-        assert!((m3_det(u).abs() - 1.0).abs() < 1e-9, "det(u) = {}", m3_det(u));
+        assert!(
+            (m3_det(u).abs() - 1.0).abs() < 1e-9,
+            "det(u) = {}",
+            m3_det(u)
+        );
         assert!((m3_det(v) - 1.0).abs() < 1e-9);
 
         // The first two columns still reconstruct the matrix.

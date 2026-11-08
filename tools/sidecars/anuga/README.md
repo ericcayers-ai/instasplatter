@@ -1,12 +1,19 @@
-# ANUGA scientific flood sidecar
+# ANUGA flood compatibility scaffold
 
-Isolated, pinned worker for the Standard geospatial flood engine
+Isolated worker scaffold for exercising the ANUGA Python API
 ([ANUGA](https://github.com/GeoscienceAustralia/anuga_core), Apache-2.0).
-**Do not vendor GPL solvers here.**
+**The current runner is not a scientific flood solver. Do not vendor GPL
+solvers here.**
 
-Install ANUGA into a local venv under this folder (or system Python), then
-delete any install markers that claim the engine is absent. InstaSplatter
-looks for launchers under:
+Installing ANUGA lets the compatibility smoke run; it does not enable an
+authoritative result. The current path evolves a flat, fixed-stage bed with
+reflective boundaries for at most 60 seconds. It does not sample the supplied
+DEM, apply scenario rainfall/infiltration or configured boundary conditions,
+or calibrate against observations. Its hydrograph and map products are display
+scaffolds. Every run from this sidecar therefore reports `mode: scaffold`.
+
+Install ANUGA into a local venv under this folder (or system Python) only to
+exercise that compatibility path. InstaSplatter looks for launchers under:
 
 `%LOCALAPPDATA%/InstaSplatter/engines/sidecars/anuga/`
 
@@ -24,7 +31,7 @@ Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Success (scientific or labelled demo) |
+| 0 | Success (labelled scaffold or demo) |
 | 2 | Engine missing and `demoMode` was false |
 | 3 | Invalid / invalid input |
 | 1 | Unexpected failure |
@@ -77,14 +84,19 @@ Exit codes:
 
 ```json
 {"kind":"progress","progress":0.42,"detail":"t=4.0 h","checkpoint":"…/checkpoints/t014400.geojson","simTimeHours":4.0}
-{"kind":"done","mode":"anuga","resultPaths":["…"],"massBalance":0.0012,"engineVersion":"…"}
+{"kind":"done","mode":"scaffold","resultPaths":["…"],"engineVersion":"…","label":"Scaffold — ... Not authoritative."}
 ```
 
-`mode` is `"anuga"` for a real solve or `"demo"` when ANUGA is not importable
-and demo mode was allowed. Demo output is **not** scientifically authoritative.
+`mode` is `"scaffold"` when ANUGA is installed, including when the bounded
+flat-bed evolve smoke completes. `mode` is `"demo"` when ANUGA is not
+importable and demo mode was allowed. Neither mode is scientifically
+authoritative. This runner must not emit `mode: "anuga"` until real DEM
+forcing, scenario boundary conditions, and calibration/validation are
+implemented and tested.
 
 ## Pin
 
 Target a known ANUGA release in your venv (document the exact git tag /
 wheel in a local `PIN.txt` after install). The sidecar reports
-`engineVersion` in the done payload when available.
+`engineVersion` in the done payload when available; the version identifies
+the imported package, not the authority of the generated output.

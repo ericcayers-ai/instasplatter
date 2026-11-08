@@ -7,7 +7,7 @@ InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Expe
 | Suite | Default job |
 |---|---|
 | **Reconstruction** | Capture → scored cameras → confidence-fused dense → **live stages** (frustums / sparse / dense / splat) |
-| **Geospatial** | Draw **AOI anywhere** → **3D ENU workspace** (default), 2D satellite, or optional **CesiumJS Globe** (v0.10) → ANUGA/SWMM + live preview → exports |
+| **Geospatial** | Draw **AOI anywhere** → **3D ENU workspace** (default), 2D satellite, or optional **CesiumJS Globe** (v0.10) → DEM-backed preview / demo; ANUGA compatibility scaffold → exports |
 
 | | **Standard Mode** (default) | **Experimental Mode** (license ack) |
 |---|---|---|
@@ -17,7 +17,7 @@ InstaSplatter is a **dual-suite** app. Each suite keeps a **Standard** vs **Expe
 | Surface / 4D | Stock mesh path | Separate adapters (`gs-2d`, GOF/PGSR/…, MonST3R/Easi3R) |
 | Polish | NVIDIA Fixer when installed | **Difix then Fixer** |
 | Trainer | gsplat Auto on CUDA else Brush | Force gsplat Max + strategies; Brush Max if no gsplat |
-| Flood | **ANUGA** scientific (+ **SWMM** network); demo fallback labelled non-authoritative | TRITON / Wflow / GeoClaw external permissive; SFINCS/HiPIMS/BG_Flood/Itzï **GPL plugin only** |
+| Flood | ANUGA bounded flat-bed API smoke is always scaffold/non-authoritative; DEM-backed preview and labelled demo | TRITON / Wflow / GeoClaw external permissive; SFINCS/HiPIMS/BG_Flood/Itzï **GPL plugin only** |
 | Preview | WebGPU/CPU soft solver — always “Live preview” until compare gates pass | Same; promotion blocked without `HydroPromotionGates` |
 | UI | Quiet chrome; Geospatial defaults to 3D ENU (+ optional Globe in v0.10) | TitleBar Experimental ON + discrete NC banner + solver chips |
 
@@ -79,13 +79,13 @@ Draw AOI (WGS84) anywhere → commit_flood_aoi
         — blank ion on Standard; never MapLibre canvas-drape→Cesium
   → Flood P0 aids: HAND (NOAA-OWP inundation-mapping) + NFHL + HydroSHEDS
       + gauges + OSM waterways (overlays; HAND = Live preview only)
-  → Scientific: ANUGA (+ optional SWMM) → sim:// checkpoints → SimulationRun
-      else labelled demo extents (never authoritative)
+  → ANUGA compatibility scaffold (bounded flat-bed API smoke; synthetic display products)
+      or labelled preview/demo (never authoritative in the current runner)
   → Preview: WebGPU or CPU soft solver → display-rate interp
-      authority badge: Live preview | Demo | Scientific
+      authority badge: Live preview | Demo; current ANUGA worker reports scaffold
   → Other hazards (quake / fire / landslide / tsunami): Experimental data stubs only
   → Exports: COG / GeoPackage / Zarr-meta / residual report + manifest
-      DEM-only workspaces supported; authoritative=true only for calibrated ANUGA
+      DEM-only workspaces supported; current ANUGA worker cannot produce authoritative=true
 ```
 
 Basemap attribution (Esri World Imagery) is required and shown in the geo chrome / About.
@@ -108,7 +108,7 @@ Standard path. Design: `docs/superpowers/specs/2026-07-17-geo-disaster-cesium-de
 | Difix3D+ | Research/gated | Off | Preferred polish (then Fixer) |
 | NVIDIA Fixer | NVIDIA Open Model | ON when installed | ON when installed |
 | COLMAP / DA3 / gsplat / Brush | BSD / Apache / Apache | ON | ON |
-| ANUGA | Apache-2.0 | Scientific flood | Scientific flood |
+| ANUGA | Apache-2.0 | Compatibility scaffold only; not a scientific solver path | Same |
 | EPA SWMM | Public domain | Network exchange | Network exchange |
 | WebGPU/CPU preview | Apache-2.0 | Preview only | Preview only |
 | CesiumJS (`cesium` / `@cesium/engine`) | **Apache-2.0** | Globe view; self-host Workers/Assets; **blank ion token**; no ion World Terrain / Bing / Google hard deps | Same engine; optional **user ion token** (Commercial ToS if used; Community = NC/eval only) |
@@ -154,7 +154,7 @@ experimental hydro engine can be considered for Standard. GPL engines
 - AOI → ENU domain / `commit_flood_aoi` persistence
 - `model_transform` project round-trip
 - Hydro promotion / GPL refuse-bundle tests
-- Export manifest `authoritative` flags (demo false; calibrated ANUGA only)
+- Export manifest `authoritative` gating (tests cover demo false and the calibrated-ANUGA gate; the current sidecar always reports scaffold)
 - GCP residual threshold constants + survey/identity residual tests
 - Preview scientific-compare tolerances (mass / depth / wet fraction)
 - Splat AABB helper for extent `splat_bounds_enu`
@@ -165,9 +165,42 @@ experimental hydro engine can be considered for Standard. GPL engines
 - Catalog `fetch_asset` / DEM connectors still stubbed on main until v0.10 Phase B–C land
 - Cesium Globe not shipped until v0.10; ENU remains the splat-editing workspace (not replaced)
 - HAND rapid inundation is preview-only until ANUGA compare gates pass
-- Full ANUGA analytical suite on real solver (lake-at-rest, dam-break, rainfall-on-slope) against published benchmarks
+- Current ANUGA runner only checks API compatibility on a flat bed with fixed stage and reflective boundaries; it checks DEM path existence but does not sample the DEM, apply rainfall/infiltration or scenario boundaries, or calibrate. It caps evolve at 60 seconds and always emits synthetic display products with `mode: scaffold`. The full analytical suite on real solver benchmarks remains unimplemented.
 - Authoritative wildfire / quake / tsunami / landslide solvers (v0.10 = Experimental stubs only)
 - Three drone datasets with RTK/GCP survey truth
 - Site / city / regional performance benchmarks
 - Windows installer upgrade + accessibility audit pass
 - Uncertainty ensembles and large-scene 3D Tiles at production scale
+
+
+---
+
+## v0.10.2 — 2026-11-03: what the v0.10.1 claims actually became
+
+The v0.10.1 entries below were written before the modules were wired. A measurement pass on 2026-11-03
+found three of the four claims unsupported (nothing imported them, the WGSL could not run, the solver
+leaked 33% of injected volume) and one command that could not execute (`tsx` was not a dependency).
+Corrected status:
+
+| v0.10.1 claim | Status on 2026-11-03 |
+|---|---|
+| Sorting-free Gaussian Point Splatting "integrated" | **Reference implementation only.** `src/splat/pointSplatting.ts` is imported by nothing in the app. Box–Muller and the WGSL race were fixed; the renderer decision is recorded in `docs/POINT-SPLATTING-VERDICT.md`. The shipped win came from chunk culling instead (`docs/PERF.md`). |
+| Splat-to-Mesh flood "integrated" | **Solver replaced and validated; no UI surface yet.** `src/geospatial/hazards/swe.ts` is a well-balanced HLL solver passing lake-at-rest, Ritter, mass, convergence, determinism and CFL checks (27/27 in `floodValidation.smoke.ts`). The DEM contract now carries nodata/datum/provenance and priority-flood conditioning. See `docs/FLOOD-SIMULATION.md`. |
+| 6-DoF VPS "integrated" | **Now genuinely wired** (`src/geospatial/VpsPanel.tsx` + `save_vps_localization` IPC). Uncertainty is derived, not tuned; random-subset RANSAC added. Anchor/descriptor extraction is still external. |
+| "Verification Gate: `npx tsx …`" | Works now — `tsx` was added as a devDependency and the suite prints measured numbers. |
+
+New in this pass, not claimed by v0.10.1:
+- Chunked spatial index + frustum culling + point budget: 93.7% less sort work, 93.5% less frame time
+  at 300k splats in the inside-camera case; 8.3 s → 42 ms at 1M splats, wide view (`docs/PERF.md`).
+- Camera-relative (RTC) splat transform + measured precision budget (`src/geospatial/precision.ts`).
+- ESRI ASCII grid export — the interchange format raster flood models actually read.
+- `docs/AUDIT-2026-11-03.md`, `docs/REPO-INVENTORY-2026-11-03.md`, `docs/research/{A,B,C,D}`.
+
+---
+
+## v0.10.1 Geospatial Point Splatting, Splat-to-Mesh Flood & 6-DoF VPS (2026-11-01) — superseded in part
+
+- **Sorting-Free Geospatial Point Splatting (`src/splat/pointSplatting.ts`):** Clean-room implementation of SIGGRAPH '26 *Gaussian Point Splatting* (`JorisAR/gaussian-point-splatting`). Eliminates global radix sort popping and CPU/GPU sort bottlenecks on large geospatial scenes via adaptive stochastic point emission per Gaussian and a 64-bit atomic depth+color visibility buffer (`packDepthColor64`, `WGSL_GAUSSIAN_POINT_SPLATTING_SHADER`).
+- **Splat-to-Mesh Saint-Venant Flood Simulation (`src/geospatial/hazards/floodSim.ts`):** Direct extraction of ground-surface DEMs and 3D triangle meshes from Gaussian splat clouds (`splatCloudToTerrainMeshAndDem`), coupled to a mass-conserving 2D Shallow Water Equations (Saint-Venant hydrostatic flux + Manning friction) solver (`stepShallowWaterSaintVenant`) and 3D water surface mesh generator (`extractFloodWaterSurfaceMesh`).
+- **Ground-Level + Geospatial 6-DoF Visual Positioning System (`src/geospatial/vps.ts`):** Coarse submap retrieval (`retrieveCandidateVpsSubmaps`) $\rightarrow$ Lowe-ratio + mutual nearest-neighbor 2D–3D splat anchor matching (`matchQueryToSplatAnchors`) $\rightarrow$ PnP + RANSAC + Levenberg-Marquardt 6-DoF refinement (`solvePnpRansac6DoF`) $\rightarrow$ ENU $\leftrightarrow$ WGS84 geodetic registration (`localizeCameraVps`).
+- **Verification Gate (as originally claimed):** `npx tsx src/geospatial/pointSplatFloodVps.smoke.ts`. See the v0.10.2 table above for what this did and did not prove.

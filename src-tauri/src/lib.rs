@@ -1,9 +1,11 @@
-mod colmap;
 mod capture_selection;
+mod colmap;
 mod engines;
 mod geospatial;
 mod math;
 mod mesh;
+pub mod packaging;
+mod panorama;
 mod path_smooth;
 mod pipeline;
 mod profiler;
@@ -12,6 +14,34 @@ mod queue;
 mod settings;
 mod sfm;
 mod splat;
+
+/// Public face of the cross-repo pieces the integration tests in `tests/`
+/// exercise (the `digital-earth-splat-v1` manifest bridge). Exposing the
+/// already-public items here avoids widening the module tree itself.
+pub mod splat_contract {
+    pub use crate::geospatial::digital_earth_export;
+    pub use crate::geospatial::digital_earth_export::DIGITAL_EARTH_MANIFEST_FORMAT;
+    pub use crate::geospatial::transforms;
+    pub use crate::splat::{ply, sog, SplatCloud};
+
+    /// The installed-engine authority (`engines/engines.json`): the seam's
+    /// receipt records the resolved paths and pinned digests it actually drove.
+    pub use crate::engines::{
+        build_engines_manifest_in, read_engines_manifest, read_engines_manifest_from,
+        write_engines_manifest, write_engines_manifest_to, EngineRecord, EnginesManifest,
+        EnginesManifestRef, ENGINES_MANIFEST_FORMAT,
+    };
+    /// The `realitylog-capture-v1` receipt, in the same family as
+    /// `digital-earth-splat-v1`.
+    pub use crate::geospatial::realitylog_export;
+    pub use crate::geospatial::realitylog_export::REALITYLOG_RECEIPT_FORMAT;
+    /// The RealityLog Capture Source seam: the host invokes the source checkout
+    /// by path and injects every engine path (edges B1/B2).
+    pub use crate::pipeline::realitylog;
+    /// ... and pulls finished splats back over the source's own capture-library
+    /// HTTP contract (edge A).
+    pub use crate::pipeline::realitylog_library;
+}
 
 use pipeline::{JobCtx, JobEvent, JobHandle};
 use profiler::HardwareProfile;
@@ -106,6 +136,11 @@ async fn install_engines(app: tauri::AppHandle) -> Result<engines::EngineStatus,
 #[tauri::command]
 fn stage_image_selection(paths: Vec<String>) -> Result<String, String> {
     capture_selection::stage(&paths).map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn stage_panorama_selection(paths: Vec<String>) -> Result<String, String> {
+    capture_selection::stage_panoramas(&paths).map(|path| path.to_string_lossy().into_owned())
 }
 
 /// Register a job with the app state and drive it to completion on the async
@@ -316,9 +351,8 @@ fn get_suite() -> String {
 
 #[tauri::command]
 fn set_suite(suite: String) -> Result<String, String> {
-    let parsed = Suite::parse(&suite).ok_or_else(|| {
-        format!("{suite} is not a suite. Use reconstruction or geospatial.")
-    })?;
+    let parsed = Suite::parse(&suite)
+        .ok_or_else(|| format!("{suite} is not a suite. Use reconstruction or geospatial."))?;
     let mut s = Settings::load();
     s.default_suite = Some(parsed.as_str().to_string());
     s.save()?;
@@ -442,6 +476,9 @@ fn sample_geo_dem(
 ) -> Result<geospatial::dem::DemSampleGrid, String> {
     let ws = PathBuf::from(&workspace);
     geospatial::prepare_workspace(&ws)?;
+    // Bound the allocation: the preview never needs more than 4096 cells a side.
+    let cols = cols.clamp(1, 4096);
+    let rows = rows.clamp(1, 4096);
     geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)
 }
 
@@ -460,6 +497,8 @@ fn sample_geo_dem_hillshade(
 ) -> Result<geospatial::dem::DemHillshadeGrid, String> {
     let ws = PathBuf::from(&workspace);
     geospatial::prepare_workspace(&ws)?;
+    let cols = cols.clamp(1, 4096);
+    let rows = rows.clamp(1, 4096);
     let grid = geospatial::dem::sample_dem_grid(&ws, cols, rows, aoi_wgs84)?;
     let mid_lat = 0.5 * (grid.bounds[1] + grid.bounds[3]);
     let mid_lon = 0.5 * (grid.bounds[0] + grid.bounds[2]);
@@ -497,8 +536,16 @@ fn get_sky_color(
     turbidity: Option<f64>,
 ) -> Result<geospatial::sky::SkyRgb, String> {
     Ok(geospatial::sky::sky_color_default(
-        geospatial::transforms::Enu { east: sun_east, north: sun_north, up: sun_up },
-        geospatial::transforms::Enu { east: view_east, north: view_north, up: view_up },
+        geospatial::transforms::Enu {
+            east: sun_east,
+            north: sun_north,
+            up: sun_up,
+        },
+        geospatial::transforms::Enu {
+            east: view_east,
+            north: view_north,
+            up: view_up,
+        },
         turbidity.unwrap_or(2.0),
     ))
 }
@@ -567,6 +614,25 @@ fn generate_sat_splat(
 ) -> Result<geospatial::sat_splat::SatSplatProduct, String> {
     let ws = PathBuf::from(&workspace);
     geospatial::prepare_workspace(&ws)?;
+    // Reject an AOI that is not a well-formed lon/lat box, and bound the grid:
+    // both feed allocations, and neither is otherwise validated here.
+    let [west, south, east, north] = aoi_wgs84;
+    let finite = [west, south, east, north].iter().all(|v| v.is_finite());
+    if !finite
+        || west >= east
+        || south >= north
+        || west < -180.0
+        || east > 180.0
+        || south < -90.0
+        || north > 90.0
+    {
+        return Err(
+            "AOI must be a lon/lat box: west < east, south < north, inside -180..180 / -90..90."
+                .into(),
+        );
+    }
+    let grid_cols = grid_cols.map(|c| c.clamp(1, 4096));
+    let grid_rows = grid_rows.map(|r| r.clamp(1, 4096));
     geospatial::sat_splat::generate_sat_splat(
         &ws,
         &geospatial::sat_splat::SatSplatOpts {
@@ -630,11 +696,8 @@ fn commit_flood_aoi(
     scenario_id: String,
     aoi_wgs84: [f64; 4],
 ) -> Result<serde_json::Value, String> {
-    let (scenario, plan, geo) = geospatial::hydro::commit_flood_aoi(
-        &PathBuf::from(workspace),
-        &scenario_id,
-        aoi_wgs84,
-    )?;
+    let (scenario, plan, geo) =
+        geospatial::hydro::commit_flood_aoi(&PathBuf::from(workspace), &scenario_id, aoi_wgs84)?;
     Ok(serde_json::json!({
         "scenario": scenario,
         "extentPlan": plan,
@@ -659,6 +722,7 @@ fn start_scientific_flood(
     allow_demo: Option<bool>,
     dem_path: Option<String>,
     enable_swmm: Option<bool>,
+    scenario_overrides: Option<geospatial::hydro::FloodScenarioOverrides>,
 ) -> Result<geospatial::hydro::FloodRunStatus, String> {
     let spec = geospatial::hydro::HydroJobSpec {
         workspace,
@@ -670,6 +734,7 @@ fn start_scientific_flood(
         extent: None,
         ensemble: None,
         enable_swmm: enable_swmm.unwrap_or(false),
+        scenario_overrides,
     };
     geospatial::hydro::start_scientific_flood(app, spec)
 }
@@ -701,6 +766,62 @@ fn get_flood_engine_status() -> serde_json::Value {
     })
 }
 
+/// Snapshot produced by the in-app Visual Positioning System (`src/geospatial/vps.ts`).
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct VpsFix {
+    pub submap_id: Option<String>,
+    pub domain: String,
+    pub position_enu: [f64; 3],
+    pub position_wgs84: [f64; 3],
+    pub heading_deg: f64,
+    pub pitch_deg: f64,
+    pub roll_deg: f64,
+    pub inlier_count: usize,
+    pub median_reprojection_error_px: f64,
+    pub sigma_horizontal_m: f64,
+    pub sigma_vertical_m: f64,
+    /// Where the fix came from: "from files" or "synthetic self-test".
+    pub source: String,
+}
+
+/// Persist a VPS fix as JSON so a localisation is a record, not a transient number.
+///
+/// Written under `<workspace>/vps/localizations/` when a project is open, else under
+/// `%LOCALAPPDATA%/InstaSplat/vps/`. Returns the path written.
+#[tauri::command]
+fn save_vps_localization(workspace: Option<String>, fix: VpsFix) -> Result<String, String> {
+    let mut dir = match workspace {
+        Some(ws) if !ws.trim().is_empty() => PathBuf::from(ws).join("vps").join("localizations"),
+        _ => settings::app_data_dir().join("vps"),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    dir.push(format!("vps-fix-{stamp}.json"));
+    let body = serde_json::to_string_pretty(&fix).map_err(|e| e.to_string())?;
+    std::fs::write(&dir, body).map_err(|e| format!("write {}: {e}", dir.display()))?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+/// Read a UTF-8 text file for the import flows (submap/query bundles). Refuses anything over
+/// 64 MiB so a wrong pick cannot stall the UI thread.
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    let p = PathBuf::from(&path);
+    let meta = std::fs::metadata(&p).map_err(|e| format!("stat {}: {e}", p.display()))?;
+    if meta.len() > LIMIT {
+        return Err(format!(
+            "{} is {} bytes; limit is 64 MiB",
+            p.display(),
+            meta.len()
+        ));
+    }
+    std::fs::read_to_string(&p).map_err(|e| format!("read {}: {e}", p.display()))
+}
+
 /// Export flood rasters/vectors/time series/3D stubs + scenario manifest.
 #[tauri::command]
 fn export_flood_products(
@@ -722,7 +843,10 @@ fn export_geo_layer(
     let parsed = geospatial::exports::GeoExportKind::parse(&kind)
         .ok_or_else(|| format!("Unknown export kind '{kind}'"))?;
     let ws = PathBuf::from(&workspace);
-    let dest = dest_path.as_ref().map(PathBuf::from);
+    let dest = match dest_path.as_deref() {
+        Some(d) if !d.trim().is_empty() => Some(guard_export_dest(d, &[])?),
+        _ => None,
+    };
     geospatial::exports::export_geo_layer(&ws, parsed, run_id.as_deref(), dest.as_deref())
 }
 
@@ -736,10 +860,11 @@ fn export_digital_earth_splat(
     origin: geospatial::transforms::Geodetic,
     dest_path: String,
 ) -> Result<geospatial::digital_earth_export::DigitalEarthSplatManifest, String> {
+    let dest = guard_export_dest(&dest_path, &["json"])?;
     geospatial::digital_earth_export::export_splat_for_digital_earth(
         Path::new(&ply_path),
         origin,
-        Path::new(&dest_path),
+        &dest,
     )
 }
 
@@ -759,11 +884,7 @@ fn pause_queue(app: tauri::AppHandle, paused: bool) {
 }
 
 #[tauri::command]
-fn cancel_queue_item(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    id: String,
-) {
+fn cancel_queue_item(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) {
     queue::global().cancel_item(&id, &state.jobs);
     queue::emit_now(&app);
 }
@@ -789,9 +910,23 @@ fn list_projects() -> Vec<ProjectSummary> {
 
 #[tauri::command]
 fn delete_project(workspace: String) -> Result<(), String> {
-    let ws = PathBuf::from(&workspace);
-    // Only ever delete inside our own jobs directory.
-    if !ws.starts_with(pipeline::jobs_dir()) || Project::load(&ws).is_err() {
+    // Only ever delete inside our own jobs directory. `Path::starts_with` is a
+    // component-wise compare on the *literal* path, so `jobs\..\..\Documents`
+    // passes a plain prefix test — canonicalise both sides before trusting it.
+    let raw = PathBuf::from(&workspace);
+    if raw
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("That is not an InstaSplatter project.".into());
+    }
+    let root = pipeline::jobs_dir()
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve the projects directory: {e}"))?;
+    let ws = raw
+        .canonicalize()
+        .map_err(|_| "That is not an InstaSplatter project.".to_string())?;
+    if ws == root || !ws.starts_with(&root) || Project::load(&ws).is_err() {
         return Err("That is not an InstaSplatter project.".into());
     }
     pipeline::discard_workspace(&ws);
@@ -952,7 +1087,10 @@ struct GroundPlane {
 /// is world `-y`, and standing the ground on it is what makes a scene upright.
 /// A caller exporting to a z-up tool passes `+z` instead.
 #[tauri::command]
-fn estimate_up_axis(splat_path: String, target: Option<String>) -> Result<Option<GroundPlane>, String> {
+fn estimate_up_axis(
+    splat_path: String,
+    target: Option<String>,
+) -> Result<Option<GroundPlane>, String> {
     let target = match target.as_deref() {
         None => transform::Axis::NegY,
         Some(s) => transform::Axis::parse(s)
@@ -967,9 +1105,15 @@ fn estimate_up_axis(splat_path: String, target: Option<String>) -> Result<Option
         normal: [n[0] as f32, n[1] as f32, n[2] as f32],
         nearest_axis: transform::Axis::nearest(n).name().to_string(),
         rotation: [
-            r[0][0] as f32, r[0][1] as f32, r[0][2] as f32,
-            r[1][0] as f32, r[1][1] as f32, r[1][2] as f32,
-            r[2][0] as f32, r[2][1] as f32, r[2][2] as f32,
+            r[0][0] as f32,
+            r[0][1] as f32,
+            r[0][2] as f32,
+            r[1][0] as f32,
+            r[1][1] as f32,
+            r[1][2] as f32,
+            r[2][0] as f32,
+            r[2][1] as f32,
+            r[2][2] as f32,
         ],
     }))
 }
@@ -984,13 +1128,17 @@ struct FormatChoice {
 
 #[tauri::command]
 fn list_export_formats() -> (Vec<FormatChoice>, Vec<FormatChoice>) {
-    let splats = [export::Format::Ply, export::Format::Splat, export::Format::Spz]
-        .iter()
-        .map(|f| FormatChoice {
-            extension: f.extension().to_string(),
-            label: f.label().to_string(),
-        })
-        .collect();
+    let splats = [
+        export::Format::Ply,
+        export::Format::Splat,
+        export::Format::Spz,
+    ]
+    .iter()
+    .map(|f| FormatChoice {
+        extension: f.extension().to_string(),
+        label: f.label().to_string(),
+    })
+    .collect();
     let meshes = [
         (mesh::export::MeshFormat::Glb, "glTF binary"),
         (mesh::export::MeshFormat::Obj, "Wavefront OBJ"),
@@ -1022,7 +1170,7 @@ fn export_splat(
     rotation: Option<[f32; 9]>,
 ) -> Result<(), String> {
     let src = PathBuf::from(&result_path);
-    let dest = PathBuf::from(&dest_path);
+    let dest = guard_export_dest(&dest_path, &[])?;
     let format = export::Format::from_path(&dest);
 
     let rotation = rotation.or_else(|| {
@@ -1178,7 +1326,7 @@ async fn export_mesh(
 ) -> Result<usize, String> {
     use tauri::Emitter;
     let ws = PathBuf::from(&workspace);
-    let dest = PathBuf::from(&dest_path);
+    let dest = guard_export_dest(&dest_path, &["glb", "obj", "ply"])?;
 
     let model_dir = colmap::find_model_dir(&ws)
         .ok_or("This project has no solved cameras, so a mesh cannot be built.")?;
@@ -1200,16 +1348,22 @@ async fn export_mesh(
         opts.textured = textured.unwrap_or(true) && images.is_dir();
         let opts = opts;
 
-        let m = mesh::extract(&cloud, &model, images.is_dir().then_some(images.as_path()), opts, |p, detail| {
-            let _ = app.emit(
-                "mesh://progress",
-                MeshProgress {
-                    progress: p,
-                    detail: detail.to_string(),
-                },
-            );
-            Ok(())
-        })?;
+        let m = mesh::extract(
+            &cloud,
+            &model,
+            images.is_dir().then_some(images.as_path()),
+            opts,
+            |p, detail| {
+                let _ = app.emit(
+                    "mesh://progress",
+                    MeshProgress {
+                        progress: p,
+                        detail: detail.to_string(),
+                    },
+                );
+                Ok(())
+            },
+        )?;
 
         mesh::export::write(&dest, &m, mesh::export::MeshFormat::from_path(&dest))?;
         let triangles = m.triangle_count();
@@ -1230,6 +1384,73 @@ async fn export_mesh(
     })
     .await
     .map_err(|e| format!("Mesh extraction did not finish: {e}"))?
+}
+
+/// Reject an export destination that would turn a file write into persistence or
+/// code execution, or that escapes its own directory through `..`.
+///
+/// Every export command takes `destPath` straight from the webview. Without this
+/// check a compromised renderer can write arbitrary content to a Startup folder or
+/// drop a binary into the engine directory. `allowed_exts` is empty for formats whose
+/// extension is decided by the caller.
+fn guard_export_dest(dest: &str, allowed_exts: &[&str]) -> Result<PathBuf, String> {
+    let path = PathBuf::from(dest);
+    if !path.is_absolute() {
+        return Err("Export destination must be an absolute path.".into());
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("Export destination must not contain '..'.".into());
+    }
+    if !allowed_exts.is_empty() {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !allowed_exts.iter().any(|a| a.eq_ignore_ascii_case(&ext)) {
+            return Err(format!(
+                "Export destination must end in one of: {}.",
+                allowed_exts.join(", ")
+            ));
+        }
+    }
+    let mut forbidden: Vec<PathBuf> = Vec::new();
+    for var in ["SystemRoot", "ProgramFiles", "ProgramData", "APPDATA"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() {
+                forbidden.push(PathBuf::from(v));
+            }
+        }
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        if !local.is_empty() {
+            forbidden.push(PathBuf::from(&local).join("Microsoft").join("Windows"));
+        }
+    }
+    let lower = path.to_string_lossy().to_lowercase();
+    for root in &forbidden {
+        let root_s = root.to_string_lossy().to_lowercase();
+        if !root_s.is_empty() && lower.starts_with(&root_s) {
+            return Err(format!(
+                "Export destination must not be inside {}.",
+                root.display()
+            ));
+        }
+    }
+    match path.parent() {
+        Some(parent) if parent.exists() => {}
+        Some(parent) => {
+            return Err(format!(
+                "Export destination folder does not exist: {}.",
+                parent.display()
+            ))
+        }
+        None => return Err("Export destination has no parent folder.".into()),
+    }
+    Ok(path)
 }
 
 /// Everything needed to debug a stuck or failed run without asking the user
@@ -1314,7 +1535,8 @@ fn export_diagnostics(
         }
     }
 
-    std::fs::write(&dest_path, out).map_err(|e| format!("Cannot write {dest_path}: {e}"))
+    let dest = guard_export_dest(&dest_path, &["txt", "log", "md"])?;
+    std::fs::write(&dest, out).map_err(|e| format!("Cannot write {}: {e}", dest.display()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1349,6 +1571,7 @@ pub fn run() {
             get_engine_status,
             install_engines,
             stage_image_selection,
+            stage_panorama_selection,
             get_autostart,
             take_open_workspace,
             start_job,
@@ -1377,6 +1600,8 @@ pub fn run() {
             plan_geo_extent,
             commit_flood_aoi,
             get_geo_reference,
+            save_vps_localization,
+            read_text_file,
             start_scientific_flood,
             cancel_scientific_flood,
             list_flood_run_status,

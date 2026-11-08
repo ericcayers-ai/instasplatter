@@ -143,11 +143,7 @@ pub fn apply_3d_filter(
         let alpha = cloud.opacity(i) * det_ratio.sqrt();
         let alpha = alpha.clamp(1e-6, 1.0 - 1e-6);
 
-        cloud.scales_log[i] = [
-            0.5 * n2[0].ln(),
-            0.5 * n2[1].ln(),
-            0.5 * n2[2].ln(),
-        ];
+        cloud.scales_log[i] = [0.5 * n2[0].ln(), 0.5 * n2[1].ln(), 0.5 * n2[2].ln()];
         cloud.opacity_logit[i] = (alpha / (1.0 - alpha)).ln();
 
         sigma_sum += sigma as f64;

@@ -47,7 +47,10 @@ pub fn detect_capture_profile(
         return CaptureProfile::GpsRtkDrone;
     }
     if workspace.join("capture_hints").join("fisheye").exists()
-        || workspace.join("capture_hints").join("rolling_shutter").exists()
+        || workspace
+            .join("capture_hints")
+            .join("rolling_shutter")
+            .exists()
     {
         return CaptureProfile::FisheyeOrRollingShutter;
     }
@@ -194,7 +197,12 @@ impl HypothesisScore {
         let expected = expected_images.max(n_img);
         let registered_ratio = (n_img as f32 / expected as f32).clamp(0.0, 1.0);
 
-        let mut errors: Vec<f64> = model.points.iter().map(|p| p.error).filter(|e| e.is_finite()).collect();
+        let mut errors: Vec<f64> = model
+            .points
+            .iter()
+            .map(|p| p.error)
+            .filter(|e| e.is_finite())
+            .collect();
         errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median_reproj_error = if errors.is_empty() {
             99.0
@@ -205,7 +213,11 @@ impl HypothesisScore {
         let mean_track_length = if model.points.is_empty() {
             0.0
         } else {
-            model.points.iter().map(|p| p.track.len() as f32).sum::<f32>()
+            model
+                .points
+                .iter()
+                .map(|p| p.track.len() as f32)
+                .sum::<f32>()
                 / model.points.len() as f32
         };
 
@@ -222,8 +234,8 @@ impl HypothesisScore {
         };
 
         // Loop consistency proxy from coverage × track stability.
-        let loop_consistency = (registered_ratio * (mean_track_length / 4.0).clamp(0.0, 1.0))
-            .clamp(0.0, 1.0);
+        let loop_consistency =
+            (registered_ratio * (mean_track_length / 4.0).clamp(0.0, 1.0)).clamp(0.0, 1.0);
 
         let mut s = Self {
             solver: solver.to_string(),
@@ -307,7 +319,10 @@ pub fn standard_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> 
 }
 
 /// Ordered pose solvers for Experimental Mode (capture-aware; not blind merge).
-pub fn experimental_pose_candidates(profile: CaptureProfile, st: &SidecarStatus) -> Vec<&'static str> {
+pub fn experimental_pose_candidates(
+    profile: CaptureProfile,
+    st: &SidecarStatus,
+) -> Vec<&'static str> {
     experimental::experimental_pose_for_profile(profile, st)
 }
 
@@ -432,13 +447,7 @@ mod tests {
         st.vggt_commercial = true;
         assert_eq!(
             experimental_pose_chain(&st),
-            vec![
-                "vggt-omega",
-                "mast3r",
-                "dust3r",
-                "pi3x",
-                "vggt-commercial"
-            ]
+            vec!["vggt-omega", "mast3r", "dust3r", "pi3x", "vggt-commercial"]
         );
     }
 

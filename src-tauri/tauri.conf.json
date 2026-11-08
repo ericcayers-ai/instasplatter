@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; worker-src 'self' blob:; frame-src 'self'; media-src 'self'",
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' http://ipc.localhost https:; worker-src 'self' blob:; frame-src 'self'; media-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$LOCALDATA/InstaSplatter/**"]
@@ -35,9 +35,6 @@
     "active": true,
     "targets": ["nsis", "appimage", "deb", "dmg"],
     "icon": ["icons/icon.ico", "icons/icon.png"],
-    "resources": {
-      "../tools/sidecars/*": "sidecars/"
-    },
     "copyright": "Copyright 2026 Eric Ayers",
     "category": "DeveloperTool",
     "shortDescription": "Dual-suite Gaussian splatting and geospatial flood analysis",

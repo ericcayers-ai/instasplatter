@@ -124,7 +124,11 @@ pub fn sky_color(
     if sun_e <= 0.0 {
         // Night: keep a faint airglow-like floor so downstream tonemap has
         // something to work with (same constant floor as the reference).
-        return SkyRgb { r: 0.0, g: 0.0003, b: 0.00075 };
+        return SkyRgb {
+            r: 0.0,
+            g: 0.0003,
+            b: 0.00075,
+        };
     }
 
     let beta_r = TOTAL_RAYLEIGH.map(|r| r * rayleigh_coefficient);
@@ -133,17 +137,14 @@ pub fn sky_color(
     // Optical path along the view ray (Kasten-style relative air mass).
     let zen_cos = dir[2];
     let zenith_angle = zen_cos.clamp(0.0, 1.0).acos();
-    let inv = 1.0
-        / (zenith_angle.cos()
-            + 0.15 * (93.885 - zenith_angle.to_degrees()).powf(-1.253));
+    let inv = 1.0 / (zenith_angle.cos() + 0.15 * (93.885 - zenith_angle.to_degrees()).powf(-1.253));
     let s_r = RAYLEIGH_ZENITH_LENGTH * inv;
     let s_m = MIE_ZENITH_LENGTH * inv;
 
-    let fex: [f64; 3] =
-        std::array::from_fn(|i| (-(beta_r[i] * s_r + beta_m[i] * s_m)).exp());
+    let fex: [f64; 3] = std::array::from_fn(|i| (-(beta_r[i] * s_r + beta_m[i] * s_m)).exp());
 
     let cos_theta = dot(dir, sun);
-    let r_phase = rayleigh_phase(cos_theta * 0.5 + 0.5);
+    let r_phase = rayleigh_phase(cos_theta);
     let beta_r_theta: [f64; 3] = elementwise_mul(beta_r, [r_phase; 3]);
     let m_phase = hg_phase(cos_theta, mie_g);
     let beta_m_theta: [f64; 3] = elementwise_mul(beta_m, [m_phase; 3]);
@@ -155,7 +156,10 @@ pub fn sky_color(
     );
     // Sun-transmittance term that kicks in as the sun approaches the horizon.
     let horizon_mix = ((1.0 - sun[2]).powi(5)).clamp(0.0, 1.0);
-    let trans = pow3(elementwise_mul(elementwise_mul([sun_e; 3], ratio), fex), 0.5);
+    let trans = pow3(
+        elementwise_mul(elementwise_mul([sun_e; 3], ratio), fex),
+        0.5,
+    );
     for i in 0..3 {
         lin[i] *= mix(1.0, trans[i], horizon_mix);
     }
@@ -164,7 +168,11 @@ pub fn sky_color(
     let rgb: [f64; 3] =
         std::array::from_fn(|i| (lin[i] + 0.1 * fex[i]) * 0.04 + [0.0, 0.0003, 0.00075][i]);
 
-    SkyRgb { r: rgb[0], g: rgb[1], b: rgb[2] }
+    SkyRgb {
+        r: rgb[0],
+        g: rgb[1],
+        b: rgb[2],
+    }
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -190,13 +198,30 @@ mod tests {
 
     fn enu(east: f64, north: f64, up: f64) -> Enu {
         let l = (east * east + north * north + up * up).sqrt();
-        Enu { east: east / l, north: north / l, up: up / l }
+        Enu {
+            east: east / l,
+            north: north / l,
+            up: up / l,
+        }
     }
 
     fn sun_at_elevation_azimuth(elev_deg: f64, az_deg: f64) -> Enu {
         let e = elev_deg.to_radians();
         let a = az_deg.to_radians();
         enu(a.sin() * e.cos(), a.cos() * e.cos(), e.sin())
+    }
+
+    #[test]
+    fn rayleigh_scattering_is_symmetric_around_the_sun() {
+        let sun = enu(3.0_f64.sqrt() / 2.0, 0.0, 0.5);
+        let view_a = enu(1.0 / 3.0_f64.sqrt(), (2.0_f64 / 3.0).sqrt(), 0.0);
+        let view_b = enu(-1.0 / 3.0_f64.sqrt(), (2.0_f64 / 3.0).sqrt(), 0.0);
+        let a = sky_color(sun, view_a, 2.0, 1.0, 0.0);
+        let b = sky_color(sun, view_b, 2.0, 1.0, 0.0);
+
+        assert!((a.r - b.r).abs() < 1e-12, "red differs: {a:?} vs {b:?}");
+        assert!((a.g - b.g).abs() < 1e-12, "green differs: {a:?} vs {b:?}");
+        assert!((a.b - b.b).abs() < 1e-12, "blue differs: {a:?} vs {b:?}");
     }
 
     #[test]

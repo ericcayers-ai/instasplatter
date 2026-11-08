@@ -288,6 +288,15 @@ export interface DemSampleGrid {
   sourcePath?: string | null;
 }
 
+export interface DemHillshadeGrid {
+  cols: number;
+  rows: number;
+  bounds: [number, number, number, number];
+  sunAzimuthDeg: number;
+  sunElevationDeg: number;
+  shade: number[];
+}
+
 export interface SatSplatProduct {
   path: string;
   points: number;
@@ -322,6 +331,33 @@ export interface FloodRunStatus {
   createdUnix: number;
 }
 
+export interface FloodScenarioOverrides {
+  rainfall: {
+    template: string;
+    rateMmPerHour: number;
+    hyetograph: { hours: number; mmPerHour: number }[];
+    authority: string;
+  };
+  roughness: {
+    preset: string;
+    manningN: number;
+    presets: Record<string, number>;
+  };
+  boundaryConditions: {
+    outlet: {
+      type: "stage" | "free_outfall" | "closed";
+      stageM?: number;
+      edge: "north" | "south" | "east" | "west";
+      note: string;
+    };
+    walls: "reflective" | "open";
+  };
+  rainfallTemplate: string;
+  manningPreset: string;
+  manningN: number;
+  outletBc: string;
+}
+
 export interface FloodEngineStatus {
   anugaLauncher: string | null;
   swmmLauncher: string | null;
@@ -353,6 +389,22 @@ export interface ExtentPlan {
   terrainTileLevels: number[];
   scaleStatus: string;
   notes: string[];
+}
+
+/** Payload for `save_vps_localization`. Mirrors the Rust `VpsFix` struct. */
+export interface VpsFixPayload {
+  submapId: string | null;
+  domain: string;
+  positionEnu: [number, number, number];
+  positionWgs84: [number, number, number];
+  headingDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+  inlierCount: number;
+  medianReprojectionErrorPx: number;
+  sigmaHorizontalM: number;
+  sigmaVerticalM: number;
+  source: string;
 }
 
 export interface GeoReference {
@@ -476,7 +528,12 @@ export type SimEvent =
       wetFraction?: number | null;
       massM3?: number | null;
     }
-  | { kind: "hydrograph"; runId: string; path: string }
+  | {
+      kind: "hydrograph";
+      runId: string;
+      path: string;
+      samples?: { hours: number; stageM: number; dischargeCms: number }[];
+    }
   | {
       kind: "done";
       runId: string;
@@ -503,8 +560,9 @@ export const api = {
   getResolvedSettings: () => invoke<ResolvedSettings>("get_resolved_settings"),
   getEngineStatus: () => invoke<EngineStatus>("get_engine_status"),
   installEngines: () => invoke<EngineStatus>("install_engines"),
-  stageImageSelection: (paths: string[]) =>
-    invoke<string>("stage_image_selection", { paths }),
+  stageImageSelection: (paths: string[]) => invoke<string>("stage_image_selection", { paths }),
+  stagePanoramaSelection: (paths: string[]) =>
+    invoke<string>("stage_panorama_selection", { paths }),
   getAutostart: () => invoke<string | null>("get_autostart"),
   takeOpenWorkspace: () => invoke<string | null>("take_open_workspace"),
 
@@ -516,11 +574,7 @@ export const api = {
       workspace: workspace ?? null,
       aoiWgs84: aoiWgs84 ?? null,
     }),
-  fetchGeoCatalogAsset: (
-    workspace: string,
-    entryId: string,
-    opts?: CatalogFetchOpts,
-  ) =>
+  fetchGeoCatalogAsset: (workspace: string, entryId: string, opts?: CatalogFetchOpts) =>
     invoke<GeoCatalogEntry>("fetch_geo_catalog_asset", {
       workspace,
       entryId,
@@ -557,6 +611,23 @@ export const api = {
       workspace,
       cols,
       rows,
+      aoiWgs84: aoiWgs84 ?? null,
+    }),
+  sampleGeoDemHillshade: (
+    workspace: string,
+    cols: number,
+    rows: number,
+    date: { year: number; month: number; day: number; hourUtc: number },
+    aoiWgs84?: [number, number, number, number] | null,
+  ) =>
+    invoke<DemHillshadeGrid>("sample_geo_dem_hillshade", {
+      workspace,
+      cols,
+      rows,
+      year: date.year,
+      month: date.month,
+      day: date.day,
+      hourUtc: date.hourUtc,
       aoiWgs84: aoiWgs84 ?? null,
     }),
 
@@ -605,7 +676,19 @@ export const api = {
     }),
   getGeoReference: (workspace: string) =>
     invoke<GeoReference | null>("get_geo_reference", { workspace }),
-  commitFloodAoi: (workspace: string, scenarioId: string, aoiWgs84: [number, number, number, number]) =>
+  /**
+   * Persist a Visual Positioning System fix. Returns the JSON path written under
+   * `<workspace>/vps/localizations/` (or `%LOCALAPPDATA%/InstaSplat/vps/` with no project).
+   */
+  saveVpsLocalization: (fix: VpsFixPayload) =>
+    invoke<string>("save_vps_localization", { fix }),
+  /** Read a UTF-8 text file (64 MiB cap) for the submap/query import flows. */
+  readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
+  commitFloodAoi: (
+    workspace: string,
+    scenarioId: string,
+    aoiWgs84: [number, number, number, number],
+  ) =>
     invoke<CommitFloodAoiResult>("commit_flood_aoi", {
       workspace,
       scenarioId,
@@ -614,7 +697,12 @@ export const api = {
   startScientificFlood: (
     workspace: string,
     scenarioId: string,
-    opts?: { allowDemo?: boolean; demPath?: string | null; enableSwmm?: boolean },
+    opts?: {
+      allowDemo?: boolean;
+      demPath?: string | null;
+      enableSwmm?: boolean;
+      scenarioOverrides?: FloodScenarioOverrides | null;
+    },
   ) =>
     invoke<FloodRunStatus>("start_scientific_flood", {
       workspace,
@@ -622,6 +710,7 @@ export const api = {
       allowDemo: opts?.allowDemo ?? true,
       demPath: opts?.demPath ?? null,
       enableSwmm: opts?.enableSwmm ?? false,
+      scenarioOverrides: opts?.scenarioOverrides ?? null,
     }),
   cancelScientificFlood: (runId: string) => invoke<void>("cancel_scientific_flood", { runId }),
   listFloodRunStatus: (workspace?: string | null) =>
@@ -675,8 +764,18 @@ export const api = {
    * The destination extension picks the format. When `rotation` is omitted,
    * the orientation last saved for `workspace` (if any) is used instead.
    */
-  exportSplat: (resultPath: string, destPath: string, workspace?: string | null, rotation?: Mat3 | null) =>
-    invoke<void>("export_splat", { resultPath, destPath, workspace: workspace ?? null, rotation: rotation ?? null }),
+  exportSplat: (
+    resultPath: string,
+    destPath: string,
+    workspace?: string | null,
+    rotation?: Mat3 | null,
+  ) =>
+    invoke<void>("export_splat", {
+      resultPath,
+      destPath,
+      workspace: workspace ?? null,
+      rotation: rotation ?? null,
+    }),
 
   /**
    * Experimental: voxelize the finished splat into a Sponge Schematic v2 `.schem`.

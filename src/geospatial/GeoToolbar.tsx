@@ -23,12 +23,10 @@ export default function GeoToolbar() {
     { id: "pan", label: "Pan", title: "Pan and zoom the map" },
     { id: "drawAoi", label: "AOI", title: "Draw or replace the flood area of interest" },
     { id: "inspect", label: "Inspect", title: "Click to sample flood depth under the cursor" },
-    { id: "measure", label: "Measure", title: "Distance measure — coming soon" },
-    { id: "profile", label: "Profile", title: "Cross-section profile — coming soon" },
   ];
   const basemaps: { id: GeoBasemapMode; label: string; title: string }[] = [
     { id: "satellite", label: "Satellite", title: "Esri World Imagery (attribution required)" },
-    { id: "lowBandwidth", label: "Low BW", title: "Carto dark / OSM fallback" },
+    { id: "lowBandwidth", label: "Low BW", title: "Esri World Street Map (no API key required)" },
   ];
 
   return (
@@ -78,14 +76,16 @@ export default function GeoToolbar() {
               key={t.id}
               type="button"
               title={t.title}
-              onClick={() => setTool(t.id)}
+              onClick={() => {
+                setTool(t.id);
+                if (t.id === "drawAoi") setViewMode("2d");
+              }}
               className={`px-2.5 py-1 text-[11px] transition disabled:opacity-30 disabled:cursor-not-allowed ${
                 tool === t.id
                   ? "bg-[color-mix(in_srgb,var(--color-gauge)_16%,transparent)] text-[var(--color-gauge)]"
                   : "text-ink-dim hover:text-ink"
               }`}
               aria-pressed={tool === t.id}
-              disabled={t.id === "measure" || t.id === "profile"}
             >
               {t.label}
             </button>
@@ -107,6 +107,7 @@ export default function GeoToolbar() {
           type="button"
           className={`btn bg-panel/90 text-[11px] backdrop-blur-sm ${rightPanelOpen ? "btn-active" : ""}`}
           onClick={() => setRightPanelOpen(!rightPanelOpen)}
+          aria-expanded={rightPanelOpen}
         >
           Scenario
         </button>

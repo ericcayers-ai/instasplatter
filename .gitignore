@@ -93,3 +93,20 @@ desktop.ini
 .impeccable/live/deferred-svelte-component-accepts.json
 .impeccable/live/*.png
 # impeccable-ignore-end
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Agent / editor scaffolding — local to a developer's machine, not part of the app.
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+HANDOFF.md
+desk.gate.json
+.ignore
+.cursor/
+.agents/
+.graphify/
+.graphify_claude_hook_installed
+.graphify_hook_installed
+src-tauri/src/**/.graphify/

@@ -7,9 +7,6 @@
 //!
 //! Never labels uncalibrated demo output as scientifically authoritative.
 
-use crate::geospatial::preview::{
-    compare_checkpoint, PreviewCheckpoint, PreviewCompareTolerance, PreviewResultSource,
-};
 use crate::project::{FloodScenario, GeoReference, Project, SimulationRun};
 use crate::splat::{export as splat_export, ply as splat_ply};
 use serde::{Deserialize, Serialize};
@@ -249,18 +246,13 @@ fn which_cmd(name: &str) -> Option<PathBuf> {
 
 fn python_has_osgeo() -> bool {
     let mut cmd = Command::new("python");
-    cmd.args([
-        "-c",
-        "import osgeo.gdal, osgeo.ogr; print('ok')",
-    ]);
+    cmd.args(["-c", "import osgeo.gdal, osgeo.ogr; print('ok')"]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(crate::profiler::CREATE_NO_WINDOW);
     }
-    cmd.output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Probe PATH / Python for GDAL tooling.
@@ -272,12 +264,10 @@ pub fn detect_gdal() -> GdalCapability {
     let mut notes = Vec::new();
     if !available {
         notes.push(
-            "GDAL not found — COG optimisation, GeoPackage, and COPC require GDAL/PDAL."
-                .into(),
+            "GDAL not found — COG optimisation, GeoPackage, and COPC require GDAL/PDAL.".into(),
         );
         notes.push(
-            "Offline exports use GeoTIFF + JSON sidecars, GeoJSON, Zarr/JSON time series."
-                .into(),
+            "Offline exports use GeoTIFF + JSON sidecars, GeoJSON, Zarr/JSON time series.".into(),
         );
     } else {
         notes.push("GDAL tooling detected — COG/GPKG paths enabled when writers succeed.".into());
@@ -406,14 +396,7 @@ pub fn write_geotiff(path: &Path, grid: &RasterGrid) -> Result<(), String> {
         out.extend_from_slice(&v.to_le_bytes());
     }
     // Tiepoint: I,J,K,X,Y,Z — pixel (0,0) maps to origin
-    for v in [
-        0.0,
-        0.0,
-        0.0,
-        grid.origin[0],
-        grid.origin[1],
-        0.0_f64,
-    ] {
+    for v in [0.0, 0.0, 0.0, grid.origin[0], grid.origin[1], 0.0_f64] {
         out.extend_from_slice(&v.to_le_bytes());
     }
 
@@ -426,7 +409,7 @@ pub fn write_geotiff(path: &Path, grid: &RasterGrid) -> Result<(), String> {
     out.extend_from_slice(&0u16.to_le_bytes()); // TIFFTagLocation=0 → value in value_offset
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&1u16.to_le_bytes()); // Projected
-    // GTCitationGeoKey (1026) → ascii at GeoAsciiParams
+                                                // GTCitationGeoKey (1026) → ascii at GeoAsciiParams
     out.extend_from_slice(&1026u16.to_le_bytes());
     out.extend_from_slice(&34737u16.to_le_bytes());
     out.extend_from_slice(&((crs_bytes.len() + 1) as u16).to_le_bytes());
@@ -460,7 +443,13 @@ fn pad_even(n: usize) -> usize {
     }
 }
 
-fn write_raster_sidecar(path: &Path, grid: &RasterGrid, writer: &str, notes: &[String]) -> Result<(), String> {
+fn write_raster_sidecar(
+    path: &Path,
+    grid: &RasterGrid,
+    writer: &str,
+    notes: &[String],
+    synthetic: bool,
+) -> Result<(), String> {
     let meta = serde_json::json!({
         "schemaVersion": EXPORT_SCHEMA,
         "quantity": grid.quantity,
@@ -472,36 +461,52 @@ fn write_raster_sidecar(path: &Path, grid: &RasterGrid, writer: &str, notes: &[S
         "crs": grid.crs,
         "nodata": grid.nodata,
         "writer": writer,
+        // A synthetic raster is generated from the run extent, not from solver
+        // output. The flag travels with the .tif so a consumer that only reads
+        // the sidecar still sees it.
+        "synthetic": synthetic,
         "notes": notes,
     });
     let side = path.with_extension("tif.json");
-    fs::write(&side, serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    fs::write(
+        &side,
+        serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Write GeoTIFF; optionally COG-optimise with GDAL. Returns (path, writer, notes).
+///
+/// `notes` are the caller's provenance strings and are written into the raster's
+/// `.tif.json` sidecar *before* it leaves this process, so the warning survives a
+/// consumer that keeps only the raster + sidecar. `synthetic` records whether the
+/// grid is derived from the run extent rather than from solver output.
 pub fn export_raster(
     dest_tif: &Path,
     grid: &RasterGrid,
     gdal: &GdalCapability,
     prefer_cog: bool,
+    notes: &[String],
+    synthetic: bool,
 ) -> Result<(PathBuf, String, Vec<String>), String> {
-    let mut notes = Vec::new();
+    let mut notes = notes.to_vec();
     write_geotiff(dest_tif, grid)?;
     let writer_base = "offlineGeoTiff";
-    write_raster_sidecar(dest_tif, grid, writer_base, &notes)?;
+    write_raster_sidecar(dest_tif, grid, writer_base, &notes, synthetic)?;
 
     if prefer_cog && gdal.gdal_translate.is_some() {
         let cog = dest_tif.with_extension("cog.tif");
         match run_gdal_cog(gdal, dest_tif, &cog) {
             Ok(()) => {
                 notes.push("COG written via gdal_translate -of COG.".into());
-                write_raster_sidecar(&cog, grid, "gdalCog", &notes)?;
+                write_raster_sidecar(&cog, grid, "gdalCog", &notes, synthetic)?;
                 return Ok((cog, "gdal".into(), notes));
             }
             Err(e) => {
-                notes.push(format!("COG optimisation failed ({e}); keeping classic GeoTIFF."));
+                notes.push(format!(
+                    "COG optimisation failed ({e}); keeping classic GeoTIFF."
+                ));
             }
         }
     } else if prefer_cog {
@@ -829,7 +834,10 @@ pub fn export_survey_hooks(
     });
 
     // Residual report: copy from registration if present, else empty scaffold.
-    let residual_src = workspace.join("geo").join("derived").join("gcp_residuals.json");
+    let residual_src = workspace
+        .join("geo")
+        .join("derived")
+        .join("gcp_residuals.json");
     let residual_dest = dest_dir.join("residual_report.json");
     if residual_src.exists() {
         fs::copy(&residual_src, &residual_dest).map_err(|e| e.to_string())?;
@@ -870,7 +878,10 @@ fn find_prefix(dir: &Path, prefix: &str) -> Option<PathBuf> {
     None
 }
 
-fn export_spz_passthrough(workspace: &Path, dest_dir: &Path) -> Result<Option<ExportArtifact>, String> {
+fn export_spz_passthrough(
+    workspace: &Path,
+    dest_dir: &Path,
+) -> Result<Option<ExportArtifact>, String> {
     fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
     let proj = Project::load(workspace).ok();
     let splat_path = proj
@@ -946,7 +957,10 @@ fn export_spz_passthrough(workspace: &Path, dest_dir: &Path) -> Result<Option<Ex
     }
 }
 
-fn export_gltf_gaussian_stub(dest_dir: &Path, spz: Option<&ExportArtifact>) -> Result<ExportArtifact, String> {
+fn export_gltf_gaussian_stub(
+    dest_dir: &Path,
+    spz: Option<&ExportArtifact>,
+) -> Result<ExportArtifact, String> {
     let path = dest_dir.join("gaussians.gltf.json");
     let body = serde_json::json!({
         "asset": { "version": "2.0", "generator": "InstaSplatter geo-exports" },
@@ -1189,7 +1203,10 @@ fn walk_coords(v: &serde_json::Value, f: &mut dyn FnMut(f64, f64)) {
     match v {
         serde_json::Value::Array(arr) => {
             if arr.len() >= 2 && arr[0].is_number() && arr[1].is_number() {
-                f(arr[0].as_f64().unwrap_or(0.0), arr[1].as_f64().unwrap_or(0.0));
+                f(
+                    arr[0].as_f64().unwrap_or(0.0),
+                    arr[1].as_f64().unwrap_or(0.0),
+                );
             } else {
                 for c in arr {
                     walk_coords(c, f);
@@ -1321,19 +1338,8 @@ fn collect_extent_geojson(run_dir: &Path) -> serde_json::Value {
             }
         }));
     }
-    // Flow-path stub line through centroid.
-    let b = default_bounds_from_run(run_dir);
-    features.push(serde_json::json!({
-        "type": "Feature",
-        "properties": { "kind": "flowPathStub", "note": "Illustrative centreline — not a hydrologic solution." },
-        "geometry": {
-            "type": "LineString",
-            "coordinates": [
-                [b[0] + 0.1 * (b[2]-b[0]), b[1] + 0.2 * (b[3]-b[1])],
-                [b[0] + 0.9 * (b[2]-b[0]), b[1] + 0.8 * (b[3]-b[1])]
-            ]
-        }
-    }));
+    // Flow path: not produced. A drawn centreline would be an illustration, not a
+    // hydrologic solution, and a stub line in a delivery-named file reads as data.
     serde_json::json!({
         "type": "FeatureCollection",
         "features": features
@@ -1400,7 +1406,10 @@ fn ensure_dem_only_preview_run(
         r#"{"samples":[{"hours":0,"stageM":0.4,"dischargeCms":2.0},{"hours":6,"stageM":1.2,"dischargeCms":20.0},{"hours":12,"stageM":0.5,"dischargeCms":4.0}],"note":"DEM-only preview hydrograph — non-authoritative"}"#,
     )
     .map_err(|e| e.to_string())?;
-    let dem_note = workspace.join("geo").join("derived").join("dtm_flood.meta.json");
+    let dem_note = workspace
+        .join("geo")
+        .join("derived")
+        .join("dtm_flood.meta.json");
     let dem_synthetic = fs::read_to_string(&dem_note)
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
@@ -1440,26 +1449,16 @@ fn now_unix_export() -> u64 {
 }
 
 fn preview_discrepancy_fields(run: &SimulationRun) -> serde_json::Value {
-    // Without a live preview sample, emit structural fields + a note.
-    let scientific = PreviewCheckpoint {
-        run_id: run.id.clone(),
-        source: PreviewResultSource::Anuga,
-        time_s: 0.0,
-        max_depth_m: 1.0,
-        wet_fraction: 0.4,
-        mass_m3: 1000.0,
-        depth_sample: vec![],
-        sample_cols: None,
-        sample_rows: None,
-    };
-    // Identity compare as placeholder when no preview stats persisted.
-    let report = compare_checkpoint(1.0, 0.4, 1000.0, &scientific, &PreviewCompareTolerance::default());
+    // No preview checkpoint is persisted for an offline export, so there is
+    // nothing to compare against. Report that as `null` rather than comparing
+    // hardcoded constants with themselves, which cannot ever fail.
     serde_json::json!({
-        "note": "Preview discrepancy fields reserved for live WebGPU compare; values below are structural placeholders when no preview checkpoint was persisted.",
-        "withinTolerance": report.within_tolerance,
-        "maxDepthDeltaM": report.max_depth_delta_m,
-        "wetFractionDelta": report.wet_fraction_delta,
-        "massRelError": report.mass_rel_error,
+        "status": "not-measured",
+        "note": "No live preview checkpoint was persisted for this run, so no preview-vs-scientific comparison exists. Null below means \"not measured\", not \"within tolerance\".",
+        "withinTolerance": serde_json::Value::Null,
+        "maxDepthDeltaM": serde_json::Value::Null,
+        "wetFractionDelta": serde_json::Value::Null,
+        "massRelError": serde_json::Value::Null,
         "scientificMode": run.mode,
         "previewLabel": "Live preview (non-authoritative until validated)"
     })
@@ -1475,8 +1474,7 @@ pub fn export_flood_products(
 ) -> Result<FloodExportResult, String> {
     crate::project::ensure_geo_workspace(workspace)
         .map_err(|e| format!("ensure_geo_workspace: {e}"))?;
-    let mut project =
-        Project::load(workspace).map_err(|e| format!("load project: {e}"))?;
+    let mut project = Project::load(workspace).map_err(|e| format!("load project: {e}"))?;
 
     // DEM-only / preview: synthesise a labelled preview run when none exist.
     if project.simulation_runs.is_empty() {
@@ -1493,16 +1491,9 @@ pub fn export_flood_products(
     let geo = project.geo_reference.clone();
     let gdal = detect_gdal();
 
-    let export_dir = workspace
-        .join("geo")
-        .join("exports")
-        .join(&run.id);
-    fs::create_dir_all(&export_dir).map_err(|e| {
-        format!(
-            "create export_dir {}: {e}",
-            export_dir.display()
-        )
-    })?;
+    let export_dir = workspace.join("geo").join("exports").join(&run.id);
+    fs::create_dir_all(&export_dir)
+        .map_err(|e| format!("create export_dir {}: {e}", export_dir.display()))?;
 
     let run_dir = resolve_run_dir(workspace, &run);
     let crs = geo
@@ -1514,15 +1505,18 @@ pub fn export_flood_products(
 
     // Scientific rasters
     let raster_dir = export_dir.join("rasters");
-    fs::create_dir_all(&raster_dir)
-        .map_err(|e| format!("create rasters dir: {e}"))?;
+    fs::create_dir_all(&raster_dir).map_err(|e| format!("create rasters dir: {e}"))?;
     for (kind, qty, file) in [
         (GeoExportKind::CogDepth, "depth", "max_depth.tif"),
         (GeoExportKind::CogVelocity, "velocity", "max_velocity.tif"),
         (GeoExportKind::CogHazard, "hazard", "hazard.tif"),
         (GeoExportKind::CogArrival, "arrival", "arrival.tif"),
         (GeoExportKind::CogDuration, "duration", "duration.tif"),
-        (GeoExportKind::CogUncertainty, "uncertainty", "uncertainty.tif"),
+        (
+            GeoExportKind::CogUncertainty,
+            "uncertainty",
+            "uncertainty.tif",
+        ),
     ] {
         let grid = synthesize_quantity_grid(bounds, qty, &run, &crs);
         let dest = raster_dir.join(file);
@@ -1536,7 +1530,7 @@ pub fn export_flood_products(
         if project.latest_splat.is_none() {
             notes.push("DEM-only workspace — no splat required for this product.".into());
         }
-        let (path, writer, mut extra) = export_raster(&dest, &grid, &gdal, true)
+        let (path, writer, mut extra) = export_raster(&dest, &grid, &gdal, true, &notes, true)
             .map_err(|e| format!("raster {file}: {e}"))?;
         notes.append(&mut extra);
         artifacts.push(ExportArtifact {
@@ -1928,8 +1922,13 @@ mod tests {
     #[test]
     fn export_flood_products_offline_bundle() {
         let ws = temp_ws("flood");
-        let mut proj =
-            Project::new_with_suite("job1", Path::new("input"), &ws, &settings(), Suite::Geospatial);
+        let mut proj = Project::new_with_suite(
+            "job1",
+            Path::new("input"),
+            &ws,
+            &settings(),
+            Suite::Geospatial,
+        );
         let mut run = sample_run("demo");
         let run_dir = ws.join("geo").join("runs").join(&run.id);
         fs::create_dir_all(run_dir.join("checkpoints")).unwrap();
@@ -1976,8 +1975,13 @@ mod tests {
     #[test]
     fn export_dem_only_workspace_without_splat_or_prior_run() {
         let ws = temp_ws("dem_only");
-        let mut proj =
-            Project::new_with_suite("job_dem", Path::new("input"), &ws, &settings(), Suite::Geospatial);
+        let mut proj = Project::new_with_suite(
+            "job_dem",
+            Path::new("input"),
+            &ws,
+            &settings(),
+            Suite::Geospatial,
+        );
         // No splat, no simulation runs — DEM-only flood path.
         proj.latest_splat = None;
         proj.flood_scenarios.push(FloodScenario {

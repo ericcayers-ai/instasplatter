@@ -179,9 +179,8 @@ impl Tsdf {
         let truncation = 3.0 * voxel;
         let pad = 2.0 * truncation;
         let origin: [f32; 3] = std::array::from_fn(|k| min[k] - pad);
-        let dims: [usize; 3] = std::array::from_fn(|k| {
-            (((max[k] + pad) - origin[k]) / voxel).ceil() as usize + 1
-        });
+        let dims: [usize; 3] =
+            std::array::from_fn(|k| (((max[k] + pad) - origin[k]) / voxel).ceil() as usize + 1);
         let total = dims[0].saturating_mul(dims[1]).saturating_mul(dims[2]);
         if total == 0 || dims.iter().any(|&d| d < 2) {
             return Err("The mesh volume has no usable extent.".into());
@@ -365,7 +364,9 @@ impl ColourImage {
 /// Slot `i` spans face corners `i` and `i + 1`, and is active when their signs
 /// differ. A face has zero, two or four active slots.
 fn face_segments(vals: [f32; 4], inside: [bool; 4]) -> Vec<(usize, usize)> {
-    let active: Vec<usize> = (0..4).filter(|&i| inside[i] != inside[(i + 1) % 4]).collect();
+    let active: Vec<usize> = (0..4)
+        .filter(|&i| inside[i] != inside[(i + 1) % 4])
+        .collect();
     match active.len() {
         2 => vec![(active[0], active[1])],
         4 => {
@@ -456,12 +457,19 @@ pub fn marching_cubes(field: &Field, iso: f32) -> Mesh {
                 }
 
                 // Emit (and cache) the vertex sitting on one cube edge.
-                let vertex_for = |e: usize, mesh: &mut Mesh, map: &mut HashMap<(usize, u8), u32>| -> u32 {
+                let vertex_for = |e: usize,
+                                  mesh: &mut Mesh,
+                                  map: &mut HashMap<(usize, u8), u32>|
+                 -> u32 {
                     let (ca, cb) = EDGE[e];
                     let (oa, ob) = (CORNER[ca], CORNER[cb]);
                     // The axis this edge runs along, and its lower endpoint.
                     let axis = (0..3).find(|&k| oa[k] != ob[k]).unwrap();
-                    let (lo, hi) = if oa[axis] < ob[axis] { (ca, cb) } else { (cb, ca) };
+                    let (lo, hi) = if oa[axis] < ob[axis] {
+                        (ca, cb)
+                    } else {
+                        (cb, ca)
+                    };
                     let key = (corner_idx[lo], axis as u8);
                     if let Some(&v) = map.get(&key) {
                         return v;
@@ -470,8 +478,10 @@ pub fn marching_cubes(field: &Field, iso: f32) -> Mesh {
                     // cubes on this edge compute bit-identical coordinates.
                     let (va, vb) = (vals[lo], vals[hi]);
                     let t = crossing(va, vb, iso);
-                    let pa = field.position(x + CORNER[lo][0], y + CORNER[lo][1], z + CORNER[lo][2]);
-                    let pb = field.position(x + CORNER[hi][0], y + CORNER[hi][1], z + CORNER[hi][2]);
+                    let pa =
+                        field.position(x + CORNER[lo][0], y + CORNER[lo][1], z + CORNER[lo][2]);
+                    let pb =
+                        field.position(x + CORNER[hi][0], y + CORNER[hi][1], z + CORNER[hi][2]);
                     let p = [
                         pa[0] + t * (pb[0] - pa[0]),
                         pa[1] + t * (pb[1] - pa[1]),
@@ -495,9 +505,12 @@ pub fn marching_cubes(field: &Field, iso: f32) -> Mesh {
                 // Gradient of the trilinear field, for winding. Corners with a
                 // 1 along an axis, minus those with a 0.
                 let g = [
-                    (vals[1] + vals[2] + vals[5] + vals[6]) - (vals[0] + vals[3] + vals[4] + vals[7]),
-                    (vals[2] + vals[3] + vals[6] + vals[7]) - (vals[0] + vals[1] + vals[4] + vals[5]),
-                    (vals[4] + vals[5] + vals[6] + vals[7]) - (vals[0] + vals[1] + vals[2] + vals[3]),
+                    (vals[1] + vals[2] + vals[5] + vals[6])
+                        - (vals[0] + vals[3] + vals[4] + vals[7]),
+                    (vals[2] + vals[3] + vals[6] + vals[7])
+                        - (vals[0] + vals[1] + vals[4] + vals[5]),
+                    (vals[4] + vals[5] + vals[6] + vals[7])
+                        - (vals[0] + vals[1] + vals[2] + vals[3]),
                 ];
 
                 // Walk the segments into closed loops and fan each one.
@@ -727,7 +740,10 @@ mod tests {
         let p = f.position(8, 8, 8);
         for v in &m.positions {
             let far = (0..3).any(|k| (v[k] - p[k]).abs() > f.voxel * 1.001);
-            assert!(far, "vertex {v:?} came from a cube touching the blind sample");
+            assert!(
+                far,
+                "vertex {v:?} came from a cube touching the blind sample"
+            );
         }
     }
 
@@ -797,7 +813,10 @@ mod tests {
             let world_z = f.position(mid_x, mid_y, z)[2];
             let val = f.values[i];
             if world_z < 0.95 {
-                assert!(val > 0.0, "in front of the wall but negative at z={world_z}");
+                assert!(
+                    val > 0.0,
+                    "in front of the wall but negative at z={world_z}"
+                );
             } else if world_z > 1.05 && val != 0.0 {
                 assert!(val < 0.0, "behind the wall but positive at z={world_z}");
             }
@@ -846,7 +865,10 @@ mod tests {
         let mut slanted = square.clone();
         slanted.depth.iter_mut().for_each(|d| *d = 1.1);
         // About 53 degrees off the view ray, so cos is near 0.6.
-        slanted.normal.iter_mut().for_each(|n| *n = [0.8, 0.0, -0.6]);
+        slanted
+            .normal
+            .iter_mut()
+            .for_each(|n| *n = [0.8, 0.0, -0.6]);
 
         let mut v = Tsdf::new([-0.02, -0.02, 0.98], [0.02, 0.02, 1.02], 0.02).unwrap();
         v.integrate(&square, &img, None);

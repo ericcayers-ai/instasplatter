@@ -24,7 +24,9 @@ These are **not** reconstruction sidecars. Hydro workers live under
    reproducibility, CPU/GPU tolerance, license clearance). GPL engines
    **cannot** promote into the Apache Standard installer.
 
-ANUGA + SWMM (Standard scientific path) and WebGPU/CPU live preview are
-implemented in `geospatial/hydro.rs` and `src/geospatial/preview/`. Demo
-fallback and preview remain explicitly **non-authoritative** until calibrated.
-
+The ANUGA runner in `tools/sidecars/anuga` is currently a compatibility
+scaffold: it checks the ANUGA API with a bounded flat-bed evolve smoke but does
+not sample the DEM, apply scenario forcing/boundaries, or calibrate. Its
+checkpoints and final display products are synthetic and it always reports
+`mode: scaffold`, even when ANUGA is installed. It is not a scientific solver
+path. WebGPU/CPU live preview and demo fallback remain **non-authoritative**.

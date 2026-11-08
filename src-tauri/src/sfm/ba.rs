@@ -323,7 +323,8 @@ pub fn bundle_adjust(
         // Trial step.
         let mut trial_poses = poses.to_vec();
         for ci in 0..free {
-            trial_poses[fixed + ci] = apply_se3_increment(&poses[fixed + ci], &dc[6 * ci..6 * ci + 6]);
+            trial_poses[fixed + ci] =
+                apply_se3_increment(&poses[fixed + ci], &dc[6 * ci..6 * ci + 6]);
         }
         let mut trial_points = points.to_vec();
         for p in 0..n_points {
@@ -441,7 +442,11 @@ mod tests {
         for c in 2..poses.len() {
             poses[c] = Pose {
                 r: m3_mul(rodrigues([0.02, -0.015, 0.01]), poses[c].r),
-                t: [poses[c].t[0] + 0.05, poses[c].t[1] - 0.03, poses[c].t[2] + 0.02],
+                t: [
+                    poses[c].t[0] + 0.05,
+                    poses[c].t[1] - 0.03,
+                    poses[c].t[2] + 0.02,
+                ],
             };
         }
         for (i, pt) in points.iter_mut().enumerate() {
@@ -459,7 +464,10 @@ mod tests {
         let (initial, _) = evaluate(&poses, &points, &p.obs, opts.huber);
         let report = bundle_adjust(&mut poses, &mut points, &p.obs, opts);
 
-        assert!(report.final_cost < initial * 1e-6, "{initial} -> {report:?}");
+        assert!(
+            report.final_cost < initial * 1e-6,
+            "{initial} -> {report:?}"
+        );
         assert!(report.rms < 1e-6, "rms {}", report.rms);
         for c in 2..poses.len() {
             assert!(
@@ -486,7 +494,15 @@ mod tests {
             pt[2] += 0.1;
         }
         let before: Vec<Pose> = poses[..2].to_vec();
-        bundle_adjust(&mut poses, &mut points, &p.obs, BaOptions { iterations: 10, ..Default::default() });
+        bundle_adjust(
+            &mut poses,
+            &mut points,
+            &p.obs,
+            BaOptions {
+                iterations: 10,
+                ..Default::default()
+            },
+        );
         for (a, b) in poses[..2].iter().zip(&before) {
             assert_eq!(a.t, b.t);
             assert_eq!(a.r, b.r);
@@ -508,7 +524,11 @@ mod tests {
                 &mut poses,
                 &mut points,
                 &obs,
-                BaOptions { iterations: 20, huber, fixed_cams: 2 },
+                BaOptions {
+                    iterations: 20,
+                    huber,
+                    fixed_cams: 2,
+                },
             );
             // How far the outlier dragged the point it belongs to.
             let pi = obs[10].point;
@@ -542,7 +562,11 @@ mod tests {
         for pt in points.iter_mut() {
             pt[0] += 0.05;
         }
-        let opts = BaOptions { iterations: 20, huber: 1.0, fixed_cams: poses.len() };
+        let opts = BaOptions {
+            iterations: 20,
+            huber: 1.0,
+            fixed_cams: poses.len(),
+        };
         let (initial, _) = evaluate(&poses, &points, &p.obs, opts.huber);
         let r = bundle_adjust(&mut poses, &mut points, &p.obs, opts);
         assert!(r.final_cost < initial * 1e-6, "{initial} -> {r:?}");

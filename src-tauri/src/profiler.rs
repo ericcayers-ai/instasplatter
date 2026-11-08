@@ -257,9 +257,15 @@ mod tests {
 
     #[test]
     fn auto_preset_scales_with_vram() {
-        assert_eq!(auto_preset(GpuVendor::Nvidia, 4_000, 32_000), Preset::Balanced);
+        assert_eq!(
+            auto_preset(GpuVendor::Nvidia, 4_000, 32_000),
+            Preset::Balanced
+        );
         assert_eq!(auto_preset(GpuVendor::Nvidia, 8_000, 32_000), Preset::High);
         assert_eq!(auto_preset(GpuVendor::Nvidia, 16_000, 32_000), Preset::Max);
-        assert_eq!(auto_preset(GpuVendor::Unknown, 16_000, 32_000), Preset::Draft);
+        assert_eq!(
+            auto_preset(GpuVendor::Unknown, 16_000, 32_000),
+            Preset::Draft
+        );
     }
 }

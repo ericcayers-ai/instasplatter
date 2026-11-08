@@ -6,6 +6,7 @@
 use super::{gating, JobCtx};
 use crate::engines::{ffmpeg_exe, ffprobe_exe};
 use crate::profiler::hidden_command;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -175,14 +176,34 @@ pub async fn ingest(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
     }
 
     ctx.stage_progress("ingest", 0.8, "Preparing dataset…");
+    let mut selected_file_names = HashMap::with_capacity(selected.len());
     for (i, src) in selected.iter().enumerate() {
         let ext = src
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("jpg")
             .to_ascii_lowercase();
-        let dest = images_dir.join(format!("img_{:05}.{ext}", i));
+        let destination_name = format!("img_{i:05}.{ext}");
+        let dest = images_dir.join(&destination_name);
         fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        if let Some(source_name) = src.file_name().and_then(|name| name.to_str()) {
+            selected_file_names.insert(source_name.to_string(), destination_name);
+        }
+    }
+
+    // Keep the source-panorama grouping through frame gating and dataset
+    // renaming so later pipeline stages can relate each view to its position.
+    if input.is_dir() {
+        let source_manifest = input.join(crate::panorama::MANIFEST_FILE_NAME);
+        if source_manifest.is_file()
+            && crate::panorama::remap_manifest(
+                &source_manifest,
+                &ctx.workspace.join(crate::panorama::MANIFEST_FILE_NAME),
+                &selected_file_names,
+            )?
+        {
+            ctx.log("Preserved panorama source and projected-face metadata");
+        }
     }
 
     // Clean up raw extracted frames.

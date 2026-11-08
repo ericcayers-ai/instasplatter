@@ -13,3 +13,17 @@ This product includes software developed at:
 - tauri-apps/tauri (Apache-2.0 / MIT)
 - tailwindlabs/tailwindcss (MIT)
 - vitejs/vite (MIT)
+
+Components under the Mozilla Public License 2.0, compiled unmodified into the
+Windows binary (MPL-2.0 section 3.2 permits this combination; sources are
+available from their published crates):
+
+- cssparser 0.36 (MPL-2.0) — https://crates.io/crates/cssparser
+- cssparser-macros 0.6 (MPL-2.0) — https://crates.io/crates/cssparser-macros
+- dtoa-short 0.3 (MPL-2.0) — https://crates.io/crates/dtoa-short
+- selectors 0.36 (MPL-2.0) — https://crates.io/crates/selectors
+- option-ext 0.2 (MPL-2.0) — https://crates.io/crates/option-ext
+
+Full component-by-component attribution, including data sources (USGS 3DEP,
+Copernicus GLO-30, OpenStreetMap/ODbL, Esri World Imagery) and the external,
+user-installed scientific sidecars, is in THIRDPARTY.md.

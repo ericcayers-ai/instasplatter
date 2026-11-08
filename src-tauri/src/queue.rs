@@ -306,12 +306,8 @@ impl Queue {
             }
         }
         // Drop terminal items from a previous session to avoid clutter; keep active queue.
-        data.items.retain(|i| {
-            matches!(
-                i.state,
-                QueueItemState::Queued | QueueItemState::Paused
-            )
-        });
+        data.items
+            .retain(|i| matches!(i.state, QueueItemState::Queued | QueueItemState::Paused));
         let mut guard = self.inner.lock().unwrap();
         guard.paused = data.paused;
         guard.items = data.items.into();
@@ -322,7 +318,10 @@ impl Queue {
     pub fn persist(&self) {
         let (paused, items) = {
             let guard = self.inner.lock().unwrap();
-            (guard.paused, guard.items.iter().cloned().collect::<Vec<_>>())
+            (
+                guard.paused,
+                guard.items.iter().cloned().collect::<Vec<_>>(),
+            )
         };
         let data = QueuePersisted {
             version: PERSIST_VERSION,
@@ -374,12 +373,7 @@ impl Queue {
                             .map(|i| {
                                 i.state = QueueItemState::Running;
                                 i.detail = "Starting…".into();
-                                (
-                                    i.id.clone(),
-                                    i.input_path.clone(),
-                                    i.suite,
-                                    i.lane,
-                                )
+                                (i.id.clone(), i.input_path.clone(), i.suite, i.lane)
                             })
                     }
                 };
@@ -391,9 +385,7 @@ impl Queue {
                 // Geospatial lane: scaffold workspace + project only (no flood
                 // solver yet). Completes synchronously — do not take a lane slot.
                 if suite == Suite::Geospatial {
-                    if let Err(e) =
-                        start_geo_placeholder(&app, &q, &queue_id, &input_path).await
-                    {
+                    if let Err(e) = start_geo_placeholder(&app, &q, &queue_id, &input_path).await {
                         let mut guard = q.inner.lock().unwrap();
                         if let Some(item) = guard.items.iter_mut().find(|i| i.id == queue_id) {
                             item.state = QueueItemState::Failed;
@@ -521,21 +513,13 @@ async fn start_geo_placeholder(
             .unwrap_or_else(|| std::ffi::OsString::from(format!("user_dem.{ext}")));
         let dest = sources.join(&dest_name);
         if let Err(e) = std::fs::copy(&input, &dest) {
-            return Err(format!(
-                "Failed to copy GeoTIFF into geo/sources: {e}"
-            ));
+            return Err(format!("Failed to copy GeoTIFF into geo/sources: {e}"));
         }
     }
 
     let profile = profiler::profile();
     let resolved: ResolvedSettings = settings::resolve(&settings::Settings::load(), &profile);
-    let proj = Project::new_with_suite(
-        &job_id,
-        &input,
-        &workspace,
-        &resolved,
-        Suite::Geospatial,
-    );
+    let proj = Project::new_with_suite(&job_id, &input, &workspace, &resolved, Suite::Geospatial);
     proj.save()?;
 
     {

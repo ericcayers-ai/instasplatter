@@ -106,6 +106,7 @@ export default function Viewport() {
   const ingestPath = useStore((s) => s.ingestPath);
   const ingestFrameCount = useStore((s) => s.ingestFrameCount);
   const reconLayers = useStore((s) => s.reconLayers);
+  const postProcessing = useStore((s) => s.postProcessing);
   const jobId = useStore((s) => s.jobId);
   const [orientMessage, setOrientMessage] = useState<string | null>(null);
   const [orientOpen, setOrientOpen] = useState(false);
@@ -116,6 +117,9 @@ export default function Viewport() {
       const r = new SplatRenderer(canvasRef.current);
       r.attachControls();
       r.autoOrbit = true;
+      const processing = useStore.getState().postProcessing;
+      r.postToggles.tonemap = processing.tonemap;
+      r.postToggles.fxaa = processing.fxaa;
       r.onStats = (n) => setSplatCount(n);
       r.onFps = (n) => setFps(n);
       rendererRef.current = r;
@@ -154,6 +158,13 @@ export default function Viewport() {
     r.showSplat = reconLayers.splat;
     r.showMesh = reconLayers.mesh;
   }, [reconLayers]);
+
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    r.postToggles.tonemap = postProcessing.tonemap;
+    r.postToggles.fxaa = postProcessing.fxaa;
+  }, [postProcessing]);
 
   // Cameras arrive one at a time and only ever grow, so push the new tail
   // rather than rebuilding the whole line buffer on every registration.

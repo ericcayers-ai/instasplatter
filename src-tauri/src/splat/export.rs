@@ -16,12 +16,14 @@ pub enum Format {
 
 impl Format {
     pub fn parse(s: &str) -> Option<Format> {
-        Some(match s.trim_start_matches('.').to_ascii_lowercase().as_str() {
-            "ply" => Format::Ply,
-            "splat" => Format::Splat,
-            "spz" => Format::Spz,
-            _ => return None,
-        })
+        Some(
+            match s.trim_start_matches('.').to_ascii_lowercase().as_str() {
+                "ply" => Format::Ply,
+                "splat" => Format::Splat,
+                "spz" => Format::Spz,
+                _ => return None,
+            },
+        )
     }
 
     pub fn extension(self) -> &'static str {
@@ -140,10 +142,8 @@ fn pack_quat_v4(q: [f32; 4]) -> [u8; 4] {
         let i = (v * scale).round().clamp(-511.0, 511.0) as i32;
         (i as u32) & 0x3ff
     };
-    let packed: u32 = ((largest as u32) << 30)
-        | (enc(rest[0]) << 20)
-        | (enc(rest[1]) << 10)
-        | enc(rest[2]);
+    let packed: u32 =
+        ((largest as u32) << 30) | (enc(rest[0]) << 20) | (enc(rest[1]) << 10) | enc(rest[2]);
     packed.to_le_bytes()
 }
 
@@ -264,7 +264,8 @@ pub fn encode_spz(cloud: &SplatCloud) -> Result<Vec<u8>, String> {
     }
 
     let toc_byte_offset: u32 = 32; // no extensions
-    let mut out: Vec<u8> = Vec::with_capacity(32 + 6 * 16 + compressed.iter().map(|c| c.len()).sum::<usize>());
+    let mut out: Vec<u8> =
+        Vec::with_capacity(32 + 6 * 16 + compressed.iter().map(|c| c.len()).sum::<usize>());
 
     // 32-byte plaintext NgspFileHeader
     out.extend_from_slice(&SPZ_MAGIC.to_le_bytes());
@@ -363,8 +364,14 @@ mod tests {
         Vec<u8>,
     ) {
         assert!(bytes.len() >= 32);
-        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), SPZ_MAGIC);
-        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), SPZ_VERSION);
+        assert_eq!(
+            u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
+            SPZ_MAGIC
+        );
+        assert_eq!(
+            u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+            SPZ_VERSION
+        );
         let n = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let sh_degree = bytes[12];
         let frac = bytes[13];
@@ -416,7 +423,9 @@ mod tests {
             }
             positions.push(p);
         }
-        (n, sh_degree, frac, positions, alphas, colors, scales, rots, sh)
+        (
+            n, sh_degree, frac, positions, alphas, colors, scales, rots, sh,
+        )
     }
 
     #[test]
@@ -460,11 +469,9 @@ mod tests {
         assert!(q_in[0] < 0.0);
         let q_out = unpack_quat_v4(&rots[0..4]);
         // Angular check: absolute dot of unit quaternions ≥ ~0.98 (sign may flip).
-        let dot = (q_in[0] * q_out[0]
-            + q_in[1] * q_out[1]
-            + q_in[2] * q_out[2]
-            + q_in[3] * q_out[3])
-            .abs();
+        let dot =
+            (q_in[0] * q_out[0] + q_in[1] * q_out[1] + q_in[2] * q_out[2] + q_in[3] * q_out[3])
+                .abs();
         assert!(dot > 0.98, "quat round-trip dot={dot}");
     }
 

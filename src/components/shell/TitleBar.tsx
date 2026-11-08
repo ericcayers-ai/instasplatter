@@ -59,7 +59,9 @@ function SuiteSwitch() {
   const suite = useStore((s) => s.suite);
   const setSuite = useStore((s) => s.setSuite);
   const screen = useStore((s) => s.screen);
-  const busy = screen === "processing";
+  const resultPath = useStore((s) => s.resultPath);
+  const jobError = useStore((s) => s.jobError);
+  const busy = screen === "processing" && !resultPath && !jobError;
   const options: { id: "reconstruction" | "geospatial"; label: string }[] = [
     { id: "reconstruction", label: "Recon" },
     { id: "geospatial", label: "Geo" },
@@ -97,6 +99,9 @@ function StatusPill() {
     if (scientific?.state === "running") {
       tone = "live";
       label = "Live";
+    } else if (scientific?.state === "failed") {
+      tone = "err";
+      label = "Failed";
     } else if (scientific?.state === "done" || preview?.validation === "validated") {
       tone = "ok";
       label = preview?.validation === "validated" ? "Validated" : "Complete";

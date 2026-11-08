@@ -34,7 +34,7 @@ export type GeoViewMode = "2d" | "3d" | "globe";
 
 export type GeoWaterStyle = "depth" | "hazard" | "contour";
 
-export type GeoTool = "pan" | "measure" | "inspect" | "profile" | "drawAoi";
+export type GeoTool = "pan" | "inspect" | "drawAoi";
 
 /** Basemap: Esri World Imagery (default) or low-bandwidth Carto/OSM. */
 export type GeoBasemapMode = "satellite" | "lowBandwidth";

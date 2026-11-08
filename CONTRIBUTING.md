@@ -49,7 +49,7 @@ npm run tauri dev      # hot-reload development app
 npm run tauri build    # NSIS installer under src-tauri/target/release/bundle
 ```
 
-On first run the app downloads COLMAP and Brush (~200 MB) into app data. Optional scientific flood needs ANUGA/SWMM workers under `tools/sidecars/` — without them, geospatial uses a labelled demo/scaffold path (not authoritative).
+On first run the app downloads COLMAP and Brush (~200 MB) into app data. The optional ANUGA worker under `tools/sidecars/anuga` currently runs a bounded flat-bed API smoke and always reports scaffold; it does not sample DEM data or apply scenario forcing/boundaries/calibration. Geospatial preview/demo runs are non-authoritative.
 
 ## Testing
 
@@ -63,7 +63,7 @@ npx tsc --noEmit
 There is no separate frontend unit-test runner yet. Prefer `cargo test` for Rust pipeline/maths/georeg/flood changes, `tsc --noEmit` for TypeScript, and a manual smoke of `npm run tauri dev` for UI or pipeline wiring:
 
 - **Reconstruction**: drag a short video or image folder; confirm live viewport / export path if touched.
-- **Geospatial**: open/create a geo project; confirm map layers, flood run labels (scientific vs demo/preview), and that exports do not claim authority when uncalibrated.
+- **Geospatial**: open/create a geo project; confirm map layers, flood run labels (scaffold vs demo/preview), and that exports do not claim authority for the ANUGA scaffold or uncalibrated runs.
 
 Optional Rust hygiene for native changes:
 

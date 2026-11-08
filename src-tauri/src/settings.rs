@@ -236,7 +236,8 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
     let scale = |base: f64| base * (10f64).powf((strictness as f64 - 0.5) * 4.0);
 
     let floor = |user: Option<u32>, base: u32, min_floor: u32| {
-        user.unwrap_or(base).max(if experimental { min_floor } else { 0 })
+        user.unwrap_or(base)
+            .max(if experimental { min_floor } else { 0 })
     };
 
     let (max_frames, max_resolution, total_steps, max_splats) = if experimental {
@@ -276,14 +277,19 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
         max_frames,
         max_resolution,
         // Milder rejection so coverage is not over-thinned (was 0.15).
-        blur_reject_fraction: settings.blur_reject_fraction.unwrap_or(0.08).clamp(0.0, 0.9),
+        blur_reject_fraction: settings
+            .blur_reject_fraction
+            .unwrap_or(0.08)
+            .clamp(0.0, 0.9),
         matcher: settings.matcher.clone().unwrap_or_else(|| "auto".into()),
         sift_gpu: settings.sift_gpu.unwrap_or(profile.has_cuda),
         total_steps,
         max_splats,
-        sh_degree: settings
-            .sh_degree
-            .unwrap_or(if experimental { max_p.sh_degree } else { p.sh_degree }),
+        sh_degree: settings.sh_degree.unwrap_or(if experimental {
+            max_p.sh_degree
+        } else {
+            p.sh_degree
+        }),
         refine_every: settings.refine_every.unwrap_or(if experimental {
             max_p.refine_every
         } else {
@@ -369,11 +375,7 @@ pub fn resolve(settings: &Settings, profile: &HardwareProfile) -> ResolvedSettin
     resolved
 }
 
-fn resolve_trainer(
-    settings: &Settings,
-    profile: &HardwareProfile,
-    experimental: bool,
-) -> String {
+fn resolve_trainer(settings: &Settings, profile: &HardwareProfile, experimental: bool) -> String {
     match settings.trainer.as_deref() {
         Some("brush") => "brush".into(),
         Some("gsplat") => {

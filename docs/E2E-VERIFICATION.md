@@ -16,7 +16,7 @@
 1. COLMAP SfM on a known image set (installer engines download).
 2. Brush or gsplat train to first checkpoint + PLY.
 3. Viewport orbit + suite switch Reconstruction ↔ Geospatial.
-4. Flood demo mode (no ANUGA) vs labelled scientific when ANUGA+DEM evolve.
+4. Flood preview/demo labels and the ANUGA scaffold label; even with ANUGA installed and a DEM path present, the current worker must never report Scientific.
 
 Documented sample clips: [SMOKE-TEST.md](./SMOKE-TEST.md).
 

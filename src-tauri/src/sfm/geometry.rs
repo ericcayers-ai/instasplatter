@@ -121,9 +121,16 @@ fn hartley(pts: &[[f64; 2]]) -> ([[f64; 3]; 3], Vec<[f64; 2]>) {
         .map(|p| ((p[0] - cx).powi(2) + (p[1] - cy).powi(2)).sqrt())
         .sum::<f64>()
         / n;
-    let s = if mean_d > 1e-12 { 2f64.sqrt() / mean_d } else { 1.0 };
+    let s = if mean_d > 1e-12 {
+        2f64.sqrt() / mean_d
+    } else {
+        1.0
+    };
     let t = [[s, 0.0, -s * cx], [0.0, s, -s * cy], [0.0, 0.0, 1.0]];
-    let out = pts.iter().map(|p| [s * (p[0] - cx), s * (p[1] - cy)]).collect();
+    let out = pts
+        .iter()
+        .map(|p| [s * (p[0] - cx), s * (p[1] - cy)])
+        .collect();
     (t, out)
 }
 
@@ -155,11 +162,7 @@ pub fn essential_eight_point(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<M3> {
         }
     }
     let e = null_vector(&a);
-    let e_norm: M3 = [
-        [e[0], e[1], e[2]],
-        [e[3], e[4], e[5]],
-        [e[6], e[7], e[8]],
-    ];
+    let e_norm: M3 = [[e[0], e[1], e[2]], [e[3], e[4], e[5]], [e[6], e[7], e[8]]];
     // Undo the normalizing transforms: E = T2ᵀ E' T1.
     let e_raw = m3_mul(m3_mul(m3_transpose(t2), e_norm), t1);
     let e = enforce_essential(e_raw);
@@ -365,11 +368,7 @@ pub fn pnp_dlt(points: &[V3], obs: &[[f64; 2]]) -> Option<Pose> {
         }
     }
     let p = null_vector(&a);
-    let mut m: M3 = [
-        [p[0], p[1], p[2]],
-        [p[4], p[5], p[6]],
-        [p[8], p[9], p[10]],
-    ];
+    let mut m: M3 = [[p[0], p[1], p[2]], [p[4], p[5], p[6]], [p[8], p[9], p[10]]];
     let mut t: V3 = [p[3], p[7], p[11]];
 
     // The null vector's sign is free; choose the one that puts the first
@@ -550,7 +549,11 @@ pub fn ransac_pnp(
             None => continue,
         };
         let inliers: Vec<usize> = (0..n)
-            .filter(|&i| reprojection_error(&pose, points[i], obs[i]).map(|e| e < thresh).unwrap_or(false))
+            .filter(|&i| {
+                reprojection_error(&pose, points[i], obs[i])
+                    .map(|e| e < thresh)
+                    .unwrap_or(false)
+            })
             .collect();
         if inliers.len() > best.len() {
             best = inliers;
@@ -571,7 +574,11 @@ pub fn ransac_pnp(
     let pose = refine_pose(&seed, &sp, &so, threshold_px / focal);
 
     let inliers: Vec<usize> = (0..n)
-        .filter(|&i| reprojection_error(&pose, points[i], obs[i]).map(|e| e < thresh).unwrap_or(false))
+        .filter(|&i| {
+            reprojection_error(&pose, points[i], obs[i])
+                .map(|e| e < thresh)
+                .unwrap_or(false)
+        })
         .collect();
     (inliers.len() >= 6).then_some((pose, inliers))
 }
@@ -737,7 +744,10 @@ mod tests {
     #[test]
     fn ransac_essential_needs_eight_points() {
         let mut rng = Rng::new(1);
-        assert!(ransac_essential(&[[0.0, 0.0]; 5], &[[0.0, 0.0]; 5], 800.0, 1.0, 10, &mut rng).is_none());
+        assert!(
+            ransac_essential(&[[0.0, 0.0]; 5], &[[0.0, 0.0]; 5], 800.0, 1.0, 10, &mut rng)
+                .is_none()
+        );
     }
 
     #[test]
@@ -749,7 +759,10 @@ mod tests {
         };
         let obs = project_all(&truth, &pts);
         let pose = pnp_dlt(&pts, &obs).unwrap();
-        assert!(rotation_angle_between(pose.r, truth.r) < 1e-6, "rotation off");
+        assert!(
+            rotation_angle_between(pose.r, truth.r) < 1e-6,
+            "rotation off"
+        );
         for k in 0..3 {
             assert!((pose.t[k] - truth.t[k]).abs() < 1e-6, "{:?}", pose.t);
         }
@@ -770,7 +783,10 @@ mod tests {
         assert!(rotation_angle_between(start.r, truth.r) > 0.05);
 
         let refined = refine_pose(&start, &pts, &obs, 0.01);
-        assert!(rotation_angle_between(refined.r, truth.r) < 1e-5, "rotation not refined");
+        assert!(
+            rotation_angle_between(refined.r, truth.r) < 1e-5,
+            "rotation not refined"
+        );
         for k in 0..3 {
             assert!((refined.t[k] - truth.t[k]).abs() < 1e-5, "{:?}", refined.t);
         }
@@ -820,7 +836,10 @@ mod tests {
 
     #[test]
     fn pose_centre_maps_to_the_camera_origin() {
-        let p = Pose { r: rodrigues([0.4, -0.1, 0.2]), t: [0.5, -1.0, 2.0] };
+        let p = Pose {
+            r: rodrigues([0.4, -0.1, 0.2]),
+            t: [0.5, -1.0, 2.0],
+        };
         let o = p.apply(p.center());
         assert!(o.iter().all(|v| v.abs() < 1e-12), "{o:?}");
     }
@@ -842,4 +861,3 @@ mod tests {
         assert!(!a.sample(3, 8, &mut ia));
     }
 }
-

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>InstaSplatter renderer bench</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d10;
+        color: #d7dde5;
+        font: 12px/1.5 ui-monospace, monospace;
+      }
+      #stage {
+        display: flex;
+        height: 100%;
+      }
+      canvas {
+        flex: 1;
+        display: block;
+      }
+      pre {
+        width: 320px;
+        margin: 0;
+        padding: 12px;
+        overflow: auto;
+        border-left: 1px solid #232830;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="c"></canvas>
+      <pre id="log">booting…</pre>
+    </div>
+    <script type="module" src="./splat-bench.ts"></script>
+  </body>
+</html>

@@ -97,6 +97,29 @@ async fn run_colmap(
     Ok(())
 }
 
+fn should_retry_cpu_feature_extraction(gpu_enabled: bool, result: &Result<(), String>) -> bool {
+    gpu_enabled && result.is_err()
+}
+
+fn clear_partial_feature_database(db: &Path) -> Result<(), String> {
+    for suffix in ["", "-shm", "-wal", "-journal"] {
+        let mut path = db.as_os_str().to_os_string();
+        path.push(suffix);
+        let path = std::path::PathBuf::from(path);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to clear partial COLMAP database {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn run_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     run_sfm_with_options(ctx, images_dir, SfmOptions::default()).await
 }
@@ -135,10 +158,34 @@ pub async fn run_sfm_with_options(
     // 1) Feature extraction. Single shared camera: frames come from one
     //    device in the common case; COLMAP still refines per-image poses.
     ctx.stage_progress("sfm", 0.0, "Extracting features…");
-    run_colmap(
-        ctx,
-        (0.0, 0.35),
-        &[
+    let feature_args = [
+        "feature_extractor",
+        "--database_path",
+        &db_s,
+        "--image_path",
+        &img_s,
+        "--ImageReader.single_camera",
+        "1",
+        "--ImageReader.camera_model",
+        "OPENCV",
+        "--FeatureExtraction.use_gpu",
+        gpu,
+        "--SiftExtraction.max_num_features",
+        "8192",
+    ];
+    let feature_result = run_colmap(ctx, (0.0, 0.35), &feature_args, n_images).await;
+    if should_retry_cpu_feature_extraction(gpu == "1", &feature_result) {
+        let error = feature_result.as_ref().unwrap_err();
+        ctx.notice(format!(
+            "CUDA feature extraction failed ({error}); retrying with CPU."
+        ));
+        ctx.stage_progress(
+            "sfm",
+            0.0,
+            "Retrying feature extraction on CPU after CUDA failure…",
+        );
+        clear_partial_feature_database(&db)?;
+        let cpu_feature_args = [
             "feature_extractor",
             "--database_path",
             &db_s,
@@ -149,13 +196,14 @@ pub async fn run_sfm_with_options(
             "--ImageReader.camera_model",
             "OPENCV",
             "--FeatureExtraction.use_gpu",
-            gpu,
+            "0",
             "--SiftExtraction.max_num_features",
             "8192",
-        ],
-        n_images,
-    )
-    .await?;
+        ];
+        run_colmap(ctx, (0.0, 0.35), &cpu_feature_args, n_images).await?;
+    } else {
+        feature_result?;
+    }
 
     // 2) Matching. LightGlue / RoMa are routing stubs until their engines land;
     //    sequential suits video; exhaustive for small unordered folders.
@@ -288,4 +336,50 @@ pub async fn run_sfm_with_options(
     }
     ctx.stage_progress("sfm", 1.0, "Cameras solved");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_feature_extraction_failure_requests_cpu_retry() {
+        assert!(should_retry_cpu_feature_extraction(
+            true,
+            &Err("CUDA SIFT crashed".to_string())
+        ));
+        assert!(!should_retry_cpu_feature_extraction(true, &Ok(())));
+        assert!(!should_retry_cpu_feature_extraction(
+            false,
+            &Err("CPU failure".to_string())
+        ));
+    }
+
+    #[test]
+    fn retry_cleanup_removes_partial_database_and_sqlite_journals() {
+        let root = std::env::temp_dir().join(format!(
+            "instasplatter-colmap-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("database.db");
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            let mut path = db.as_os_str().to_os_string();
+            path.push(suffix);
+            std::fs::write(std::path::PathBuf::from(path), b"partial").unwrap();
+        }
+
+        clear_partial_feature_database(&db).unwrap();
+
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            let mut path = db.as_os_str().to_os_string();
+            path.push(suffix);
+            assert!(!std::path::PathBuf::from(path).exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

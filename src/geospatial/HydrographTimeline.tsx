@@ -16,16 +16,22 @@ export default function HydrographTimeline() {
   const scenario = useStore((s) => s.geoScenario);
   const waterStyle = useStore((s) => s.geoWaterStyle);
   const preview = useStore((s) => s.geoPreview);
-  const series = PLACEHOLDER_HYDROGRAPH;
+  const run = useStore((s) => s.geoScientificRun);
+  const runHydrograph = useStore((s) => s.geoHydrograph);
+  const series = runHydrograph?.length ? runHydrograph : PLACEHOLDER_HYDROGRAPH;
   const w = 640;
   const h = 72;
   const padX = 8;
   const padY = 10;
   const maxQ = Math.max(...series.map((s) => s.dischargeCms), 1);
-  const maxHours = scenario?.durationHours ?? PLACEHOLDER_SCENARIO.durationHours;
+  // Keep the horizontal domain fixed while live samples arrive. Using the latest
+  // sample here would rescale the chart at every checkpoint and detach its scrubber.
+  const scenarioDurationHours = scenario?.durationHours ?? PLACEHOLDER_SCENARIO.durationHours;
+  const lastSampleHours = series[series.length - 1]?.hours ?? 0;
+  const maxHours = Math.max(scenarioDurationHours, lastSampleHours, 1);
   const snap = useMemo(
-    () => floodSnapshotFromTime(floodTime, preview, maxHours),
-    [floodTime, preview, maxHours],
+    () => floodSnapshotFromTime(floodTime, preview, maxHours, series),
+    [floodTime, preview, maxHours, series],
   );
   const trackRef = useRef<SVGSVGElement>(null);
 
@@ -76,6 +82,13 @@ export default function HydrographTimeline() {
             </div>
             <div className="truncate text-[11px] text-ink-dim">
               {scenario?.name ?? PLACEHOLDER_SCENARIO.name} · {snap.statusLabel}
+            </div>
+            <div className="text-[9px] text-[var(--color-gauge)]">
+              {runHydrograph?.length
+                ? run?.mode === "demo"
+                  ? "Demo run samples · synthetic"
+                  : "Run hydrograph samples"
+                : "Preview hydrograph · synthetic"}
             </div>
           </div>
         </div>

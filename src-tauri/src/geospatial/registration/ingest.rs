@@ -87,7 +87,9 @@ impl TelemetryFormat {
         match ext.as_str() {
             "srt" => TelemetryFormat::DjiSrt,
             "mrk" => TelemetryFormat::DjiMrk,
-            "pos" | "ppk" | "txt" if name.contains("pos") || name.contains("ppk") || ext == "pos" || ext == "ppk" => {
+            "pos" | "ppk" | "txt"
+                if name.contains("pos") || name.contains("ppk") || ext == "pos" || ext == "ppk" =>
+            {
                 TelemetryFormat::Pos
             }
             "pos" | "ppk" => TelemetryFormat::Pos,
@@ -259,9 +261,7 @@ pub fn read_exif_gps(path: &Path) -> Result<Option<TelemetryPoint>, String> {
         unix_s,
         heading_deg: heading,
         focal_mm: focal,
-        image_name: path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned()),
+        image_name: path.file_name().map(|n| n.to_string_lossy().into_owned()),
         source: "exif".into(),
         ..Default::default()
     }))
@@ -395,8 +395,10 @@ pub fn parse_dji_mrk(path: &Path) -> Result<Vec<TelemetryPoint>, String> {
         if nums.len() < 4 {
             // Try lat/lon as textual fields at fixed positions.
             if cells.len() >= 5 {
-                let lat = parse_f64(cells.get(2).unwrap_or(&"")).or_else(|| parse_coord_token(cells[2]));
-                let lon = parse_f64(cells.get(3).unwrap_or(&"")).or_else(|| parse_coord_token(cells[3]));
+                let lat =
+                    parse_f64(cells.get(2).unwrap_or(&"")).or_else(|| parse_coord_token(cells[2]));
+                let lon =
+                    parse_f64(cells.get(3).unwrap_or(&"")).or_else(|| parse_coord_token(cells[3]));
                 let h = parse_f64(cells.get(4).unwrap_or(&""));
                 if let (Some(lat), Some(lon), Some(h)) = (lat, lon, h) {
                     let std_n = cells.get(5).and_then(|c| parse_f64(c)).unwrap_or(0.05);
@@ -505,14 +507,13 @@ pub fn parse_pos(path: &Path) -> Result<Vec<TelemetryPoint>, String> {
             .unwrap_or(std_e * 2.0)
             .abs()
             .max(0.02);
-        let unix_s = parse_loose_time(cells[0])
-            .or_else(|| {
-                if cells.len() > 1 {
-                    parse_loose_time(&format!("{} {}", cells[0], cells[1]))
-                } else {
-                    None
-                }
-            });
+        let unix_s = parse_loose_time(cells[0]).or_else(|| {
+            if cells.len() > 1 {
+                parse_loose_time(&format!("{} {}", cells[0], cells[1]))
+            } else {
+                None
+            }
+        });
         out.push(TelemetryPoint {
             lon_deg: lon,
             lat_deg: lat,
@@ -579,9 +580,7 @@ pub fn parse_telemetry_csv(path: &Path) -> Result<Vec<TelemetryPoint>, String> {
         let unix_s = time_i
             .and_then(|i| cells.get(i))
             .and_then(|c| parse_loose_time(c));
-        let heading = yaw_i
-            .and_then(|i| cells.get(i))
-            .and_then(|c| parse_f64(c));
+        let heading = yaw_i.and_then(|i| cells.get(i)).and_then(|c| parse_f64(c));
         out.push(TelemetryPoint {
             lon_deg: lon,
             lat_deg: lat,
@@ -658,7 +657,9 @@ pub fn parse_kml(path: &Path) -> Result<Vec<TelemetryPoint>, String> {
     let mut out = Vec::new();
     for (i, _) in text.match_indices("<coordinates>") {
         let rest = &text[i + "<coordinates>".len()..];
-        let end = rest.find("</coordinates>").unwrap_or(rest.len().min(50_000));
+        let end = rest
+            .find("</coordinates>")
+            .unwrap_or(rest.len().min(50_000));
         let body = rest[..end].trim();
         for token in body.split(|c: char| c.is_whitespace()) {
             let token = token.trim();
@@ -715,7 +716,9 @@ fn extract_f64(text: &str, keys: &[&str]) -> Option<f64> {
             let num: String = after
                 .chars()
                 .skip_while(|c| !c.is_ascii_digit() && *c != '-' && *c != '.')
-                .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == 'e' || *c == 'E')
+                .take_while(|c| {
+                    c.is_ascii_digit() || *c == '.' || *c == '-' || *c == 'e' || *c == 'E'
+                })
                 .collect();
             if let Ok(v) = num.parse::<f64>() {
                 return Some(v);
@@ -738,7 +741,7 @@ fn extract_datetime_unix(text: &str) -> Option<f64> {
 fn parse_coord_token(s: &str) -> Option<f64> {
     let cleaned: String = s
         .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-' )
+        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
         .collect();
     parse_f64(&cleaned)
 }

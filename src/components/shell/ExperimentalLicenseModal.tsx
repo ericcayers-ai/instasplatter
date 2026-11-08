@@ -17,6 +17,7 @@ export default function ExperimentalLicenseModal() {
         ref={trapRef}
         role="dialog"
         aria-labelledby="exp-license-title"
+        aria-modal="true"
         className="max-w-md rounded border border-danger/40 bg-panel2 p-5 shadow-lg"
       >
         <h2 id="exp-license-title" className="font-display text-base font-bold text-danger">

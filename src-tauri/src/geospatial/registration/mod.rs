@@ -13,11 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod ingest;
 
-pub use ingest::{
-    ingest_path, list_telemetry_files, parse_gcp_csv, TelemetryPoint,
-};
 #[allow(unused_imports)]
 pub use ingest::TelemetryFormat;
+pub use ingest::{ingest_path, list_telemetry_files, parse_gcp_csv, TelemetryPoint};
 
 /// Soft outlier gate: residual > `median ×` this factor.
 pub const GCP_OUTLIER_MEDIAN_FACTOR: f64 = 3.0;
@@ -170,9 +168,7 @@ pub fn register_from_sources(sources_dir: &Path) -> Result<RegistrationResult, S
 
     if points.is_empty() {
         return Ok(RegistrationResult {
-            geo_reference: unscaled_reference(
-                "No GPS/telemetry found — project remains unscaled",
-            ),
+            geo_reference: unscaled_reference("No GPS/telemetry found — project remains unscaled"),
             camera_count: images.len(),
             telemetry_count: 0,
             matched_frames: 0,
@@ -351,10 +347,7 @@ pub fn set_project_gcps(
 }
 
 /// Apply GCPs from a CSV file to refine a GeoReference.
-pub fn refine_with_gcps(
-    base: &GeoReference,
-    gcp_csv: &Path,
-) -> Result<RegistrationResult, String> {
+pub fn refine_with_gcps(base: &GeoReference, gcp_csv: &Path) -> Result<RegistrationResult, String> {
     let gcps = parse_gcp_csv(gcp_csv)?;
     if gcps.is_empty() {
         return Ok(RegistrationResult {
@@ -388,8 +381,7 @@ pub fn refine_with_gcps(
         geo_reference: geo,
         telemetry_count: gcps.len(),
         warnings: vec![
-            "GCP survey points loaded; set local picks and call set_geo_gcps(refine=true)."
-                .into(),
+            "GCP survey points loaded; set local picks and call set_geo_gcps(refine=true).".into(),
         ],
         ..Default::default()
     })
@@ -478,16 +470,13 @@ pub fn compute_geo_reference(
 pub fn plan_extent(input: &ExtentPlanInput) -> ExtentPlan {
     let mut notes = Vec::new();
     let geo = input.geo_reference.clone().unwrap_or_default();
-    let scale_status = geo
-        .scale_status
-        .clone()
-        .unwrap_or_else(|| {
-            if geo.local_origin.is_some() {
-                "approx".into()
-            } else {
-                "unscaled".into()
-            }
-        });
+    let scale_status = geo.scale_status.clone().unwrap_or_else(|| {
+        if geo.local_origin.is_some() {
+            "approx".into()
+        } else {
+            "unscaled".into()
+        }
+    });
 
     let origin = input
         .enu_origin
@@ -572,9 +561,7 @@ pub fn plan_extent(input: &ExtentPlanInput) -> ExtentPlan {
     }
 
     if scale_status == "unscaled" {
-        notes.push(
-            "Unscaled project — planner metres are relative; flood science locked.".into(),
-        );
+        notes.push("Unscaled project — planner metres are relative; flood science locked.".into());
     }
 
     let working_crs = geo
@@ -613,7 +600,12 @@ pub fn write_pose_priors(workspace: &Path, poses: &[MatchedPose]) -> Result<Path
     for p in poses {
         body.push_str(&format!(
             "{} {:.4} {:.4} {:.4} {:.4} {:.4} {:.4}\n",
-            p.image_name, p.ecef[0], p.ecef[1], p.ecef[2], p.covariance_m[0], p.covariance_m[1],
+            p.image_name,
+            p.ecef[0],
+            p.ecef[1],
+            p.ecef[2],
+            p.covariance_m[0],
+            p.covariance_m[1],
             p.covariance_m[2]
         ));
     }
@@ -851,12 +843,7 @@ fn frame_unix_hint(img: &Path) -> Option<f64> {
     }
     let meta = fs::metadata(img).ok()?;
     let modified = meta.modified().ok()?;
-    Some(
-        modified
-            .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_secs_f64(),
-    )
+    Some(modified.duration_since(UNIX_EPOCH).ok()?.as_secs_f64())
 }
 
 fn collect_images(dir: &Path) -> Vec<PathBuf> {
@@ -919,10 +906,7 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
 }
 
 /// Robust Umeyama Sim(3): local picks → survey ENU. Marks outliers by residual.
-pub fn solve_gcp_sim3(
-    gcps: &[GcpPoint],
-    geo: &GeoReference,
-) -> Result<GcpResidualReport, String> {
+pub fn solve_gcp_sim3(gcps: &[GcpPoint], geo: &GeoReference) -> Result<GcpResidualReport, String> {
     let frame = match geo.local_origin {
         Some(o) => EnuFrame::from_geodetic(Geodetic {
             lon_deg: o[0],
@@ -1146,10 +1130,8 @@ mod tests {
 
     #[test]
     fn unscaled_when_empty_sources() {
-        let dir = std::env::temp_dir().join(format!(
-            "instasplatter_reg_empty_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("instasplatter_reg_empty_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let r = register_from_sources(&dir).unwrap();
@@ -1173,10 +1155,8 @@ mod tests {
 
     #[test]
     fn csv_ingest_builds_metric_frame() {
-        let dir = std::env::temp_dir().join(format!(
-            "instasplatter_reg_csv_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("instasplatter_reg_csv_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let csv = dir.join("track.csv");

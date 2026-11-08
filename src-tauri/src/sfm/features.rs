@@ -135,10 +135,22 @@ impl Frame {
 
 /// The 16 pixels of the Bresenham circle of radius 3, clockwise from north.
 const CIRCLE: [(i32, i32); 16] = [
-    (0, -3), (1, -3), (2, -2), (3, -1),
-    (3, 0), (3, 1), (2, 2), (1, 3),
-    (0, 3), (-1, 3), (-2, 2), (-3, 1),
-    (-3, 0), (-3, -1), (-2, -2), (-1, -3),
+    (0, -3),
+    (1, -3),
+    (2, -2),
+    (3, -1),
+    (3, 0),
+    (3, 1),
+    (2, 2),
+    (1, 3),
+    (0, 3),
+    (-1, 3),
+    (-2, 2),
+    (-3, 1),
+    (-3, 0),
+    (-3, -1),
+    (-2, -2),
+    (-1, -3),
 ];
 
 /// FAST-9: a corner has 9 contiguous circle pixels all brighter, or all
@@ -227,7 +239,9 @@ fn brief_pattern() -> Vec<(i8, i8, i8, i8)> {
         let g = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
         (g * 6.25).round().clamp(-15.0, 15.0) as i8
     };
-    (0..256).map(|_| (gauss(), gauss(), gauss(), gauss())).collect()
+    (0..256)
+        .map(|_| (gauss(), gauss(), gauss(), gauss()))
+        .collect()
 }
 
 /// Sample the pattern rotated by the keypoint angle, which is what turns
@@ -240,7 +254,10 @@ fn describe(img: &GrayImage, kp: &KeyPoint, pattern: &[(i8, i8, i8, i8)], out: &
         let rot = |px: i8, py: i8| -> (i32, i32) {
             let px = px as f32;
             let py = py as f32;
-            ((c * px - s * py).round() as i32, (s * px + c * py).round() as i32)
+            (
+                (c * px - s * py).round() as i32,
+                (s * px + c * py).round() as i32,
+            )
         };
         let (adx, ady) = rot(*ax, *ay);
         let (bdx, bdy) = rot(*bx, *by);
@@ -252,7 +269,12 @@ fn describe(img: &GrayImage, kp: &KeyPoint, pattern: &[(i8, i8, i8, i8)], out: &
 
 /// Keep the strongest corner in each cell of a grid, so features spread over
 /// the image instead of piling onto one high-contrast object.
-fn spread_and_cap(mut kps: Vec<KeyPoint>, width: usize, height: usize, target: usize) -> Vec<KeyPoint> {
+fn spread_and_cap(
+    mut kps: Vec<KeyPoint>,
+    width: usize,
+    height: usize,
+    target: usize,
+) -> Vec<KeyPoint> {
     if kps.len() <= target {
         return kps;
     }
@@ -283,7 +305,11 @@ fn spread_and_cap(mut kps: Vec<KeyPoint>, width: usize, height: usize, target: u
     let mut out: Vec<KeyPoint> = best.into_iter().flatten().collect();
     if out.len() < target {
         // Backfill with the strongest of the rest.
-        leftovers.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        leftovers.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out.extend(leftovers.into_iter().take(target - out.len()));
     }
     out
@@ -605,7 +631,12 @@ mod tests {
     fn descriptors_are_stable_and_discriminative() {
         let img = checker(240, 240).blurred();
         let pattern = brief_pattern();
-        let kp = KeyPoint { x: 100.0, y: 100.0, score: 1.0, angle: 0.3 };
+        let kp = KeyPoint {
+            x: 100.0,
+            y: 100.0,
+            score: 1.0,
+            angle: 0.3,
+        };
 
         let mut a = [0u8; DESC_BYTES];
         let mut b = [0u8; DESC_BYTES];
@@ -614,7 +645,11 @@ mod tests {
         assert_eq!(a, b, "the same patch must describe identically");
 
         // A different location gives a materially different descriptor.
-        let other = KeyPoint { x: 110.0, y: 103.0, ..kp };
+        let other = KeyPoint {
+            x: 110.0,
+            y: 103.0,
+            ..kp
+        };
         let mut c = [0u8; DESC_BYTES];
         describe(&img, &other, &pattern, &mut c);
         let dist: u32 = a.iter().zip(&c).map(|(x, y)| (x ^ y).count_ones()).sum();
@@ -662,10 +697,20 @@ mod tests {
         let mut kps = Vec::new();
         // 100 weak points spread out, 50 very strong ones bunched in a corner.
         for i in 0..100 {
-            kps.push(KeyPoint { x: (i % 10) as f32 * 20.0 + 5.0, y: (i / 10) as f32 * 20.0 + 5.0, score: 1.0, angle: 0.0 });
+            kps.push(KeyPoint {
+                x: (i % 10) as f32 * 20.0 + 5.0,
+                y: (i / 10) as f32 * 20.0 + 5.0,
+                score: 1.0,
+                angle: 0.0,
+            });
         }
         for i in 0..50 {
-            kps.push(KeyPoint { x: 1.0 + (i % 5) as f32, y: 1.0 + (i / 5) as f32, score: 1000.0, angle: 0.0 });
+            kps.push(KeyPoint {
+                x: 1.0 + (i % 5) as f32,
+                y: 1.0 + (i / 5) as f32,
+                score: 1000.0,
+                angle: 0.0,
+            });
         }
         let out = spread_and_cap(kps, 200, 200, 30);
         assert!(out.len() <= 30);

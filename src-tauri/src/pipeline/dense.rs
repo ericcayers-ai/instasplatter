@@ -88,11 +88,7 @@ fn rms_radius(pts: &[[f32; 3]], c: V3) -> f64 {
     }
     let mut s = 0.0;
     for p in pts {
-        let d = [
-            p[0] as f64 - c[0],
-            p[1] as f64 - c[1],
-            p[2] as f64 - c[2],
-        ];
+        let d = [p[0] as f64 - c[0], p[1] as f64 - c[1], p[2] as f64 - c[2]];
         s += d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
     }
     (s / pts.len() as f64).sqrt().max(1e-6)
@@ -187,11 +183,7 @@ fn bounds_ok(pts: &[[f32; 3]], ref_pts: &[[f32; 3]]) -> bool {
     if r < 1e-5 || r_ref < 1e-5 {
         return false;
     }
-    let center_dist = math::norm([
-        c[0] - c_ref[0],
-        c[1] - c_ref[1],
-        c[2] - c_ref[2],
-    ]);
+    let center_dist = math::norm([c[0] - c_ref[0], c[1] - c_ref[1], c[2] - c_ref[2]]);
     center_dist < r_ref * 4.0 && (r / r_ref).ln().abs() < MAX_LOG_SCALE + 0.3
 }
 
@@ -339,11 +331,7 @@ fn filter_sparse_points(points: &[Point3D]) -> (Vec<[f32; 3]>, Vec<[u8; 3]>) {
     (xyz, rgb)
 }
 
-fn subsample(
-    xyz: Vec<[f32; 3]>,
-    rgb: Vec<[u8; 3]>,
-    max_n: usize,
-) -> (Vec<[f32; 3]>, Vec<[u8; 3]>) {
+fn subsample(xyz: Vec<[f32; 3]>, rgb: Vec<[u8; 3]>, max_n: usize) -> (Vec<[f32; 3]>, Vec<[u8; 3]>) {
     if xyz.len() <= max_n {
         return (xyz, rgb);
     }
@@ -408,9 +396,7 @@ pub fn read_xyzrgb_ply(path: &Path) -> Result<(Vec<[f32; 3]>, Vec<[u8; 3]>), Str
                 .sh_dc
                 .iter()
                 .map(|dc| {
-                    let to_u8 = |v: f32| {
-                        ((0.5 + SH_C0 * v) * 255.0).clamp(0.0, 255.0) as u8
-                    };
+                    let to_u8 = |v: f32| ((0.5 + SH_C0 * v) * 255.0).clamp(0.0, 255.0) as u8;
                     [to_u8(dc[0]), to_u8(dc[1]), to_u8(dc[2])]
                 })
                 .collect();
@@ -536,6 +522,19 @@ fn seed_from_sparse_model(ctx: &JobCtx, model: &Model) -> Result<usize, String> 
     write_init_from_points(ctx, xyz, rgb, "sparse COLMAP")
 }
 
+fn should_attempt_colmap_mvs(_sift_gpu_enabled: bool, cuda_colmap_available: bool) -> bool {
+    // Dense MVS depends on the CUDA COLMAP build, not the separate SIFT GPU preference.
+    cuda_colmap_available
+}
+
+fn mvs_fusion_input_type(geom_consistency: bool) -> &'static str {
+    if geom_consistency {
+        "geometric"
+    } else {
+        "photometric"
+    }
+}
+
 /// Attempt dense init via confidence-weighted fusion (not raw concatenation).
 /// Returns Ok(true) when a denser-than-sparse `init.ply` was written.
 pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, String> {
@@ -551,8 +550,7 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
 
     ctx.stage_progress("sfm", 0.85, "Densifying geometry…");
 
-    let model_dir = colmap::find_model_dir(&ctx.workspace)
-        .ok_or("No sparse model to densify.")?;
+    let model_dir = colmap::find_model_dir(&ctx.workspace).ok_or("No sparse model to densify.")?;
     let model = colmap::read_model(&model_dir)?;
 
     // Canonical reference: sparse COLMAP / ENU frame.
@@ -591,15 +589,20 @@ pub async fn densify_after_sfm(ctx: &JobCtx, images_dir: &Path) -> Result<bool, 
         candidates.push((name, nx, nr, conf));
     }
 
-    if ctx.settings.sift_gpu && crate::engines::colmap_is_cuda() {
+    if should_attempt_colmap_mvs(ctx.settings.sift_gpu, crate::engines::colmap_is_cuda()) {
         match run_mvs_fused(ctx, images_dir, &model_dir, &model).await {
             Ok(Some((mx, mr))) => {
-                ctx.log(format!("COLMAP MVS: {} fused points (will fuse).", mx.len()));
+                ctx.log(format!(
+                    "COLMAP MVS: {} fused points (will fuse).",
+                    mx.len()
+                ));
                 candidates.push(("MVS".into(), mx, mr, 0.80));
             }
             Ok(None) => {}
             Err(e) => {
-                ctx.notice(format!("Dense MVS failed ({e}). Continuing with other seeds."));
+                ctx.notice(format!(
+                    "Dense MVS failed ({e}). Continuing with other seeds."
+                ));
             }
         }
     } else if ctx.settings.sift_gpu && !crate::engines::colmap_is_cuda() {
@@ -740,6 +743,8 @@ async fn run_mvs_fused(
             "COLMAP",
             "--PatchMatchStereo.geom_consistency",
             geom,
+            "--PatchMatchStereo.filter",
+            "true",
             "--PatchMatchStereo.max_image_size",
             &mvs_size,
         ],
@@ -763,7 +768,7 @@ async fn run_mvs_fused(
             "--workspace_format",
             "COLMAP",
             "--input_type",
-            "geometric",
+            mvs_fusion_input_type(use_geom),
             "--output_path",
             &fused_s,
         ],
@@ -791,6 +796,19 @@ async fn run_mvs_fused(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mvs_remains_enabled_when_gpu_feature_extraction_is_off() {
+        assert!(should_attempt_colmap_mvs(false, true));
+        assert!(should_attempt_colmap_mvs(true, true));
+        assert!(!should_attempt_colmap_mvs(false, false));
+    }
+
+    #[test]
+    fn mvs_fusion_input_matches_patch_match_consistency_mode() {
+        assert_eq!(mvs_fusion_input_type(true), "geometric");
+        assert_eq!(mvs_fusion_input_type(false), "photometric");
+    }
 
     #[test]
     fn points_become_isotropic_gaussians_with_matching_colour() {
@@ -862,7 +880,9 @@ mod tests {
     #[test]
     fn bounds_gate_rejects_wild_outliers() {
         let a: Vec<[f32; 3]> = (0..32).map(|i| [i as f32 * 0.1, 0.0, 0.0]).collect();
-        let b: Vec<[f32; 3]> = (0..32).map(|i| [i as f32 * 0.1 + 1_000.0, 0.0, 0.0]).collect();
+        let b: Vec<[f32; 3]> = (0..32)
+            .map(|i| [i as f32 * 0.1 + 1_000.0, 0.0, 0.0])
+            .collect();
         assert!(!bounds_ok(&b, &a));
         assert!(bounds_ok(&a, &a));
     }

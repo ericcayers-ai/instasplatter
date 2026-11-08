@@ -156,6 +156,18 @@ void main() {
 }
 `;
 
+const BLIT_FS = `#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+out vec4 outColor;
+uniform sampler2D uScene;
+
+void main() {
+  outColor = texture(uScene, v_uv);
+}
+`;
+
 function compile(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const compileShader = (type: number, src: string): WebGLShader => {
     const sh = gl.createShader(type)!;
@@ -193,17 +205,26 @@ export class PostChain {
   private gl: WebGL2RenderingContext;
   private developProgram: WebGLProgram;
   private fxaaProgram: WebGLProgram;
+  private blitProgram: WebGLProgram;
   private vao: WebGLVertexArrayObject;
   private targets: [Targets, Targets] | null = null;
   private width = 0;
   private height = 0;
   private hdr: boolean;
   private prevFbo: WebGLFramebuffer | null = null;
+  private prevViewport = new Int32Array([0, 0, 1, 1]);
+  private prevBlend = false;
+  private prevDepthTest = false;
+  private prevDepthMask = true;
+  private prevProgram: WebGLProgram | null = null;
+  private prevVao: WebGLVertexArrayObject | null = null;
+  private prevActiveTexture = 0;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
     this.developProgram = compile(gl, QUAD_VS, TONEMAP_GLARE_FS);
     this.fxaaProgram = compile(gl, QUAD_VS, FXAA_FS);
+    this.blitProgram = compile(gl, QUAD_VS, BLIT_FS);
     this.vao = gl.createVertexArray()!;
     this.hdr = !!gl.getExtension("EXT_color_buffer_float");
   }
@@ -240,9 +261,30 @@ export class PostChain {
    */
   begin(w: number, h: number): void {
     const gl = this.gl;
+    const callerFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const callerTexture = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
+    const callerActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
+    const callerProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
+    const callerVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
+    const callerViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+    const callerBlend = gl.isEnabled(gl.BLEND);
+    const callerDepthTest = gl.isEnabled(gl.DEPTH_TEST);
+    const callerDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK) as boolean;
     this.ensureSize(w, h);
     if (!this.targets) return;
-    this.prevFbo = gl.getParameter(gl.FRAMEBUFFER);
+    this.prevFbo = callerFbo;
+    this.prevViewport = callerViewport;
+    this.prevBlend = callerBlend;
+    this.prevDepthTest = callerDepthTest;
+    this.prevDepthMask = callerDepthMask;
+    this.prevProgram = callerProgram;
+    this.prevVao = callerVao;
+    this.prevActiveTexture = callerActiveTexture;
+    // Target allocation binds textures/framebuffers internally. Put the
+    // caller's bindings back before rendering into our offscreen target.
+    gl.activeTexture(callerActiveTexture);
+    gl.bindTexture(gl.TEXTURE_2D, callerTexture);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, callerFbo);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets[0].fbo);
     gl.viewport(0, 0, w, h);
     gl.clearColor(0, 0, 0, 0);
@@ -286,9 +328,8 @@ export class PostChain {
 
     const finalSrc = ping;
 
-    // Pass B: ping -> dst. FXAA reads ping and writes the final image;
-    // with FXAA off we blit through the develop program with every
-    // effect disabled so the output is a pure copy.
+    // Pass B: ping -> dst. FXAA reads ping and writes the final image; when
+    // disabled, a dedicated copy shader preserves pass A exactly.
     gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo);
     if (opts.fxaa) {
       gl.useProgram(this.fxaaProgram);
@@ -303,24 +344,23 @@ export class PostChain {
       );
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.bindVertexArray(null);
-      gl.enable(gl.BLEND);
-      return true;
+    } else {
+      gl.useProgram(this.blitProgram);
+      gl.bindVertexArray(this.vao);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, finalSrc.tex);
+      gl.uniform1i(gl.getUniformLocation(this.blitProgram, "uScene"), 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
-    gl.useProgram(this.developProgram);
-    gl.bindVertexArray(this.vao);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, finalSrc.tex);
-    gl.uniform1i(gl.getUniformLocation(this.fxaaProgram, "uScene"), 0);
-    gl.uniform2f(
-      gl.getUniformLocation(this.fxaaProgram, "uTexel"),
-      1 / this.width,
-      1 / this.height,
-    );
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    void opts.fxaa; // FXAA pass currently always runs last; kept for clarity
-
-    gl.bindVertexArray(null);
-    gl.enable(gl.BLEND);
+    gl.bindVertexArray(this.prevVao);
+    gl.useProgram(this.prevProgram);
+    gl.activeTexture(this.prevActiveTexture);
+    gl.viewport(this.prevViewport[0], this.prevViewport[1], this.prevViewport[2], this.prevViewport[3]);
+    gl.depthMask(this.prevDepthMask);
+    if (this.prevBlend) gl.enable(gl.BLEND);
+    else gl.disable(gl.BLEND);
+    if (this.prevDepthTest) gl.enable(gl.DEPTH_TEST);
+    else gl.disable(gl.DEPTH_TEST);
     return true;
   }
 
@@ -338,7 +378,7 @@ export class PostChain {
     this.disposeTargets();
     this.gl.deleteProgram(this.developProgram);
     this.gl.deleteProgram(this.fxaaProgram);
+    this.gl.deleteProgram(this.blitProgram);
     this.gl.deleteVertexArray(this.vao);
   }
 }
-

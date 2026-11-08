@@ -1,0 +1,16 @@
+=== reconstruct_session: session=<SESSION> name=cap steps=7000 dry_run=True ===
+[1/7] convert left-eye MRUK RGBA frames -> PNG
+  $ <PYTHON> <SOURCE>/scripts/mruk_rgba_to_png.py <SESSION>/left_camera_mruk_rgba <SESSION>/rgb_png --from-intrinsics <SESSION>/left_camera_mruk_intrinsics.json
+[2/7] convert right-eye MRUK RGBA frames -> PNG
+  $ <PYTHON> <SOURCE>/scripts/mruk_rgba_to_png.py <SESSION>/right_camera_mruk_rgba <SESSION>/rgb_png --from-intrinsics <SESSION>/right_camera_mruk_intrinsics.json
+[3/7] pose-based reconstruction from the device's metric poses
+  $ <MQ3DRECON> reconstruct --project-dir <SESSION> --config <SOURCE>/scripts/mq3drecon_headless.yaml
+[4/7] export the COLMAP model with the colored point cloud
+  $ <MQ3DRECON> export-colmap --project-dir <SESSION> --output-dir <SESSION>/colmap_export --use-colored-pointcloud
+[5/7] stage the dataset (images + sparse/0) for Brush
+  $ @stage-dataset <SESSION>/colmap_export/images <SESSION>/colmap_export/distorted/sparse/0 <SOURCE>/gs_run/cap
+[6/7] train Brush for 7000 steps
+  $ <BRUSH> <SOURCE>/gs_run/cap --total-steps 7000 --export-every 2000 --export-name splat_{iter}.ply --export-path <SOURCE>/gs_run/cap/brush_out --eval-split-every 10 --eval-every 1000 --eval-save-to-disk
+[7/7] publish the PLY into the session library (brush_out/)
+  $ @publish-ply <SOURCE>/gs_run/cap/brush_out/splat_7000.ply <SESSION>/brush_out
+=== reconstruct_session: DRY RUN OK (7 steps, nothing executed) ===

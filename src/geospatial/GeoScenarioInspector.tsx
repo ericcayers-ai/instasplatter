@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useStore, type GeoDemProvider } from "../state/store";
 import {
@@ -10,11 +10,9 @@ import {
 import { floodSnapshotFromTime, hazardClassLabel } from "./floodPreview";
 import CollapsibleSection from "../components/shell/CollapsibleSection";
 import { api, type GeoReference } from "../lib/ipc";
-import {
-  readStoredOpenTopoApiKey,
-  writeStoredOpenTopoApiKey,
-} from "./opentopo";
+import { readStoredOpenTopoApiKey, writeStoredOpenTopoApiKey } from "./opentopo";
 import { isGeoTiffPath } from "./demAuthority";
+import { aoiIsValid, type AoiWgs84 } from "./aoi";
 
 /**
  * Scenario inspector for the right panel when the geospatial suite is active.
@@ -32,6 +30,7 @@ export default function GeoScenarioInspector() {
   const setLowPower = useStore((s) => s.setGeoFloodLowPower);
   const setRightPanelOpen = useStore((s) => s.setRightPanelOpen);
   const scientific = useStore((s) => s.geoScientificRun);
+  const floodStarting = useStore((s) => s.geoFloodStarting);
   const floodEngine = useStore((s) => s.geoFloodEngine);
   const dem = useStore((s) => s.geoDemProduct);
   const startScientificFlood = useStore((s) => s.startScientificFlood);
@@ -43,9 +42,11 @@ export default function GeoScenarioInspector() {
   const generateSatSplat = useStore((s) => s.generateSatSplat);
   const satSplatBusy = useStore((s) => s.geoSatSplatBusy);
   const satSplatProduct = useStore((s) => s.geoSatSplatProduct);
-  const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
+  const experimentalOn = useStore((s) => !!s.resolved?.experimentalMode);
   const aoi = useStore((s) => s.geoAoiWgs84);
+  const aoiPending = useStore((s) => s.geoAoiPending);
   const setTool = useStore((s) => s.setGeoTool);
+  const commitGeoAoi = useStore((s) => s.commitGeoAoi);
   const preview = useStore((s) => s.geoPreview);
   const workspace = useStore((s) => s.workspace);
   const queueItems = useStore((s) => s.queueItems);
@@ -56,15 +57,41 @@ export default function GeoScenarioInspector() {
     () => scenario?.manningPreset ?? PLACEHOLDER_SCENARIO.manningPreset ?? "mixed_urban",
   );
   const [outletId, setOutletId] = useState("south_stage");
+  const [aoiCoordinateError, setAoiCoordinateError] = useState<{
+    aoiKey: string;
+    message: string;
+  } | null>(null);
+  const coordinateFormRef = useRef<HTMLFormElement>(null);
+  const selectedHyetograph =
+    FLOOD_LAB_HYETOGRAPHS.find((item) => item.id === hyetoId) ?? FLOOD_LAB_HYETOGRAPHS[0];
+  const selectedManning =
+    FLOOD_LAB_MANNING.find((item) => item.id === manningId) ?? FLOOD_LAB_MANNING[0];
+  const selectedOutlet =
+    FLOOD_LAB_OUTLET_BC.find((item) => item.id === outletId) ?? FLOOD_LAB_OUTLET_BC[0];
   const [geoRef, setGeoRef] = useState<GeoReference | null | undefined>(undefined);
   const [splatDemBusy, setSplatDemBusy] = useState(false);
   const [demBusy, setDemBusy] = useState(false);
+
+  useLayoutEffect(() => {
+    const form = coordinateFormRef.current;
+    if (!form) return;
+    const values = aoi ? aoi.map(String) : ["", "", "", ""];
+    for (const [index, name] of ["west", "south", "east", "north"].entries()) {
+      const input = form.elements.namedItem(name) as HTMLInputElement | null;
+      if (input) input.value = values[index];
+    }
+  }, [aoi]);
+
+  const aoiKey = aoi?.join(",") ?? "no-aoi";
+  const aoiCoordinateErrorMessage =
+    aoiCoordinateError?.aoiKey === aoiKey ? aoiCoordinateError.message : null;
   const [openTopoKey, setOpenTopoKey] = useState(() => readStoredOpenTopoApiKey() ?? "");
   const [openTopoSaved, setOpenTopoSaved] = useState(false);
 
   const resolvedWorkspace =
     workspace ??
-    queueItems.find((i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace)?.workspace ??
+    queueItems.find((i) => (i.suite ?? "reconstruction") === "geospatial" && i.workspace)
+      ?.workspace ??
     queueItems.find((i) => i.workspace)?.workspace ??
     null;
 
@@ -158,20 +185,22 @@ export default function GeoScenarioInspector() {
 
       {experimentalOn && (
         <div className="border-b border-danger/30 bg-danger/10 px-3 py-2 text-[10px] leading-snug text-danger/90">
-          Experimental Mode is on via the TitleBar. Experimental hydro adapters stay behind promotion
-          gates.
+          Experimental Mode is on via the TitleBar. Experimental hydro adapters stay behind
+          promotion gates.
         </div>
       )}
 
       <CollapsibleSection title="Geospatial" defaultOpen badge={meta.name}>
         <div className="py-2">
-          <div className="font-display text-sm font-semibold tracking-tight text-ink">{meta.name}</div>
+          <div className="font-display text-sm font-semibold tracking-tight text-ink">
+            {meta.name}
+          </div>
           <div className="mt-1 text-[11px] text-ink-dim">{meta.engineLabel}</div>
           <p className="mt-2 text-[11px] leading-relaxed text-ink-dim">{meta.note}</p>
           {demoMode && (
             <p className="mt-2 rounded border border-[var(--color-gauge)]/40 bg-[var(--color-gauge)]/10 px-2 py-1.5 text-[10px] leading-snug text-[var(--color-gauge)]">
-              Demo mode — DEM missing or synthetic. Soft/HAND = Live preview (non-authoritative). Not
-              scientifically authoritative.
+              Demo mode — DEM missing or synthetic. Soft/HAND = Live preview (non-authoritative).
+              Not scientifically authoritative.
             </p>
           )}
           {!demoMode && dem && !dem.synthetic && (
@@ -185,7 +214,10 @@ export default function GeoScenarioInspector() {
             <button
               type="button"
               className="btn px-2 py-1 text-[11px]"
-              onClick={() => setTool("drawAoi")}
+              onClick={() => {
+                setTool("drawAoi");
+                setViewMode("2d");
+              }}
               title="Draw or edit the area of interest on the map"
             >
               {aoi ? "Edit AOI" : "Draw AOI"}
@@ -196,6 +228,85 @@ export default function GeoScenarioInspector() {
               </span>
             )}
           </div>
+          <details className="mt-2 rounded border border-edge/70 px-2 py-1.5">
+            <summary className="cursor-pointer text-[10px] text-ink-dim">
+              Enter AOI coordinates instead
+            </summary>
+            <form
+              ref={coordinateFormRef}
+              className="mt-2 space-y-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = new FormData(event.currentTarget);
+                const values = ["west", "south", "east", "north"].map((name) =>
+                  String(form.get(name) ?? "").trim(),
+                );
+                const [west, south, east, north] = values.map(Number);
+                const coordinates: AoiWgs84 = [west, south, east, north];
+                if (
+                  values.some((value) => value === "") ||
+                  !aoiIsValid(coordinates) ||
+                  coordinates[0] < -180 ||
+                  coordinates[0] > 180 ||
+                  coordinates[2] < -180 ||
+                  coordinates[2] > 180 ||
+                  coordinates[1] < -90 ||
+                  coordinates[1] > 90 ||
+                  coordinates[3] < -90 ||
+                  coordinates[3] > 90
+                ) {
+                  setAoiCoordinateError({
+                    aoiKey,
+                    message: "Enter valid bounds: west < east, south < north, within WGS84 limits.",
+                  });
+                  return;
+                }
+                setAoiCoordinateError(null);
+                void commitGeoAoi(coordinates);
+              }}
+            >
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { name: "west", label: "West longitude", min: -180, max: 180 },
+                    { name: "south", label: "South latitude", min: -90, max: 90 },
+                    { name: "east", label: "East longitude", min: -180, max: 180 },
+                    { name: "north", label: "North latitude", min: -90, max: 90 },
+                  ] as const
+                ).map((coordinate, index) => (
+                  <label
+                    key={coordinate.name}
+                    className="flex flex-col gap-0.5 text-[9px] text-ink-dim"
+                  >
+                    {coordinate.label} (°)
+                    <input
+                      name={coordinate.name}
+                      type="number"
+                      min={coordinate.min}
+                      max={coordinate.max}
+                      step="any"
+                      required
+                      defaultValue={aoi?.[index] ?? ""}
+                      aria-invalid={!!aoiCoordinateErrorMessage}
+                      aria-describedby={
+                        aoiCoordinateErrorMessage ? "aoi-coordinate-error" : undefined
+                      }
+                      onChange={() => setAoiCoordinateError(null)}
+                      className="min-w-0 rounded border border-edge bg-bg px-1.5 py-1 text-ink"
+                    />
+                  </label>
+                ))}
+              </div>
+              {aoiCoordinateErrorMessage && (
+                <p id="aoi-coordinate-error" role="alert" className="text-[10px] text-danger">
+                  {aoiCoordinateErrorMessage}
+                </p>
+              )}
+              <button type="submit" className="btn px-2 py-1 text-[10px]">
+                Apply coordinates
+              </button>
+            </form>
+          </details>
           <p className="mt-2 text-[10px] leading-snug text-ink-dim">
             AOI binds the flood domain. Esri World Imagery is the default basemap — attribution
             required (see About).
@@ -216,6 +327,7 @@ export default function GeoScenarioInspector() {
                   type="button"
                   className={`btn px-2 py-0.5 text-[10px] ${hyetoId === h.id ? "btn-active" : ""}`}
                   onClick={() => setHyetoId(h.id)}
+                  aria-pressed={hyetoId === h.id}
                   title={`${h.authority} — not calibrated`}
                 >
                   {h.label}
@@ -234,6 +346,7 @@ export default function GeoScenarioInspector() {
                   type="button"
                   className={`btn px-2 py-0.5 text-[10px] ${manningId === m.id ? "btn-active" : ""}`}
                   onClick={() => setManningId(m.id)}
+                  aria-pressed={manningId === m.id}
                 >
                   {m.label} ({m.n})
                 </button>
@@ -251,6 +364,7 @@ export default function GeoScenarioInspector() {
                   type="button"
                   className={`btn px-2 py-0.5 text-[10px] ${outletId === o.id ? "btn-active" : ""}`}
                   onClick={() => setOutletId(o.id)}
+                  aria-pressed={outletId === o.id}
                   title={o.detail}
                 >
                   {o.label}
@@ -307,11 +421,7 @@ export default function GeoScenarioInspector() {
             </div>
             {dem && (
               <p className="mt-1.5 font-mono text-[9px] leading-snug text-ink-dim">
-                {dem.synthetic
-                  ? "synthetic"
-                  : dem.bedSource === "proxy"
-                    ? "splat proxy"
-                    : "real"}
+                {dem.synthetic ? "synthetic" : dem.bedSource === "proxy" ? "splat proxy" : "real"}
                 {dem.dtmPath ? ` · ${dem.dtmPath.split(/[/\\]/).pop()}` : ""}
               </p>
             )}
@@ -359,8 +469,8 @@ export default function GeoScenarioInspector() {
       <CollapsibleSection title="Satellite Splat" defaultOpen={false} badge="anywhere">
         <div className="space-y-2 p-2">
           <p className="text-[9px] leading-snug text-ink-dim">
-            Build a Gaussian splat straight from public elevation + imagery catalogs — no
-            on-site capture or reconstruction required. Works for any AOI on the map.
+            Build a Gaussian splat straight from public elevation + imagery catalogs — no on-site
+            capture or reconstruction required. Works for any AOI on the map.
           </p>
           <button
             type="button"
@@ -377,7 +487,9 @@ export default function GeoScenarioInspector() {
             <p className="mt-1.5 font-mono text-[9px] leading-snug text-ink-dim">
               {satSplatProduct.points} pts · {satSplatProduct.cols}×{satSplatProduct.rows} ·{" "}
               {satSplatProduct.demSource}
-              {satSplatProduct.imagerySource ? ` + ${satSplatProduct.imagerySource}` : " (colormap)"}
+              {satSplatProduct.imagerySource
+                ? ` + ${satSplatProduct.imagerySource}`
+                : " (colormap)"}
             </p>
           )}
           <p className="text-[9px] leading-snug text-[var(--color-gauge)]">
@@ -399,11 +511,66 @@ export default function GeoScenarioInspector() {
           <button
             type="button"
             className="btn btn-primary px-2 py-1 text-[11px]"
-            disabled={running || !aoi}
-            title={aoi ? "Start scientific flood on the committed AOI" : "Draw an AOI first"}
-            onClick={() => void startScientificFlood({ allowDemo: true })}
+            disabled={running || floodStarting || aoiPending || !aoi}
+            title={
+              floodStarting
+                ? "Starting flood run…"
+                : aoiPending
+                  ? "Wait for the AOI to finish committing"
+                  : aoi
+                    ? "Start scientific flood on the committed AOI"
+                    : "Draw an AOI first"
+            }
+            onClick={() =>
+              void startScientificFlood({
+                allowDemo: true,
+                scenarioOverrides: {
+                  rainfall: {
+                    template: selectedHyetograph.id,
+                    rateMmPerHour: Math.max(
+                      ...selectedHyetograph.samples.map((sample) => sample.mmPerHour),
+                    ),
+                    hyetograph: selectedHyetograph.samples,
+                    authority: selectedHyetograph.authority,
+                  },
+                  roughness: {
+                    preset: selectedManning.id,
+                    manningN: selectedManning.n,
+                    presets: Object.fromEntries(
+                      FLOOD_LAB_MANNING.map((preset) => [preset.id, preset.n]),
+                    ),
+                  },
+                  boundaryConditions: {
+                    outlet:
+                      selectedOutlet.id === "south_stage"
+                        ? {
+                            type: "stage",
+                            stageM: 0.4,
+                            edge: "south",
+                            note: selectedOutlet.detail,
+                          }
+                        : {
+                            type: selectedOutlet.id === "free_outfall" ? "free_outfall" : "closed",
+                            edge: "south",
+                            note: selectedOutlet.detail,
+                          },
+                    walls: "reflective",
+                  },
+                  rainfallTemplate: selectedHyetograph.id,
+                  manningPreset: selectedManning.id,
+                  manningN: selectedManning.n,
+                  outletBc: selectedOutlet.id,
+                },
+              })
+            }
           >
-            {running ? "Running…" : scientific?.state === "failed" ? "Retry flood" : "Start flood"}
+            {floodStarting
+              ? "Starting…"
+              : running
+                ? "Running…"
+                : scientific?.state === "failed"
+                  ? "Retry flood"
+                  : "Start flood"}
           </button>
           <button
             type="button"
@@ -416,8 +583,20 @@ export default function GeoScenarioInspector() {
           <button
             type="button"
             className="btn px-2 py-1 text-[11px]"
-            disabled={running}
-            title="Write COG/GeoTIFF, GeoJSON, time series, and scenario manifest (DEM-only OK)"
+            disabled={
+              running || floodStarting || aoiPending || !aoi || !dem || (!!scientific && scientific.state !== "done")
+            }
+            title={
+              aoiPending
+                ? "Wait for the AOI to finish committing"
+                : !aoi
+                  ? "Draw an AOI first"
+                  : !dem
+                    ? "Stage a DEM first"
+                    : scientific?.state === "done"
+                      ? "Export products from the completed flood run for this AOI"
+                      : "Export a DEM-only preview when this project has no previous flood runs"
+            }
             onClick={() => void exportFloodProducts()}
           >
             Export products
@@ -427,7 +606,9 @@ export default function GeoScenarioInspector() {
           <div className="pb-2 font-mono text-[10px] text-ink-dim">
             ANUGA {floodEngine.anugaReady ? "launcher found" : "not installed"} · SWMM{" "}
             {floodEngine.swmmReady ? "scaffold ready" : "scaffold"}
-            {dem ? ` · DEM ${dem.synthetic ? "synthetic" : dem.bedSource === "proxy" ? "splat proxy" : "real"}` : ""}
+            {dem
+              ? ` · DEM ${dem.synthetic ? "synthetic" : dem.bedSource === "proxy" ? "splat proxy" : "real"}`
+              : ""}
           </div>
         )}
         {scientific && (
@@ -451,7 +632,9 @@ export default function GeoScenarioInspector() {
                 ? "Flood run failed. Try again or check engine status above."
                 : scientific.detail}
             </p>
-            {scientific.massBalance != null && (
+            {scientific.massBalance != null &&
+              scientific.mode === "anuga" &&
+              scenario?.authority === "scientific" && (
               <div className="flex justify-between gap-2">
                 <span className="text-ink-dim">Mass bal.</span>
                 <span className="tabular-nums">{scientific.massBalance.toFixed(4)}</span>
@@ -490,7 +673,9 @@ export default function GeoScenarioInspector() {
           </div>
           <div className="flex justify-between gap-2">
             <dt className="text-ink-dim">Max depth</dt>
-            <dd className="tabular-nums text-[var(--color-hydro)]">{snap.maxDepthM.toFixed(2)} m</dd>
+            <dd className="tabular-nums text-[var(--color-hydro)]">
+              {snap.maxDepthM.toFixed(2)} m
+            </dd>
           </div>
           <div className="flex justify-between gap-2">
             <dt className="text-ink-dim">Hazard</dt>
@@ -567,7 +752,11 @@ export default function GeoScenarioInspector() {
               aria-label="OpenTopography API key"
             />
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={saveOpenTopoKey}>
+              <button
+                type="button"
+                className="btn px-2 py-0.5 text-[10px]"
+                onClick={saveOpenTopoKey}
+              >
                 Save key
               </button>
               <button
@@ -582,14 +771,12 @@ export default function GeoScenarioInspector() {
               >
                 Clear
               </button>
-              {openTopoSaved && (
-                <span className="text-[9px] text-[var(--color-hydro)]">Saved</span>
-              )}
+              {openTopoSaved && <span className="text-[9px] text-[var(--color-hydro)]">Saved</span>}
             </div>
             <p className="mt-1.5 text-[9px] leading-snug text-ink-dim">
-              Persisted like the Cesium ion token (
-              <span className="font-mono">localStorage</span>). Register at opentopography.org.
-              Env <span className="font-mono">OPENTOPOGRAPHY_API_KEY</span> also works.
+              Persisted like the Cesium ion token (<span className="font-mono">localStorage</span>).
+              Register at opentopography.org. Env{" "}
+              <span className="font-mono">OPENTOPOGRAPHY_API_KEY</span> also works.
             </p>
           </div>
           <div className="flex items-center justify-between gap-3 border-t border-edge/60 pt-2">
@@ -610,9 +797,9 @@ export default function GeoScenarioInspector() {
           </div>
           <p className="pb-1 text-[10px] leading-snug text-ink-dim">
             Soft + HAND = Live preview. Scientific ANUGA streams on the CPU lane via{" "}
-            <span className="font-mono">sim://event</span>. Globe uses ellipsoid + flood overlay until
-            local terrain tiles (<span className="font-mono">layer.json</span>) are staged — ion stays
-            blank on Standard.
+            <span className="font-mono">sim://event</span>. Globe uses ellipsoid + flood overlay
+            until local terrain tiles (<span className="font-mono">layer.json</span>) are staged —
+            ion stays blank on Standard.
           </p>
         </div>
       </CollapsibleSection>
@@ -626,8 +813,8 @@ export default function GeoScenarioInspector() {
         <div className="space-y-2 py-2 text-[10px] leading-snug text-ink-dim">
           <p>
             Standard flood path: <span className="text-ink">ANUGA</span> (scientific) +{" "}
-            <span className="text-ink">SWMM</span> network + soft/HAND preview. Demo extents are never
-            authoritative.
+            <span className="text-ink">SWMM</span> network + soft/HAND preview. Demo extents are
+            never authoritative.
           </p>
           <p>
             Experimental hydro (TRITON / Wflow / GeoClaw external; GPL plugins only outside the

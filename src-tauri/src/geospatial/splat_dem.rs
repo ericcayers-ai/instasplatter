@@ -150,7 +150,8 @@ pub fn rasterize_splat_to_geotiff(
     validate_aoi(aoi)?;
 
     let origin = geo.local_origin.ok_or_else(|| {
-        "GeoReference has no local origin — recompute geo registration before splat DEM.".to_string()
+        "GeoReference has no local origin — recompute geo registration before splat DEM."
+            .to_string()
     })?;
     let frame = EnuFrame::from_geodetic(Geodetic {
         lon_deg: origin[0],
@@ -311,10 +312,7 @@ fn validate_aoi(aoi: [f64; 4]) -> Result<(), String> {
 }
 
 fn first_scenario_aoi(project: &Project) -> Option<[f64; 4]> {
-    project
-        .flood_scenarios
-        .iter()
-        .find_map(|s| s.aoi_wgs84)
+    project.flood_scenarios.iter().find_map(|s| s.aoi_wgs84)
 }
 
 fn rewrite_preview_bed_source(derived: &Path, bed_source: &str) -> Result<(), String> {
@@ -453,12 +451,7 @@ mod tests {
         let geo = metric_geo(lon, lat, h0);
         let cloud = sample_cloud_flat(8, 5.0);
         // ~40 m footprint around origin → small AOI in degrees
-        let aoi = [
-            lon - 0.0004,
-            lat - 0.0004,
-            lon + 0.0004,
-            lat + 0.0004,
-        ];
+        let aoi = [lon - 0.0004, lat - 0.0004, lon + 0.0004, lat + 0.0004];
 
         let stats = rasterize_splat_to_geotiff(&cloud, &geo, None, aoi, 2.0, &dest).unwrap();
         assert!(dest.exists());
@@ -563,7 +556,10 @@ mod tests {
 
         assert_eq!(prod.bed_source.as_deref(), Some("proxy"));
         assert!(!prod.synthetic);
-        assert!(prod.notes.iter().any(|n| n.contains("non-authoritative") || n.contains("proxy")));
+        assert!(prod
+            .notes
+            .iter()
+            .any(|n| n.contains("non-authoritative") || n.contains("proxy")));
         let splat_tif = ws.join("geo").join("derived").join("splat_dem.tif");
         assert!(splat_tif.exists());
         assert!(Path::new(prod.dtm_path.as_ref().unwrap()).exists());

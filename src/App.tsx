@@ -5,6 +5,11 @@ import GeoViewport from "./geospatial/GeoViewport";
 import AppShell from "./components/shell/AppShell";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { useStore } from "./state/store";
+import { api } from "./lib/ipc";
+
+// Local WebView smoke checks can inspect state and defer IPC without mock wiring.
+// The production build removes these development-only test hooks.
+if (import.meta.env.DEV) Object.assign(window, { __INSTA_STORE__: useStore, __INSTA_API__: api });
 
 function LoadingShell() {
   return (

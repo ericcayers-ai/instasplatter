@@ -30,6 +30,10 @@ import {
   type Vec3,
 } from "./camera";
 import { PostChain } from "./post";
+import { frustumPlanes, visibleChunkIndices } from "./frustum";
+import { eyeFromViewMatrix, rotationOnlyView } from "../geospatial/precision";
+
+import type { SplatChunkMeta } from "./worker";
 
 type SplatWorkerMessage =
   | {
@@ -39,10 +43,35 @@ type SplatWorkerMessage =
       sceneRadius: number;
       count: number;
       canInterpolate: boolean;
+      chunks?: SplatChunkMeta[];
     }
-  | { type: "lerped"; texdata: Uint32Array; count: number }
-  | { type: "sorted"; depthIndex: Uint32Array; count: number }
+  | { type: "lerped"; texdata: Uint32Array; count: number; chunks?: SplatChunkMeta[] }
+  | {
+      type: "sorted";
+      depthIndex: Uint32Array;
+      count: number;
+      candidateCount?: number;
+      stride?: number;
+    }
   | { type: "error"; message: string };
+
+/** Per-frame splat pipeline counters (hardware-independent). */
+export interface SplatFrameStats {
+  /** Splats in the loaded cloud. */
+  totalSplats: number;
+  /** Spatial chunks in the cloud (0 when the set is too small to partition). */
+  chunkCount: number;
+  /** Chunks surviving frustum culling this frame. */
+  visibleChunks: number;
+  /** Splats considered for sorting this frame (visible chunks before the budget stride). */
+  candidateSplats: number;
+  /** Splats actually drawn this frame. */
+  drawnSplats: number;
+  /** Uniform stride applied to stay inside the point budget (1 = none). */
+  budgetStride: number;
+  /** Cumulative count of sort requests posted to the worker (diagnostic). */
+  sortRequests: number;
+}
 
 const VS = `#version 300 es
 precision highp float;
@@ -52,6 +81,12 @@ precision highp usampler2D;
 uniform usampler2D u_texture;
 uniform mat4 u_proj;
 uniform mat4 u_view;
+// Rotation-only view (u_view with its translation column zeroed) plus the camera position.
+// Splat centres are made camera-relative before the view transform so float32 precision is spent
+// on the distance to the camera instead of the distance to the ENU origin: 0.03 mm at 1 km,
+// 0.98 mm at 20 km absolute, versus <0.01 mm for anything on screen. See geospatial/precision.ts.
+uniform mat4 u_view_rot;
+uniform vec3 u_eye;
 uniform mat4 u_model;
 uniform vec2 u_focal;
 uniform vec2 u_viewport;
@@ -68,7 +103,16 @@ void main() {
   uvec4 cen = texelFetch(u_texture, t0, 0);
   vec3 center = (u_model * vec4(uintBitsToFloat(cen.xyz), 1.0)).xyz;
 
-  vec4 cam = u_view * vec4(center, 1.0);
+  // Camera-relative: subtract the eye in the vertex stage, then rotate. The two forms are
+  // mathematically identical; this one keeps the subtracted quantity small.
+  vec4 cam = u_view_rot * vec4(center - u_eye, 1.0);
+  // The COLMAP view convention uses positive camera-space z for points in
+  // front of the camera. Reject invalid depth before the 1/z covariance
+  // projection below so behind-camera splats cannot produce infinities.
+  if (any(isnan(cam.xyz)) || any(isinf(cam.xyz)) || !(cam.z > 1e-4)) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    return;
+  }
   vec4 pos2d = u_proj * cam;
   float clip = 1.2 * pos2d.w;
   if (pos2d.z < -clip || pos2d.x < -clip || pos2d.x > clip || pos2d.y < -clip || pos2d.y > clip) {
@@ -96,20 +140,40 @@ void main() {
     0.0, u_focal.y * invz, -u_focal.y * cam.y * invz * invz,
     0.0, 0.0, 0.0
   );
-  mat3 W = transpose(mat3(u_view));
+  mat3 W = transpose(mat3(u_view_rot));
   mat3 T = W * J;
   mat3 cov2d = transpose(T) * Vrk * T;
 
-  // 2D mip filter: a low-pass floor of ~0.3px, as in Mip-Splatting.
-  cov2d[0][0] += 0.3;
-  cov2d[1][1] += 0.3;
+  float covXX = cov2d[0][0];
+  float covXY = cov2d[0][1];
+  float covYY = cov2d[1][1];
+  if (isnan(covXX) || isinf(covXX) || isnan(covXY) || isinf(covXY) ||
+      isnan(covYY) || isinf(covYY)) {
+    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+    return;
+  }
+  // Larger ellipses are clipped to 1024px below, so cap the covariance before
+  // subtraction and length() to keep finite inputs from overflowing there.
+  covXX = clamp(covXX, 0.0, 1e12);
+  covXY = clamp(covXY, -1e12, 1e12);
+  covYY = clamp(covYY, 0.0, 1e12);
 
-  float mid = (cov2d[0][0] + cov2d[1][1]) * 0.5;
-  float rad = length(vec2((cov2d[0][0] - cov2d[1][1]) * 0.5, cov2d[0][1]));
-  float l1 = mid + rad;
-  float l2 = mid - rad;
-  if (l2 < 0.0) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
-  vec2 dir = normalize(vec2(cov2d[0][1], l1 - cov2d[0][0]));
+  // 2D mip filter: a low-pass floor of ~0.3px, as in Mip-Splatting.
+  covXX += 0.3;
+  covYY += 0.3;
+
+  float mid = (covXX + covYY) * 0.5;
+  float rad = length(vec2((covXX - covYY) * 0.5, covXY));
+  // Half-float covariance packing and projection rounding can make the
+  // smaller eigenvalue slightly negative. Keep the existing 0.3px low-pass
+  // floor for both axes instead of dropping the whole Gaussian.
+  float l1 = max(mid + rad, 0.3);
+  float l2 = max(mid - rad, 0.3);
+  vec2 eigenvector = vec2(covXY, l1 - covXX);
+  float eigenvectorLength2 = dot(eigenvector, eigenvector);
+  vec2 dir = eigenvectorLength2 > 1e-12
+    ? eigenvector * inversesqrt(eigenvectorLength2)
+    : (covXX >= covYY ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
   vec2 major = min(sqrt(2.0 * l1), 1024.0) * dir;
   vec2 minor = min(sqrt(2.0 * l2), 1024.0) * vec2(dir.y, -dir.x);
 
@@ -261,6 +325,27 @@ export class SplatRenderer {
   private worker: Worker;
   private count = 0;
   private sortedCount = 0;
+  /** Spatial chunks reported by the worker, in model space. */
+  private chunks: SplatChunkMeta[] = [];
+  private chunkCenters: Float32Array = new Float32Array(0);
+  private chunkRadii: Float32Array = new Float32Array(0);
+  private visibleChunks: number[] | null = null;
+  private lastVisibleChunks: number[] | null = null;
+  private sortRequests = 0;
+  private lastFrameStats: SplatFrameStats = {
+    totalSplats: 0,
+    chunkCount: 0,
+    visibleChunks: 0,
+    candidateSplats: 0,
+    drawnSplats: 0,
+    budgetStride: 1,
+    sortRequests: 0,
+  };
+  /** Frustum culling on the spatial chunks. Large geospatial sets need this. */
+  public cullingEnabled = true;
+  /** Upper bound on splats submitted for sorting/drawing; excess is stride-sampled. */
+  public pointBudget = 4_000_000;
+  public onSplatStats: ((stats: SplatFrameStats) => void) | null = null;
   private lastSortVP: Float32Array | null = null;
   private sortPending = false;
   private disposed = false;
@@ -269,6 +354,8 @@ export class SplatRenderer {
   private depthTest: boolean;
   private uProj: WebGLUniformLocation;
   private uView: WebGLUniformLocation;
+  private uViewRot: WebGLUniformLocation;
+  private uEye: WebGLUniformLocation;
   private uModel: WebGLUniformLocation;
   private uFocal: WebGLUniformLocation;
   private uViewport: WebGLUniformLocation;
@@ -367,6 +454,8 @@ export class SplatRenderer {
 
     this.uProj = gl.getUniformLocation(this.program, "u_proj")!;
     this.uView = gl.getUniformLocation(this.program, "u_view")!;
+    this.uViewRot = gl.getUniformLocation(this.program, "u_view_rot")!;
+    this.uEye = gl.getUniformLocation(this.program, "u_eye")!;
     this.uModel = gl.getUniformLocation(this.program, "u_model")!;
     this.uFocal = gl.getUniformLocation(this.program, "u_focal")!;
     this.uViewport = gl.getUniformLocation(this.program, "u_viewport")!;
@@ -743,6 +832,7 @@ export class SplatRenderer {
       this.sceneRadius = msg.sceneRadius;
       this.pivot = msg.sceneCenter;
       this.uploadTex(texdata, msg.count);
+      if (msg.chunks) this.setChunks(msg.chunks);
 
       if (this.pendingAutoFrame && msg.sceneRadius > 0) {
         this.frameScene();
@@ -757,12 +847,23 @@ export class SplatRenderer {
     } else if (msg.type === "lerped") {
       this.lerpPending = false;
       this.uploadTex(msg.texdata, msg.count);
+      if (msg.chunks) this.setChunks(msg.chunks);
     } else if (msg.type === "sorted") {
       const idx: Uint32Array = msg.depthIndex;
       this.sortedCount = Math.min(msg.count, this.count);
       this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.indexBuffer);
       this.gl.bufferData(this.gl.ARRAY_BUFFER, idx, this.gl.DYNAMIC_DRAW);
       this.sortPending = false;
+      this.lastFrameStats = {
+        totalSplats: this.count,
+        chunkCount: this.chunks.length,
+        visibleChunks: this.visibleChunks ? this.visibleChunks.length : this.chunks.length,
+        candidateSplats: msg.candidateCount ?? msg.count,
+        drawnSplats: this.sortedCount,
+        budgetStride: msg.stride ?? 1,
+        sortRequests: this.sortRequests,
+      };
+      this.onSplatStats?.(this.lastFrameStats);
     } else if (msg.type === "error") {
       console.error("splat worker:", msg.message);
       this.sortPending = false;
@@ -825,6 +926,15 @@ export class SplatRenderer {
    */
   renderPass(now: number, shared: SharedFrameMatrices) {
     this.frame(now, shared);
+  }
+
+  /**
+   * Draw one frame on demand. Used by hosts that own the loop (`manageLoop: false`) and by
+   * `tools/bench/splat-bench.ts`, which has to time frames without depending on
+   * requestAnimationFrame (headless Chromium throttles rAF, which would measure the throttler).
+   */
+  renderFrame(now: number) {
+    this.frame(now);
   }
 
   private frame(now: number, shared?: SharedFrameMatrices) {
@@ -929,6 +1039,9 @@ export class SplatRenderer {
       gl.uniform1i(this.uTexture, 0);
       gl.uniformMatrix4fv(this.uProj, false, proj);
       gl.uniformMatrix4fv(this.uView, false, view);
+      gl.uniformMatrix4fv(this.uViewRot, false, rotationOnlyView(view));
+      const eye = eyeFromViewMatrix(view);
+      gl.uniform3f(this.uEye, eye[0], eye[1], eye[2]);
       gl.uniformMatrix4fv(this.uModel, false, model);
       gl.uniform2f(this.uFocal, focal, focal);
       gl.uniform2f(this.uViewport, w, h);
@@ -990,11 +1103,109 @@ export class SplatRenderer {
     // Sorting happens against proj * view * model, so a model rotation
     // re-sorts exactly like a camera move.
     const vp = mat4Mul(mat4Mul(proj, view), model);
-    if (!this.sortPending && this.needsSort(vp)) {
+    const visible = this.cullingEnabled
+      ? this.computeVisibleChunks(model, proj, view)
+      : null;
+    const visibleChanged = !SplatRenderer.listsEqual(visible, this.lastVisibleChunks);
+    if (!this.sortPending && (this.needsSort(vp) || visibleChanged)) {
       this.sortPending = true;
+      this.sortRequests++;
       this.lastSortVP = vp;
-      this.worker.postMessage({ type: "sort", viewProj: vp });
+      this.visibleChunks = visible;
+      this.lastVisibleChunks = visible ? visible.slice() : null;
+      this.worker.postMessage({
+        type: "sort",
+        viewProj: vp,
+        visibleChunks: visible,
+        budget: this.pointBudget,
+      });
     }
+  }
+
+  /** Adopt the worker's spatial partition and cache per-chunk spheres for culling. */
+  private setChunks(chunks: SplatChunkMeta[]) {
+    this.chunks = chunks;
+    const n = chunks.length;
+    this.chunkCenters = new Float32Array(n * 3);
+    this.chunkRadii = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const ch = chunks[i];
+      const cx = 0.5 * (ch.minM[0] + ch.maxM[0]);
+      const cy = 0.5 * (ch.minM[1] + ch.maxM[1]);
+      const cz = 0.5 * (ch.minM[2] + ch.maxM[2]);
+      this.chunkCenters[i * 3] = cx;
+      this.chunkCenters[i * 3 + 1] = cy;
+      this.chunkCenters[i * 3 + 2] = cz;
+      this.chunkRadii[i] = Math.hypot(
+        0.5 * (ch.maxM[0] - ch.minM[0]),
+        0.5 * (ch.maxM[1] - ch.minM[1]),
+        0.5 * (ch.maxM[2] - ch.minM[2]),
+      );
+    }
+    this.visibleChunks = null;
+    this.lastVisibleChunks = null;
+    this.lastSortVP = null;
+  }
+
+  /** Live counters from the last completed frame. */
+  get frameStats(): SplatFrameStats {
+    return { ...this.lastFrameStats };
+  }
+
+  get chunkCount(): number {
+    return this.chunks.length;
+  }
+
+  /** Diagnostic snapshot of the spatial partition (used by tools/bench and bug reports). */
+  debugChunks(limit = 3): {
+    count: number;
+    radii: number[];
+    centres: [number, number, number][];
+    splatsPerChunk: number[];
+  } {
+    const n = Math.min(limit, this.chunks.length);
+    const radii: number[] = [];
+    const centres: [number, number, number][] = [];
+    const splatsPerChunk: number[] = [];
+    for (let i = 0; i < n; i++) {
+      radii.push(this.chunkRadii[i]);
+      centres.push([
+        this.chunkCenters[i * 3],
+        this.chunkCenters[i * 3 + 1],
+        this.chunkCenters[i * 3 + 2],
+      ]);
+      splatsPerChunk.push(this.chunks[i].count);
+    }
+    return { count: this.chunks.length, radii, centres, splatsPerChunk };
+  }
+
+  /**
+   * Frustum culling of the spatial chunks in one pass over their bounding spheres.
+   *
+   * Planes are extracted from `proj * view * model` once per frame; the test is conservative
+   * (a chunk is kept unless it is fully outside a plane), so no visible geometry is dropped.
+   * This is the Hierarchical-3DGS / Octree-GS idea at chunk granularity: the cost of a frame
+   * follows what is on screen instead of the size of the scene.
+   */
+  private computeVisibleChunks(
+    model: Float32Array,
+    proj: Float32Array,
+    view: Float32Array,
+  ): number[] | null {
+    if (this.chunks.length <= 1) return null;
+    const mvp = mat4Mul(mat4Mul(proj, view), model);
+    const planes = frustumPlanes(mvp);
+    const scale = Math.max(this.modelScale[0], this.modelScale[1], this.modelScale[2]);
+    return visibleChunkIndices(planes, this.chunkCenters, this.chunkRadii, model, scale);
+  }
+
+  private static listsEqual(a: number[] | null, b: number[] | null): boolean {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
   }
 
   private projectSunToScreen(

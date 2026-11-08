@@ -7,7 +7,7 @@
 
 use crate::geospatial::dem::{self, DemProduct};
 use crate::geospatial::events::{
-    GeoEvent, SimEvent, GEO_EVENT_CHANNEL, SIM_EVENT_CHANNEL,
+    GeoEvent, HydrographSample, SimEvent, GEO_EVENT_CHANNEL, SIM_EVENT_CHANNEL,
 };
 use crate::geospatial::registration::{plan_extent, ExtentPlan, ExtentPlanInput};
 use crate::project::{FloodScenario, Project, SimulationRun};
@@ -294,10 +294,7 @@ pub fn refuse_gpl_bundle(id: HydroEngine) -> bool {
 }
 
 /// Attempt to promote an experimental engine — requires full gate checklist.
-pub fn try_promote_to_standard(
-    id: HydroEngine,
-    gates: &HydroPromotionGates,
-) -> Result<(), String> {
+pub fn try_promote_to_standard(id: HydroEngine, gates: &HydroPromotionGates) -> Result<(), String> {
     let d = engine_descriptor(id).ok_or_else(|| format!("Unknown hydro engine: {id:?}"))?;
     if matches!(d.install_kind, HydroInstallKind::ExternalGplPlugin) {
         return Err(format!(
@@ -335,6 +332,20 @@ pub struct HydroJobSpec {
     pub extent: Option<ExtentPlanInput>,
     pub ensemble: Option<EnsembleSpec>,
     pub enable_swmm: bool,
+    pub scenario_overrides: Option<FloodScenarioOverrides>,
+}
+
+/// User-selected Flood lab forcing and boundary presets for one run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FloodScenarioOverrides {
+    pub rainfall: Option<serde_json::Value>,
+    pub roughness: Option<serde_json::Value>,
+    pub boundary_conditions: Option<serde_json::Value>,
+    pub rainfall_template: Option<String>,
+    pub manning_preset: Option<String>,
+    pub manning_n: Option<f64>,
+    pub outlet_bc: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -600,7 +611,14 @@ pub fn commit_flood_aoi(
     workspace: &Path,
     scenario_id: &str,
     aoi_wgs84: [f64; 4],
-) -> Result<(FloodScenario, ExtentPlan, Option<crate::project::GeoReference>), String> {
+) -> Result<
+    (
+        FloodScenario,
+        ExtentPlan,
+        Option<crate::project::GeoReference>,
+    ),
+    String,
+> {
     let [west, south, east, north] = aoi_wgs84;
     if !(west < east && south < north) {
         return Err("AOI must have west < east and south < north".into());
@@ -641,16 +659,158 @@ pub fn commit_flood_aoi(
 }
 
 fn ensure_scenario(project: &mut Project, scenario_id: &str) -> FloodScenario {
-    if let Some(s) = project
-        .flood_scenarios
-        .iter()
-        .find(|s| s.id == scenario_id)
-    {
+    if let Some(s) = project.flood_scenarios.iter().find(|s| s.id == scenario_id) {
         return s.clone();
     }
     let s = default_scenario(scenario_id);
     project.flood_scenarios.push(s.clone());
     s
+}
+
+fn apply_scenario_overrides(
+    scenario: &mut FloodScenario,
+    overrides: &FloodScenarioOverrides,
+) -> Result<(), String> {
+    if let Some(rainfall) = &overrides.rainfall {
+        let template = rainfall
+            .get("template")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Rainfall template is required.".to_string())?;
+        let rate = rainfall
+            .get("rateMmPerHour")
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| "Rainfall rate must be a finite number.".to_string())?;
+        if !rate.is_finite() || !(0.0..=1000.0).contains(&rate) {
+            return Err("Rainfall rate must be between 0 and 1000 mm/h.".into());
+        }
+        let samples = rainfall
+            .get("hyetograph")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "Rainfall hyetograph samples are required.".to_string())?;
+        if !(2..=500).contains(&samples.len()) {
+            return Err("Rainfall hyetograph must contain 2 to 500 samples.".into());
+        }
+        let mut previous_hour = -1.0;
+        for sample in samples {
+            let hour = sample
+                .get("hours")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| "Each hyetograph sample needs a finite hour.".to_string())?;
+            let mm_per_hour = sample
+                .get("mmPerHour")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| {
+                    "Each hyetograph sample needs a finite rainfall rate.".to_string()
+                })?;
+            if !hour.is_finite() || !(0.0..=168.0).contains(&hour) || hour <= previous_hour {
+                return Err("Hyetograph hours must increase from 0 through 168.".into());
+            }
+            if !mm_per_hour.is_finite() || !(0.0..=1000.0).contains(&mm_per_hour) {
+                return Err("Hyetograph rainfall must be between 0 and 1000 mm/h.".into());
+            }
+            previous_hour = hour;
+        }
+        if overrides
+            .rainfall_template
+            .as_deref()
+            .is_some_and(|selected| selected != template)
+        {
+            return Err("Selected rainfall template does not match its hyetograph.".into());
+        }
+        scenario.rainfall = Some(rainfall.clone());
+    }
+
+    if let Some(roughness) = &overrides.roughness {
+        let preset = roughness
+            .get("preset")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Manning roughness preset is required.".to_string())?;
+        let manning_n = roughness
+            .get("manningN")
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| "Manning n must be a finite number.".to_string())?;
+        if !manning_n.is_finite() || !(0.005..=0.2).contains(&manning_n) {
+            return Err("Manning n must be between 0.005 and 0.2.".into());
+        }
+        let preset_n = roughness
+            .get("presets")
+            .and_then(|presets| presets.get(preset))
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| "Manning preset must be included in the preset list.".to_string())?;
+        if !preset_n.is_finite() || (preset_n - manning_n).abs() > 1e-9 {
+            return Err("Manning preset value does not match the selected roughness.".into());
+        }
+        if overrides
+            .manning_preset
+            .as_deref()
+            .is_some_and(|selected| selected != preset)
+            || overrides
+                .manning_n
+                .is_some_and(|selected| (selected - manning_n).abs() > 1e-9)
+        {
+            return Err("Selected Manning preset does not match its roughness value.".into());
+        }
+        scenario.roughness = Some(roughness.clone());
+    }
+
+    if let Some(boundary_conditions) = &overrides.boundary_conditions {
+        let outlet = boundary_conditions
+            .get("outlet")
+            .ok_or_else(|| "Outlet boundary condition is required.".to_string())?;
+        let outlet_type = outlet
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "Outlet boundary condition type is required.".to_string())?;
+        let outlet_id = match outlet_type {
+            "stage" => "south_stage",
+            "free_outfall" => "free_outfall",
+            "closed" => "closed",
+            _ => return Err("Unsupported outlet boundary condition.".into()),
+        };
+        if overrides
+            .outlet_bc
+            .as_deref()
+            .is_some_and(|selected| selected != outlet_id)
+        {
+            return Err("Selected outlet does not match its boundary condition.".into());
+        }
+        if outlet_type == "stage" {
+            let stage = outlet
+                .get("stageM")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or_else(|| "Stage outlet requires a finite stageM value.".to_string())?;
+            let edge = outlet
+                .get("edge")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "Stage outlet requires an edge.".to_string())?;
+            if !stage.is_finite()
+                || !(-100.0..=100.0).contains(&stage)
+                || !["north", "south", "east", "west"].contains(&edge)
+            {
+                return Err("Stage outlet has an invalid stage or edge.".into());
+            }
+        }
+        let edge = outlet
+            .get("edge")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "Outlet boundary condition requires an edge.".to_string())?;
+        if !["north", "south", "east", "west"].contains(&edge) {
+            return Err("Outlet boundary condition has an invalid edge.".into());
+        }
+        if let Some(walls) = boundary_conditions
+            .get("walls")
+            .and_then(serde_json::Value::as_str)
+        {
+            if !["reflective", "open"].contains(&walls) {
+                return Err("Wall boundary condition must be reflective or open.".into());
+            }
+        }
+        scenario.boundary_conditions = Some(boundary_conditions.clone());
+    }
+
+    Ok(())
 }
 
 fn duration_hours(scenario: &FloodScenario) -> f64 {
@@ -700,19 +860,13 @@ pub fn list_run_status(workspace: Option<&str>) -> Vec<FloodRunStatus> {
                     run_id: run.id.clone(),
                     scenario_id: run.scenario_id.clone(),
                     workspace: ws.to_string(),
-                    state: run
-                        .status
-                        .clone()
-                        .unwrap_or_else(|| "done".into()),
+                    state: run.status.clone().unwrap_or_else(|| "done".into()),
                     progress: if run.status.as_deref() == Some("failed") {
                         0.0
                     } else {
                         1.0
                     },
-                    detail: run
-                        .mode
-                        .clone()
-                        .unwrap_or_else(|| "persisted".into()),
+                    detail: run.mode.clone().unwrap_or_else(|| "persisted".into()),
                     mode: run.mode.clone(),
                     engine: run.engine.clone(),
                     engine_version: run.engine_version.clone(),
@@ -763,6 +917,42 @@ fn persist_run(workspace: &Path, run: &SimulationRun) -> Result<(), String> {
 }
 
 /// Intrinsic demo when no Python sidecar is available at all.
+fn demo_hydrograph_samples(duration_h: f64) -> Vec<HydrographSample> {
+    (0..=12)
+        .map(|i| {
+            let hours = duration_h * (i as f64 / 12.0);
+            let u = i as f64 / 12.0;
+            let env = if u < 0.4 {
+                (u / 0.4 * std::f64::consts::FRAC_PI_2).sin()
+            } else {
+                (-(u - 0.4) / 0.35).exp()
+            };
+            HydrographSample {
+                hours,
+                stage_m: 0.3 + 1.8 * env,
+                discharge_cms: 5.0 + 80.0 * env,
+            }
+        })
+        .collect()
+}
+
+fn demo_hydrograph_progress_event(
+    run_id: &str,
+    path: &Path,
+    samples: &[HydrographSample],
+    sample_count: usize,
+) -> Option<SimEvent> {
+    let sample_count = sample_count.min(samples.len());
+    if sample_count < 2 {
+        return None;
+    }
+    Some(SimEvent::Hydrograph {
+        run_id: run_id.to_string(),
+        path: path.to_string_lossy().into_owned(),
+        samples: samples.iter().take(sample_count).cloned().collect(),
+    })
+}
+
 fn run_intrinsic_demo(
     app: &AppHandle,
     cancel: &AtomicBool,
@@ -773,7 +963,9 @@ fn run_intrinsic_demo(
 ) -> Result<(Vec<String>, f64), String> {
     fs::create_dir_all(out_dir.join("checkpoints")).map_err(|e| e.to_string())?;
     let mut results = Vec::new();
-    let n = 12u32;
+    let samples = demo_hydrograph_samples(duration_h);
+    let hydro = out_dir.join("hydrograph.json");
+    let n = samples.len().saturating_sub(1) as u32;
     for i in 0..=n {
         if cancel.load(Ordering::SeqCst) {
             return Err("__cancelled__".into());
@@ -814,8 +1006,11 @@ fn run_intrinsic_demo(
                 "geometry": { "type": "Polygon", "coordinates": [ring] }
             }]
         });
-        fs::write(&ck, serde_json::to_string_pretty(&fc).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        fs::write(
+            &ck,
+            serde_json::to_string_pretty(&fc).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
         let progress = u as f32;
         update_active(run_id, |s| {
             s.progress = progress;
@@ -844,39 +1039,31 @@ fn run_intrinsic_demo(
                 mass_m3: None,
             },
         );
+
+        if let Some(event) =
+            demo_hydrograph_progress_event(run_id, &hydro, &samples, i as usize + 1)
+        {
+            let SimEvent::Hydrograph {
+                samples: visible_samples,
+                ..
+            } = &event
+            else {
+                unreachable!("demo hydrograph helper only creates hydrograph events");
+            };
+            fs::write(
+                &hydro,
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "samples": visible_samples
+                }))
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            emit_sim(app, event);
+        }
         std::thread::sleep(std::time::Duration::from_millis(40));
     }
 
-    let hydro = out_dir.join("hydrograph.json");
-    let mut samples = Vec::new();
-    for i in 0..=12 {
-        let hours = duration_h * (i as f64 / 12.0);
-        let u = i as f64 / 12.0;
-        let env = if u < 0.4 {
-            (u / 0.4 * std::f64::consts::FRAC_PI_2).sin()
-        } else {
-            (-(u - 0.4) / 0.35).exp()
-        };
-        samples.push(serde_json::json!({
-            "hours": hours,
-            "stageM": 0.3 + 1.8 * env,
-            "dischargeCms": 5.0 + 80.0 * env
-        }));
-    }
-    fs::write(
-        &hydro,
-        serde_json::to_string_pretty(&serde_json::json!({ "samples": samples }))
-            .map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
     results.push(hydro.to_string_lossy().into_owned());
-    emit_sim(
-        app,
-        SimEvent::Hydrograph {
-            run_id: run_id.to_string(),
-            path: hydro.to_string_lossy().into_owned(),
-        },
-    );
 
     let manifest = out_dir.join("manifest.json");
     fs::write(
@@ -911,6 +1098,43 @@ fn kill_pid(pid: u32) {
     }
 }
 
+fn sidecar_hydrograph_event(msg: &serde_json::Value, run_id: &str) -> Option<SimEvent> {
+    let path = msg.get("path")?.as_str()?.to_string();
+    let mut samples = msg
+        .get("samples")?
+        .as_array()?
+        .iter()
+        .filter_map(|sample| {
+            let hours = sample.get("hours")?.as_f64()?;
+            let stage_m = sample.get("stageM")?.as_f64()?;
+            let discharge_cms = sample.get("dischargeCms")?.as_f64()?;
+            if !hours.is_finite()
+                || hours < 0.0
+                || !stage_m.is_finite()
+                || !discharge_cms.is_finite()
+                || discharge_cms < 0.0
+            {
+                return None;
+            }
+            Some(HydrographSample {
+                hours,
+                stage_m,
+                discharge_cms,
+            })
+        })
+        .collect::<Vec<_>>();
+    samples.sort_by(|a, b| a.hours.total_cmp(&b.hours));
+    samples.dedup_by(|a, b| a.hours == b.hours);
+    if samples.len() < 2 {
+        return None;
+    }
+    Some(SimEvent::Hydrograph {
+        run_id: run_id.to_string(),
+        path,
+        samples,
+    })
+}
+
 fn invoke_anuga_sidecar(
     app: &AppHandle,
     cancel: &AtomicBool,
@@ -937,7 +1161,9 @@ fn invoke_anuga_sidecar(
         .stderr(Stdio::piped())
         .current_dir(launch.parent().unwrap_or(Path::new(".")));
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to start ANUGA sidecar: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start ANUGA sidecar: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(body.as_bytes())
@@ -1062,6 +1288,11 @@ fn invoke_anuga_sidecar(
                     },
                 );
             }
+            "hydrograph" => {
+                if let Some(event) = sidecar_hydrograph_event(&msg, run_id) {
+                    emit_sim(app, event);
+                }
+            }
             "done" => {
                 done = true;
                 mode = msg
@@ -1168,19 +1399,25 @@ fn maybe_run_swmm(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            emit_geo(app, GeoEvent::Error {
-                message: format!("SWMM failed to start: {e}"),
-                run_id: Some(run_id.to_string()),
-            });
+            emit_geo(
+                app,
+                GeoEvent::Error {
+                    message: format!("SWMM failed to start: {e}"),
+                    run_id: Some(run_id.to_string()),
+                },
+            );
             return Vec::new();
         }
     };
     if let Some(mut stdin) = child.stdin.take() {
         if let Err(e) = stdin.write_all(body.as_bytes()) {
-            emit_geo(app, GeoEvent::Error {
-                message: format!("Failed to write SWMM request: {e}"),
-                run_id: Some(run_id.to_string()),
-            });
+            emit_geo(
+                app,
+                GeoEvent::Error {
+                    message: format!("Failed to write SWMM request: {e}"),
+                    run_id: Some(run_id.to_string()),
+                },
+            );
         }
     }
     // Same silent-hang guard as the ANUGA sidecar: a stuck SWMM process would
@@ -1247,7 +1484,19 @@ pub fn start_scientific_flood(
     let mut project = Project::load(&ws)?;
     crate::geospatial::prepare_workspace(&ws)?;
 
-    let scenario = ensure_scenario(&mut project, &spec.scenario_id);
+    let mut scenario = ensure_scenario(&mut project, &spec.scenario_id);
+    if let Some(overrides) = spec.scenario_overrides.as_ref() {
+        apply_scenario_overrides(&mut scenario, overrides)?;
+        if let Some(index) = project
+            .flood_scenarios
+            .iter()
+            .position(|existing| existing.id == scenario.id)
+        {
+            project.flood_scenarios[index] = scenario.clone();
+        } else {
+            project.flood_scenarios.push(scenario.clone());
+        }
+    }
     project.save()?;
 
     validate_for_scientific(&project, &scenario, spec.allow_demo)?;
@@ -1676,6 +1925,171 @@ pub fn enqueue_hydro_job(app: AppHandle, spec: HydroJobSpec) -> Result<String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_hydrograph_samples_span_the_run_duration_with_finite_values() {
+        let samples = demo_hydrograph_samples(12.0);
+
+        assert_eq!(samples.len(), 13);
+        assert_eq!(samples.first().unwrap().hours, 0.0);
+        assert_eq!(samples.last().unwrap().hours, 12.0);
+        assert_eq!(samples.first().unwrap().stage_m, 0.3);
+        assert_eq!(samples.first().unwrap().discharge_cms, 5.0);
+        assert!(samples.iter().all(|sample| {
+            sample.hours.is_finite()
+                && sample.stage_m.is_finite()
+                && sample.discharge_cms.is_finite()
+        }));
+        assert!(samples.windows(2).all(|pair| pair[0].hours < pair[1].hours));
+    }
+
+    #[test]
+    fn intrinsic_demo_emits_growing_finite_hydrograph_windows() {
+        let samples = demo_hydrograph_samples(12.0);
+        let updates = (1..=samples.len())
+            .filter_map(|sample_count| {
+                demo_hydrograph_progress_event(
+                    "demo-run",
+                    Path::new("hydrograph.json"),
+                    &samples,
+                    sample_count,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(updates.len(), samples.len() - 1);
+        for (index, update) in updates.iter().enumerate() {
+            let SimEvent::Hydrograph {
+                run_id,
+                path,
+                samples: window,
+            } = update
+            else {
+                panic!("expected progressive hydrograph event");
+            };
+            assert_eq!(run_id, "demo-run");
+            assert_eq!(path, "hydrograph.json");
+            assert_eq!(window.len(), index + 2);
+            assert!(window.iter().all(|sample| {
+                sample.hours.is_finite()
+                    && sample.stage_m.is_finite()
+                    && sample.discharge_cms.is_finite()
+            }));
+            assert_eq!(window.as_slice(), &samples[..index + 2]);
+        }
+    }
+
+    #[test]
+    fn sidecar_hydrograph_events_keep_sorted_finite_samples() {
+        let msg = serde_json::json!({
+            "path": "hydrograph.json",
+            "samples": [
+                {"hours": 2.0, "stageM": 1.2, "dischargeCms": 5.0},
+                {"hours": 0.0, "stageM": 0.3, "dischargeCms": 1.0},
+                {"hours": 1.0, "stageM": 0.8, "dischargeCms": -1.0},
+                {"hours": 3.0, "stageM": 1.4, "dischargeCms": 7.0}
+            ]
+        });
+
+        let event = sidecar_hydrograph_event(&msg, "sidecar-run").unwrap();
+        let SimEvent::Hydrograph {
+            run_id,
+            path,
+            samples,
+        } = event
+        else {
+            panic!("expected hydrograph event");
+        };
+
+        assert_eq!(run_id, "sidecar-run");
+        assert_eq!(path, "hydrograph.json");
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0].hours, 0.0);
+        assert_eq!(samples[1].hours, 2.0);
+        assert_eq!(samples[2].hours, 3.0);
+        assert!(samples.iter().all(|sample| {
+            sample.hours.is_finite()
+                && sample.stage_m.is_finite()
+                && sample.discharge_cms.is_finite()
+                && sample.discharge_cms >= 0.0
+        }));
+    }
+
+    #[test]
+    fn applies_selected_flood_lab_forcing_and_boundary_to_the_scenario() {
+        let mut scenario = default_scenario("draft-site-rain");
+        let overrides = FloodScenarioOverrides {
+            rainfall: Some(serde_json::json!({
+                "template": "uniform_25",
+                "rateMmPerHour": 25.0,
+                "hyetograph": [
+                    { "hours": 0.0, "mmPerHour": 25.0 },
+                    { "hours": 12.0, "mmPerHour": 25.0 }
+                ],
+                "authority": "draft-template"
+            })),
+            roughness: Some(serde_json::json!({
+                "preset": "forest",
+                "manningN": 0.08,
+                "presets": { "forest": 0.08 }
+            })),
+            boundary_conditions: Some(serde_json::json!({
+                "outlet": { "type": "free_outfall", "edge": "south" },
+                "walls": "reflective"
+            })),
+            rainfall_template: Some("uniform_25".into()),
+            manning_preset: Some("forest".into()),
+            manning_n: Some(0.08),
+            outlet_bc: Some("free_outfall".into()),
+        };
+
+        apply_scenario_overrides(&mut scenario, &overrides).unwrap();
+
+        assert_eq!(
+            scenario.rainfall.as_ref().unwrap()["template"],
+            "uniform_25"
+        );
+        assert_eq!(scenario.roughness.as_ref().unwrap()["manningN"], 0.08);
+        assert_eq!(
+            scenario.boundary_conditions.as_ref().unwrap()["outlet"]["type"],
+            "free_outfall"
+        );
+    }
+
+    #[test]
+    fn rejects_mismatched_or_invalid_flood_lab_overrides() {
+        let mut scenario = default_scenario("draft-site-rain");
+        let duplicate_hours = FloodScenarioOverrides {
+            rainfall: Some(serde_json::json!({
+                "template": "uniform_25",
+                "rateMmPerHour": 25.0,
+                "hyetograph": [
+                    { "hours": 0.0, "mmPerHour": 25.0 },
+                    { "hours": 0.0, "mmPerHour": 25.0 }
+                ]
+            })),
+            ..Default::default()
+        };
+        assert!(apply_scenario_overrides(&mut scenario, &duplicate_hours)
+            .unwrap_err()
+            .contains("hours must increase"));
+
+        let mismatched_roughness = FloodScenarioOverrides {
+            roughness: Some(serde_json::json!({
+                "preset": "forest",
+                "manningN": 0.08,
+                "presets": { "forest": 0.08 }
+            })),
+            manning_preset: Some("channel".into()),
+            manning_n: Some(0.03),
+            ..Default::default()
+        };
+        assert!(
+            apply_scenario_overrides(&mut scenario, &mismatched_roughness)
+                .unwrap_err()
+                .contains("does not match")
+        );
+    }
 
     #[test]
     fn aoi_domain_is_not_wellington_locked() {

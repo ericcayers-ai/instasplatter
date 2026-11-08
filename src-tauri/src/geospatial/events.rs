@@ -36,9 +36,7 @@ pub enum GeoEvent {
         mass_balance: Option<f64>,
     },
     #[serde(rename_all = "camelCase")]
-    RunCancelled {
-        run_id: String,
-    },
+    RunCancelled { run_id: String },
     #[serde(rename_all = "camelCase")]
     EngineMissing {
         engine: String,
@@ -78,6 +76,7 @@ pub enum SimEvent {
     Hydrograph {
         run_id: String,
         path: String,
+        samples: Vec<HydrographSample>,
     },
     #[serde(rename_all = "camelCase")]
     Done {
@@ -87,6 +86,46 @@ pub enum SimEvent {
         mass_balance: Option<f64>,
         label: Option<String>,
     },
+}
+
+/// A discharge / water-stage sample attached to a simulation hydrograph event.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HydrographSample {
+    pub hours: f64,
+    pub stage_m: f64,
+    pub discharge_cms: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HydrographSample, SimEvent};
+
+    #[test]
+    fn hydrograph_event_serializes_typed_samples_in_camel_case() {
+        let event = SimEvent::Hydrograph {
+            run_id: "run-1".into(),
+            path: "hydrograph.json".into(),
+            samples: vec![HydrographSample {
+                hours: 2.5,
+                stage_m: 1.25,
+                discharge_cms: 18.0,
+            }],
+        };
+
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["kind"], "hydrograph");
+        assert_eq!(value["runId"], "run-1");
+        assert_eq!(value["path"], "hydrograph.json");
+        assert_eq!(
+            value["samples"][0],
+            serde_json::json!({
+                "hours": 2.5,
+                "stageM": 1.25,
+                "dischargeCms": 18.0
+            })
+        );
+    }
 }
 
 pub const GEO_EVENT_CHANNEL: &str = "geo://event";

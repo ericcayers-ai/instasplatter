@@ -1,14 +1,14 @@
 /**
- * Cesium XYZ imagery — reuse Esri / Carto URLs + attribution from defaults
+ * Cesium XYZ imagery — reuse Esri URLs + attribution from defaults
  * (same sources as MapLibre / imageryTiles).
  */
 
 import { Credit, UrlTemplateImageryProvider, WebMercatorTilingScheme } from "cesium";
 import {
-  CARTO_ATTRIBUTION,
-  CARTO_DARK_TILES,
   ESRI_WORLD_IMAGERY_ATTRIBUTION,
   ESRI_WORLD_IMAGERY_TILES,
+  ESRI_WORLD_STREET_MAP_ATTRIBUTION,
+  ESRI_WORLD_STREET_MAP_TILES,
 } from "../defaults";
 import type { GeoBasemapMode } from "../types";
 
@@ -19,7 +19,7 @@ function stripHtml(html: string): string {
 export function globeImageryAttribution(mode: GeoBasemapMode): string {
   return mode === "satellite"
     ? stripHtml(ESRI_WORLD_IMAGERY_ATTRIBUTION)
-    : stripHtml(CARTO_ATTRIBUTION);
+    : stripHtml(ESRI_WORLD_STREET_MAP_ATTRIBUTION);
 }
 
 /** Build a UrlTemplateImageryProvider for the current basemap mode. */
@@ -33,11 +33,11 @@ export function createGlobeImageryProvider(mode: GeoBasemapMode): UrlTemplateIma
     });
   }
 
-  // Cesium picks one URL; rotate via first Carto mirror (same pattern as MapLibre list).
+  // World Street Map tiles are rendered interactively; no bulk or offline cache.
   return new UrlTemplateImageryProvider({
-    url: CARTO_DARK_TILES[0],
+    url: ESRI_WORLD_STREET_MAP_TILES,
     tilingScheme: new WebMercatorTilingScheme(),
     maximumLevel: 20,
-    credit: new Credit(CARTO_ATTRIBUTION, true),
+    credit: new Credit(ESRI_WORLD_STREET_MAP_ATTRIBUTION, true),
   });
 }

@@ -15,6 +15,8 @@ pub mod gating;
 pub mod gsplat;
 pub mod ingest;
 pub mod preview;
+pub mod realitylog;
+pub mod realitylog_library;
 pub mod sidecars;
 pub mod solver;
 
@@ -30,7 +32,11 @@ use tauri::Emitter;
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum JobEvent {
     #[serde(rename_all = "camelCase")]
-    StageStarted { job_id: String, stage: String, label: String },
+    StageStarted {
+        job_id: String,
+        stage: String,
+        label: String,
+    },
     #[serde(rename_all = "camelCase")]
     StageProgress {
         job_id: String,
@@ -231,6 +237,18 @@ pub fn clean_intermediates(workspace: &Path) {
 
 /// Delete a cancelled job's workspace entirely.
 pub fn discard_workspace(workspace: &Path) {
+    // Defence in depth for the command layer's canonicalised check: a path with a
+    // `..` component must never reach `remove_dir_all` from any caller.
+    if workspace
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        log::warn!(
+            "discard_workspace: refusing a path containing '..': {}",
+            workspace.display()
+        );
+        return;
+    }
     for _ in 0..5 {
         if !workspace.exists() || std::fs::remove_dir_all(workspace).is_ok() {
             return;
@@ -262,11 +280,8 @@ async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     }
 
     let st = sidecars::status();
-    let profile = solver::detect_capture_profile(
-        images_dir,
-        &ctx.workspace,
-        ctx.settings.experimental_mode,
-    );
+    let profile =
+        solver::detect_capture_profile(images_dir, &ctx.workspace, ctx.settings.experimental_mode);
     ctx.log(format!("Capture profile: {profile:?}"));
     let chain: Vec<&str> = if ctx.settings.experimental_mode {
         solver::experimental_pose_candidates(profile, &st)
@@ -280,15 +295,19 @@ async fn solve_cameras(ctx: &JobCtx, images_dir: &Path) -> Result<(), String> {
     // GPS/RTK: try COLMAP pose-prior mapper before neural hypotheses.
     if prefer_pose_prior && solver::has_pose_priors(&ctx.workspace) {
         ctx.stage_progress("sfm", 0.05, "COLMAP pose-prior mapper…");
-        match colmap::run_sfm_with_options(ctx, images_dir, colmap::SfmOptions {
-            use_pose_priors: true,
-            use_gravity_prior: true,
-            matcher_front_end: solver::matcher_front_end(
-                &ctx.settings,
-                sidecars::lightglue_installed(),
-            )
-            .to_string(),
-        })
+        match colmap::run_sfm_with_options(
+            ctx,
+            images_dir,
+            colmap::SfmOptions {
+                use_pose_priors: true,
+                use_gravity_prior: true,
+                matcher_front_end: solver::matcher_front_end(
+                    &ctx.settings,
+                    sidecars::lightglue_installed(),
+                )
+                .to_string(),
+            },
+        )
         .await
         {
             Ok(()) => {
@@ -389,7 +408,11 @@ pub async fn run_job(ctx: &JobCtx, input: &Path) -> Result<PathBuf, String> {
 }
 
 /// Resume an interrupted run from its saved checkpoint (ROADMAP-V2 1.4).
-pub async fn resume_job(ctx: &JobCtx, checkpoint: PathBuf, start_iter: u32) -> Result<PathBuf, String> {
+pub async fn resume_job(
+    ctx: &JobCtx,
+    checkpoint: PathBuf,
+    start_iter: u32,
+) -> Result<PathBuf, String> {
     let started = std::time::Instant::now();
 
     ctx.stage_started("ingest", "Reading input");

@@ -31,11 +31,7 @@ pub fn dense_ply_path_rev(workspace: &Path, rev: u32) -> PathBuf {
 }
 
 /// Binary little-endian XYZRGB PLY (viewport point layers).
-pub fn write_xyzrgb_ply(
-    path: &Path,
-    xyz: &[[f32; 3]],
-    rgb: &[[u8; 3]],
-) -> Result<usize, String> {
+pub fn write_xyzrgb_ply(path: &Path, xyz: &[[f32; 3]], rgb: &[[u8; 3]]) -> Result<usize, String> {
     if xyz.is_empty() || xyz.len() != rgb.len() {
         return Err("empty or mismatched point cloud".into());
     }
@@ -62,10 +58,14 @@ pub fn write_xyzrgb_ply(
         let i = acc as usize;
         let p = &xyz[i];
         let c = &rgb[i];
-        f.write_all(&p[0].to_le_bytes()).map_err(|e| e.to_string())?;
-        f.write_all(&p[1].to_le_bytes()).map_err(|e| e.to_string())?;
-        f.write_all(&p[2].to_le_bytes()).map_err(|e| e.to_string())?;
-        f.write_all(&[c[0], c[1], c[2]]).map_err(|e| e.to_string())?;
+        f.write_all(&p[0].to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        f.write_all(&p[1].to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        f.write_all(&p[2].to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        f.write_all(&[c[0], c[1], c[2]])
+            .map_err(|e| e.to_string())?;
         written += 1;
         acc += step;
     }
@@ -119,11 +119,7 @@ pub fn emit_sparse_stage(ctx: &JobCtx) -> Result<(), String> {
 
 /// After densify: stream dense XYZRGB (separate from Gaussian `init.ply`).
 /// Uses a revisioned filename so the viewport reloads as densifiers merge live.
-pub fn emit_dense_stage(
-    ctx: &JobCtx,
-    xyz: &[[f32; 3]],
-    rgb: &[[u8; 3]],
-) -> Result<(), String> {
+pub fn emit_dense_stage(ctx: &JobCtx, xyz: &[[f32; 3]], rgb: &[[u8; 3]]) -> Result<(), String> {
     if xyz.is_empty() {
         return Ok(());
     }
@@ -139,7 +135,10 @@ pub fn emit_dense_stage(
         path: dest.to_string_lossy().into_owned(),
         point_count: n as u32,
     });
-    ctx.log(format!("Dense preview (live densify #{rev}): {n} points → {}", dest.display()));
+    ctx.log(format!(
+        "Dense preview (live densify #{rev}): {n} points → {}",
+        dest.display()
+    ));
     Ok(())
 }
 
@@ -164,10 +163,7 @@ fn next_dense_rev(workspace: &Path) -> u32 {
 }
 
 /// Stream a growing sparse cloud from live-tracking tracks (no COLMAP model yet).
-pub fn emit_tracks_sparse(
-    ctx: &JobCtx,
-    tracks: &[crate::sfm::Track],
-) -> Result<(), String> {
+pub fn emit_tracks_sparse(ctx: &JobCtx, tracks: &[crate::sfm::Track]) -> Result<(), String> {
     let mut xyz = Vec::with_capacity(tracks.len());
     let mut rgb = Vec::with_capacity(tracks.len());
     for t in tracks {
@@ -190,7 +186,10 @@ pub fn emit_tracks_sparse(
         path: dest.to_string_lossy().into_owned(),
         point_count: n as u32,
     });
-    ctx.log(format!("Live sparse preview: {n} points → {}", dest.display()));
+    ctx.log(format!(
+        "Live sparse preview: {n} points → {}",
+        dest.display()
+    ));
     Ok(())
 }
 

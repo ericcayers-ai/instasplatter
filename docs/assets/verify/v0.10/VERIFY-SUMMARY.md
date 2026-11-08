@@ -21,7 +21,8 @@
 ## Remaining
 
 - **MANUAL:** GUI PNG captures (01–13)
-- **CONDITIONAL:** live catalog network fetches; ANUGA Scientific; recon MP4 when sample present
+- **CONDITIONAL:** live catalog network fetches; recon MP4 when sample present
+- **BLOCKED:** ANUGA Scientific badge/run; current worker is a flat-bed API compatibility scaffold and always reports non-authoritative mode
 - **Phase F engineering:** done in-tree (version `0.10.0`, bundle targets, `.github/workflows/release.yml`) — CI installers still need a successful matrix run after push/tag; **no tag/publish in this step**
 
 ## Recommendation

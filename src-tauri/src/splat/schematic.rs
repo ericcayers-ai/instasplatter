@@ -279,9 +279,7 @@ pub fn voxelize_cloud(cloud: &SplatCloud, opts: &SchematicOptions) -> Result<Vox
     let mut sum_b = vec![0.0f32; n];
     let mut sum_w = vec![0.0f32; n];
 
-    let idx = |x: u32, y: u32, z: u32| -> usize {
-        (x + z * width + y * width * length) as usize
-    };
+    let idx = |x: u32, y: u32, z: u32| -> usize { (x + z * width + y * width * length) as usize };
 
     for i in 0..cloud.len() {
         let opacity = cloud.opacity(i);
@@ -521,10 +519,22 @@ mod tests {
 
     #[test]
     fn nearest_concrete_picks_obvious_colours() {
-        assert_eq!(nearest_concrete([250.0, 250.0, 250.0]), "minecraft:white_concrete");
-        assert_eq!(nearest_concrete([10.0, 10.0, 10.0]), "minecraft:black_concrete");
-        assert_eq!(nearest_concrete([200.0, 40.0, 40.0]), "minecraft:red_concrete");
-        assert_eq!(nearest_concrete([40.0, 50.0, 160.0]), "minecraft:blue_concrete");
+        assert_eq!(
+            nearest_concrete([250.0, 250.0, 250.0]),
+            "minecraft:white_concrete"
+        );
+        assert_eq!(
+            nearest_concrete([10.0, 10.0, 10.0]),
+            "minecraft:black_concrete"
+        );
+        assert_eq!(
+            nearest_concrete([200.0, 40.0, 40.0]),
+            "minecraft:red_concrete"
+        );
+        assert_eq!(
+            nearest_concrete([40.0, 50.0, 160.0]),
+            "minecraft:blue_concrete"
+        );
     }
 
     #[test]

@@ -24,9 +24,7 @@ fn sharpness_score(path: &Path) -> f64 {
         Ok(i) => i,
         Err(_) => return -1.0, // unreadable, reject
     };
-    let gray = img
-        .resize(480, 480, FilterType::Triangle)
-        .into_luma8();
+    let gray = img.resize(480, 480, FilterType::Triangle).into_luma8();
     let (w, h) = gray.dimensions();
     if w < 3 || h < 3 {
         return -1.0;

@@ -13,20 +13,29 @@ export default function DropZone() {
   const resumeProject = useStore((s) => s.resumeProject);
   const setLeftPanelOpen = useStore((s) => s.setLeftPanelOpen);
   const capture = useCaptureStart();
+  const launch = capture.launch;
 
   useEffect(() => {
-    const un = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "over") setHover(true);
-      else if (event.payload.type === "drop") {
-        setHover(false);
-        const paths = event.payload.paths ?? [];
-        void capture.launch(paths);
-      } else setHover(false);
-    });
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "over") setHover(true);
+        else if (event.payload.type === "drop") {
+          setHover(false);
+          const paths = event.payload.paths ?? [];
+          void launch(paths);
+        } else setHover(false);
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      });
     return () => {
-      un.then((f) => f());
+      disposed = true;
+      unlisten?.();
     };
-  }, [capture]);
+  }, [launch]);
 
   const vram = profile ? Math.round(profile.vram_mb / 1024) : 0;
   const recent = projects.slice(0, 4);
@@ -34,7 +43,9 @@ export default function DropZone() {
   return (
     <div className="splatter-field flex h-full flex-col items-center justify-center gap-7 p-8 md:p-12">
       <header className="float-in max-w-xl text-center">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">Reconstruction</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
+          Reconstruction
+        </p>
         <h1 className="font-display mt-2 text-[clamp(2rem,4vw,2.75rem)] font-bold leading-[1.05] tracking-tight text-ink text-balance">
           InstaSplatter
         </h1>
@@ -49,6 +60,7 @@ export default function DropZone() {
         aria-label="Drop a video or image folder to start reconstruction"
         data-hover={hover}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void capture.chooseVideos(false);
@@ -60,7 +72,9 @@ export default function DropZone() {
           <div className="text-sm font-semibold text-ink">
             {hover ? "Release to start" : "Drop capture here"}
           </div>
-          <div className="mt-1 text-xs text-ink-dim">MP4 · MOV · MKV · JPG / PNG folders · batch OK</div>
+          <div className="mt-1 text-xs text-ink-dim">
+            MP4 · MOV · MKV · JPG / PNG folders · batch OK
+          </div>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
           <button
@@ -81,6 +95,15 @@ export default function DropZone() {
           </button>
           <button
             type="button"
+            onClick={() => void capture.choosePanoramas()}
+            className="btn btn-ghost"
+            disabled={capture.busy}
+            title="Convert local 2:1 panoramas into four perspective views each. Use panoramas from different positions for 3D depth."
+          >
+            360° panoramas
+          </button>
+          <button
+            type="button"
             onClick={() => void capture.chooseFolder()}
             className="btn btn-ghost"
             disabled={capture.busy}
@@ -98,10 +121,18 @@ export default function DropZone() {
         </div>
         {capture.busy && (
           <div className="text-center text-[11px] text-ink-dim" aria-live="polite">
-            Adding files…
+            {capture.busyMessage}
           </div>
         )}
-        {capture.error && <div role="alert" className="max-w-sm text-center text-[11px] text-danger">{capture.error}</div>}
+        <div className="max-w-sm text-center text-[10px] leading-relaxed text-ink-dim">
+          Use at least two 2:1 panoramas from different positions; each becomes four perspective
+          views.
+        </div>
+        {capture.error && (
+          <div role="alert" className="max-w-sm text-center text-[11px] text-danger">
+            {capture.error}
+          </div>
+        )}
       </div>
 
       {profile && (
@@ -127,7 +158,9 @@ export default function DropZone() {
       {recent.length > 0 && (
         <section className="float-in float-in-delay-3 w-full max-w-xl" aria-label="Recent projects">
           <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-[10px] font-semibold uppercase tracking-wider text-ink-dim">Recent</h2>
+            <h2 className="text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+              Recent
+            </h2>
             <button
               type="button"
               className="btn btn-ghost-teal px-1.5 py-0.5 text-[10px]"

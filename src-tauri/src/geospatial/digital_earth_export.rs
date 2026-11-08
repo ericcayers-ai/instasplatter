@@ -7,7 +7,7 @@
 //! just handing it that matrix plus the PLY it already knows how to read.
 //! This module writes the sidecar; it does not touch the PLY itself.
 
-use super::transforms::{Geodetic, EnuFrame};
+use super::transforms::{EnuFrame, Geodetic};
 use crate::splat::SplatCloud;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -142,11 +142,7 @@ mod tests {
         let y = m[4] * east + m[5] * north + m[6] * up + m[7];
         let z = m[8] * east + m[9] * north + m[10] * up + m[11];
 
-        let expected = frame.enu_to_ecef(crate::geospatial::transforms::Enu {
-            east,
-            north,
-            up,
-        });
+        let expected = frame.enu_to_ecef(crate::geospatial::transforms::Enu { east, north, up });
         assert!((x - expected.x).abs() < 1e-6);
         assert!((y - expected.y).abs() < 1e-6);
         assert!((z - expected.z).abs() < 1e-6);

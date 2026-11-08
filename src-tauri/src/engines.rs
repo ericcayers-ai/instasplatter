@@ -10,7 +10,7 @@
 use crate::profiler::hidden_command;
 use crate::settings::app_data_dir;
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
@@ -19,6 +19,12 @@ use tauri::Emitter;
 
 /// A downloadable engine archive with the digest published on its release.
 struct Archive {
+    /// Short engine name; also the install directory under `engines/`.
+    name: &'static str,
+    /// Which archive flavour this is, for engines that ship more than one.
+    variant: &'static str,
+    /// The released version the URL and SHA-256 pin.
+    version: &'static str,
     url: &'static str,
     sha256: &'static str,
     /// Path inside the engine directory that must exist after extraction.
@@ -26,22 +32,203 @@ struct Archive {
 }
 
 const BRUSH: Archive = Archive {
+    name: "brush",
+    variant: "default",
+    version: "0.3.0",
     url: "https://github.com/ArthurBrussee/brush/releases/download/v0.3.0/brush-app-x86_64-pc-windows-msvc.zip",
     sha256: "b68e3e9cf052d51bf3ee30776fa5a364de7f2ba13b58443128ff797bb7bcfcd6",
     sentinel: &["brush_app.exe"],
 };
 
 const COLMAP_CUDA: Archive = Archive {
+    name: "colmap",
+    variant: "cuda",
+    version: "4.1.0",
     url: "https://github.com/colmap/colmap/releases/download/4.1.0/colmap-x64-windows-cuda.zip",
     sha256: "ccd2f8c5b44f3e0ce645170d6abad30ff763ede97eeb0e6e23af1993e624e64b",
     sentinel: &["bin", "colmap.exe"],
 };
 
 const COLMAP_NOCUDA: Archive = Archive {
+    name: "colmap",
+    variant: "nocuda",
+    version: "4.1.0",
     url: "https://github.com/colmap/colmap/releases/download/4.1.0/colmap-x64-windows-nocuda.zip",
     sha256: "dc8179bb4f3f48edec683bcec7627176b66e53a33ef0e2aa98d487f45873af5f",
     sentinel: &["bin", "colmap.exe"],
 };
+
+/// Every archive this build knows how to install, so the manifest and the
+/// digest test iterate the same list.
+const PINNED_ARCHIVES: [&Archive; 3] = [&BRUSH, &COLMAP_CUDA, &COLMAP_NOCUDA];
+
+// ---------------------------------------------------------------------------
+// `engines.json` — the machine-readable engine authority (migration step M2).
+//
+// Before this, the only record of *which* engine build was installed was the
+// `instasplatter-flavor.txt` one-word marker for COLMAP, and the version was an
+// inference from the pinned URL. Symptoms of that: two repos documented
+// different installed COLMAP versions while sharing one binary. The manifest
+// turns the installed set into a recorded fact: one entry per pinned archive,
+// with the resolved executable path, the sentinel it was verified against and
+// the moment it was verified.
+// ---------------------------------------------------------------------------
+
+/// Format identifier written into `engines.json`.
+pub const ENGINES_MANIFEST_FORMAT: &str = "instasplatter-engines-v1";
+
+/// One pinned engine archive as installed on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineRecord {
+    pub name: String,
+    pub variant: String,
+    pub version: String,
+    pub url: String,
+    pub sha256: String,
+    /// The executable this archive provides, in its installed location.
+    pub path: String,
+    /// The sentinel path checked after extraction, relative to the engine dir.
+    pub sentinel: String,
+    /// True when that sentinel exists right now.
+    pub sentinel_present: bool,
+    /// When the sentinel was last confirmed (Unix seconds).
+    pub sentinel_verified_at_unix: u64,
+}
+
+/// The `engines.json` document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnginesManifest {
+    pub format: String,
+    pub written_at_unix: u64,
+    pub engines: Vec<EngineRecord>,
+}
+
+/// Location of the manifest, beside `colmap/instasplatter-flavor.txt`.
+pub fn engines_manifest_path() -> PathBuf {
+    engines_dir().join("engines.json")
+}
+
+/// The engine authority, borrowed either way: a caller holding a built manifest
+/// and a caller holding only records can both feed the seam's receipt without
+/// owning a copy.
+#[derive(Debug, Clone, Copy)]
+pub enum EnginesManifestRef<'a> {
+    Manifest(&'a EnginesManifest),
+    Records(&'a [EngineRecord]),
+}
+
+impl EnginesManifestRef<'_> {
+    /// The records, cloned so the receipt owns its own copy.
+    pub fn records(&self) -> Vec<EngineRecord> {
+        match self {
+            EnginesManifestRef::Manifest(manifest) => manifest.engines.clone(),
+            EnginesManifestRef::Records(records) => records.to_vec(),
+        }
+    }
+}
+
+impl<'a> From<&'a EnginesManifest> for EnginesManifestRef<'a> {
+    fn from(manifest: &'a EnginesManifest) -> Self {
+        EnginesManifestRef::Manifest(manifest)
+    }
+}
+
+impl<'a> From<&'a [EngineRecord]> for EnginesManifestRef<'a> {
+    fn from(records: &'a [EngineRecord]) -> Self {
+        EnginesManifestRef::Records(records)
+    }
+}
+
+/// The installed executable an archive's sentinel resolves to.
+fn installed_exe(engine_dir: &Path, archive: &Archive) -> PathBuf {
+    let mut p = engine_dir.join(archive.name);
+    for part in archive.sentinel {
+        p = p.join(part);
+    }
+    p
+}
+
+/// Unix seconds, or 0 if the clock is before the epoch (never in practice).
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Build the manifest for the engine directory `engines_root`. Split out from
+/// [`build_engines_manifest`] so a test can run the whole write/read cycle
+/// against a scratch directory instead of the machine's real engine tree.
+pub fn build_engines_manifest_in(engines_root: &Path, now: u64) -> EnginesManifest {
+    EnginesManifest {
+        format: ENGINES_MANIFEST_FORMAT.to_string(),
+        written_at_unix: now,
+        engines: PINNED_ARCHIVES
+            .iter()
+            .map(|archive| {
+                let path = installed_exe(engines_root, archive);
+                EngineRecord {
+                    name: archive.name.to_string(),
+                    variant: archive.variant.to_string(),
+                    version: archive.version.to_string(),
+                    url: archive.url.to_string(),
+                    sha256: archive.sha256.to_string(),
+                    path: path.to_string_lossy().into_owned(),
+                    sentinel: archive.sentinel.join("/"),
+                    sentinel_present: path.is_file(),
+                    sentinel_verified_at_unix: now,
+                }
+            })
+            .collect(),
+    }
+}
+
+/// Build the manifest for the machine's real engine directory.
+pub fn build_engines_manifest(now: u64) -> EnginesManifest {
+    build_engines_manifest_in(&engines_dir(), now)
+}
+
+/// Serialize `manifest` to `dest`, creating the parent directory.
+pub fn write_engines_manifest_to(dest: &Path, manifest: &EnginesManifest) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    let json = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
+    fs::write(dest, json).map_err(|e| e.to_string())
+}
+
+/// Write the manifest to `engines/engines.json`.
+pub fn write_engines_manifest(manifest: &EnginesManifest) -> Result<PathBuf, String> {
+    let dest = engines_manifest_path();
+    write_engines_manifest_to(&dest, manifest)?;
+    Ok(dest)
+}
+
+/// Read a manifest from `path`.
+pub fn read_engines_manifest_from(path: &Path) -> Result<EnginesManifest, String> {
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    let manifest: EnginesManifest = serde_json::from_str(&raw)
+        .map_err(|e| format!("{} is not a valid engines manifest: {e}", path.display()))?;
+    if manifest.format != ENGINES_MANIFEST_FORMAT {
+        return Err(format!(
+            "{} carries format {:?}, expected {:?}",
+            path.display(),
+            manifest.format,
+            ENGINES_MANIFEST_FORMAT
+        ));
+    }
+    Ok(manifest)
+}
+
+/// Read the machine's `engines/engines.json`.
+pub fn read_engines_manifest() -> Result<EnginesManifest, String> {
+    read_engines_manifest_from(&engines_manifest_path())
+}
 
 pub fn engines_dir() -> PathBuf {
     app_data_dir().join("engines")
@@ -68,7 +255,9 @@ pub fn colmap_exe() -> PathBuf {
 }
 
 fn colmap_flavor_path() -> PathBuf {
-    engines_dir().join("colmap").join("instasplatter-flavor.txt")
+    engines_dir()
+        .join("colmap")
+        .join("instasplatter-flavor.txt")
 }
 
 fn write_colmap_flavor(cuda: bool) {
@@ -220,7 +409,8 @@ async fn download_verified(
     engine: &str,
     archive: &Archive,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(engines_dir()).map_err(|e| format!("Cannot create the engines folder: {e}"))?;
+    fs::create_dir_all(engines_dir())
+        .map_err(|e| format!("Cannot create the engines folder: {e}"))?;
     let tmp_zip = engines_dir().join(format!("{engine}.zip.part"));
     // A leftover partial from a previous interrupted run is never reused: we
     // cannot know how much of it is valid.
@@ -290,7 +480,8 @@ async fn download_verified(
 /// Extract `zip` into `staging`. Rejects entries that escape the destination.
 fn extract_zip(zip_path: &Path, staging: &Path) -> Result<(), String> {
     let f = fs::File::open(zip_path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(f).map_err(|e| format!("The archive is not readable: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(f).map_err(|e| format!("The archive is not readable: {e}"))?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         // `enclosed_name` returns None for absolute paths and `..` traversal.
@@ -409,7 +600,11 @@ pub async fn ensure_engines(app: tauri::AppHandle, has_cuda: bool) -> Result<Eng
             emit(&app, "colmap", 0, 0, "upgrading-cuda");
             remove_any(&engines_dir().join("colmap"));
         }
-        let archive = if has_cuda { &COLMAP_CUDA } else { &COLMAP_NOCUDA };
+        let archive = if has_cuda {
+            &COLMAP_CUDA
+        } else {
+            &COLMAP_NOCUDA
+        };
         install(&app, "colmap", archive).await?;
         write_colmap_flavor(has_cuda);
     } else if colmap_ok && read_colmap_flavor().is_none() {
@@ -425,6 +620,14 @@ pub async fn ensure_engines(app: tauri::AppHandle, has_cuda: bool) -> Result<Eng
                 .into(),
         );
     }
+
+    // Record the installed engine authority next to the COLMAP flavour marker.
+    // A manifest that cannot be written must never block an otherwise good
+    // install: it is a record, not a gate.
+    let manifest = build_engines_manifest(now_unix());
+    if let Err(e) = write_engines_manifest(&manifest) {
+        log::warn!("Could not write {}: {e}", engines_manifest_path().display());
+    }
     Ok(st)
 }
 
@@ -439,15 +642,96 @@ mod tests {
 
     #[test]
     fn pinned_digests_are_lowercase_sha256() {
-        for a in [&BRUSH, &COLMAP_CUDA, &COLMAP_NOCUDA] {
+        for a in PINNED_ARCHIVES {
             assert_eq!(a.sha256.len(), 64, "{}", a.url);
             assert!(
-                a.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                a.sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
                 "{}",
                 a.url
             );
             assert!(!a.sentinel.is_empty());
+            assert!(!a.name.is_empty(), "{}", a.url);
+            assert!(!a.variant.is_empty(), "{}", a.url);
+            assert!(!a.version.is_empty(), "{}", a.url);
         }
+    }
+
+    /// The gate for migration step M2: writing the manifest into a scratch data
+    /// directory and reading it back must reproduce it exactly, and every value
+    /// must be the pinned constant rather than a re-typed copy.
+    #[test]
+    fn engines_manifest_round_trips_and_equals_the_pins() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/engines-manifest-scratch");
+        let _ = fs::remove_dir_all(&root);
+        // Lay down the sentinels a real install would leave behind.
+        fs::create_dir_all(root.join("brush")).unwrap();
+        fs::write(root.join("brush").join("brush_app.exe"), b"x").unwrap();
+        fs::create_dir_all(root.join("colmap").join("bin")).unwrap();
+        fs::write(root.join("colmap").join("bin").join("colmap.exe"), b"x").unwrap();
+
+        let now = 1_760_000_000u64;
+        let manifest = build_engines_manifest_in(&root, now);
+        assert_eq!(manifest.format, ENGINES_MANIFEST_FORMAT);
+        assert_eq!(manifest.written_at_unix, now);
+        assert_eq!(manifest.engines.len(), PINNED_ARCHIVES.len());
+
+        let dest = root.join("engines.json");
+        write_engines_manifest_to(&dest, &manifest).expect("manifest should be writable");
+        let read_back = read_engines_manifest_from(&dest).expect("manifest should round-trip");
+        assert_eq!(read_back, manifest, "engines.json did not round-trip");
+
+        // Every recorded value must be the constant at the top of this module.
+        for archive in PINNED_ARCHIVES {
+            let record = read_back
+                .engines
+                .iter()
+                .find(|r| r.name == archive.name && r.variant == archive.variant)
+                .unwrap_or_else(|| {
+                    panic!("manifest is missing {}/{}", archive.name, archive.variant)
+                });
+            assert_eq!(record.url, archive.url);
+            assert_eq!(record.sha256, archive.sha256);
+            assert_eq!(record.version, archive.version);
+            assert_eq!(record.sentinel, archive.sentinel.join("/"));
+            assert!(
+                record.sentinel_present,
+                "{} sentinel should be present in the scratch tree",
+                record.name
+            );
+            assert_eq!(record.sentinel_verified_at_unix, now);
+            assert!(
+                Path::new(&record.path).ends_with(installed_exe(Path::new(""), archive)),
+                "resolved path {} does not end with the archive sentinel",
+                record.path
+            );
+        }
+
+        // A manifest whose format tag drifts is refused rather than misread.
+        let mut tampered = read_back.clone();
+        tampered.format = "something-else-v9".to_string();
+        write_engines_manifest_to(&dest, &tampered).unwrap();
+        assert!(read_engines_manifest_from(&dest).is_err());
+
+        // `root/engines.json` is deliberately left on disk: it is the literal
+        // artefact the M2 gate inspects.
+        write_engines_manifest_to(&dest, &manifest).unwrap();
+    }
+
+    /// Installed-vs-absent is the *recorded* fact R5 needed: an engine tree
+    /// without the sentinel reports `sentinelPresent: false` rather than being
+    /// silently omitted.
+    #[test]
+    fn engines_manifest_records_absent_sentinels_as_absent() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/engines-manifest-empty");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let manifest = build_engines_manifest_in(&root, 7);
+        assert!(manifest.engines.iter().all(|r| !r.sentinel_present));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -456,7 +740,11 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         let staging = base.join("colmap.staging");
         fs::create_dir_all(staging.join("colmap-x64").join("bin")).unwrap();
-        fs::write(staging.join("colmap-x64").join("bin").join("colmap.exe"), b"x").unwrap();
+        fs::write(
+            staging.join("colmap-x64").join("bin").join("colmap.exe"),
+            b"x",
+        )
+        .unwrap();
 
         normalize_root(&staging, &["bin", "colmap.exe"]).unwrap();
         assert!(staging.join("bin").join("colmap.exe").exists());

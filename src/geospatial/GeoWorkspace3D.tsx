@@ -432,6 +432,12 @@ export default function GeoWorkspace3D() {
     schedulePersist(tf);
   };
 
+  const nudgeDescription = (axis: string, direction: string) => {
+    if (gizmoMode === "translate") return `Move ${direction} (${axis}) by one ENU unit`;
+    if (gizmoMode === "rotate") return `Rotate around ${axis} by 0.05 radians`;
+    return `Increase ${axis} scale by 5 percent`;
+  };
+
   const resetTransform = () => {
     const tf = identityModelTransform();
     transformRef.current = tf;
@@ -515,13 +521,13 @@ export default function GeoWorkspace3D() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-edge" />
-          <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={() => nudge([1, 0, 0], 1)} title="Nudge +X (east)">
+          <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={() => nudge([1, 0, 0], 1)} title={nudgeDescription("+X", "east")} aria-label={`+X — ${nudgeDescription("+X", "east")}`}>
             +X
           </button>
-          <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={() => nudge([0, 1, 0], 1)} title="Nudge +Y (north)">
+          <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={() => nudge([0, 1, 0], 1)} title={nudgeDescription("+Y", "north")} aria-label={`+Y — ${nudgeDescription("+Y", "north")}`}>
             +Y
           </button>
-          <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={() => nudge([0, 0, 1], 1)} title="Nudge +Z (up)">
+          <button type="button" className="btn px-2 py-0.5 text-[10px]" onClick={() => nudge([0, 0, 1], 1)} title={nudgeDescription("+Z", "up")} aria-label={`+Z — ${nudgeDescription("+Z", "up")}`}>
             +Z
           </button>
           <button

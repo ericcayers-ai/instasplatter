@@ -277,11 +277,7 @@ pub fn list_cached(workspace_geo_sources: &str) -> Vec<CatalogEntry> {
 
 /// Fetch a remote asset into `dest_dir` (typically `workspace/geo/catalog`).
 pub fn fetch_asset(entry_id: &str, dest_dir: &str) -> Result<CatalogEntry, String> {
-    fetch_asset_with_opts(
-        entry_id,
-        dest_dir,
-        &CatalogFetchOpts::default(),
-    )
+    fetch_asset_with_opts(entry_id, dest_dir, &CatalogFetchOpts::default())
 }
 
 /// Fetch with AOI / resolution / optional key or user file.
@@ -313,12 +309,9 @@ pub fn fetch_asset_with_opts(
     let result = match def.id {
         "usgs-3dep" => fetch_usgs_3dep(&dest, aoi, opts.cell_size_m),
         "copernicus-glo30" => fetch_copernicus(&dest, aoi, opts.user_file.as_deref()),
-        "opentopography" => fetch_opentopography(
-            &dest,
-            aoi,
-            opts.cell_size_m,
-            opts.api_key.as_deref(),
-        ),
+        "opentopography" => {
+            fetch_opentopography(&dest, aoi, opts.cell_size_m, opts.api_key.as_deref())
+        }
         "hydrosheds" => fetch_hydrosheds(&dest, aoi, opts.user_file.as_deref()),
         "usgs-nwis-gauges" => fetch_nwis_gauges(&dest, aoi),
         "fema-nfhl" => fetch_fema_nfhl(&dest, aoi),
@@ -379,6 +372,27 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| format!("HTTP client error: {e}"))
 }
 
+/// Strip credentials out of a URL before it can reach a log line, an error
+/// message or the diagnostics bundle a user is asked to share.
+pub(crate) fn redact_url_secrets(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    for (i, part) in url.split('&').enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        match part.split_once('=') {
+            Some((k, _))
+                if k.eq_ignore_ascii_case("API_Key") || k.eq_ignore_ascii_case("api_key") =>
+            {
+                out.push_str(k);
+                out.push_str("=***");
+            }
+            _ => out.push_str(part),
+        }
+    }
+    out
+}
+
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     let client = http_client()?;
     let resp = client
@@ -390,7 +404,8 @@ fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
         let body = resp.text().unwrap_or_default();
         let snippet: String = body.chars().take(240).collect();
         return Err(format!(
-            "Catalog fetch failed (HTTP {status}) for {url}: {snippet}"
+            "Catalog fetch failed (HTTP {status}) for {}: {snippet}",
+            redact_url_secrets(url)
         ));
     }
     resp.bytes()
@@ -427,10 +442,7 @@ fn require_aoi(aoi: Option<GeoBounds>) -> Result<GeoBounds, String> {
 }
 
 fn validate_aoi(b: GeoBounds) -> Result<GeoBounds, String> {
-    if !b.min_x.is_finite()
-        || !b.min_y.is_finite()
-        || !b.max_x.is_finite()
-        || !b.max_y.is_finite()
+    if !b.min_x.is_finite() || !b.min_y.is_finite() || !b.max_x.is_finite() || !b.max_y.is_finite()
     {
         return Err("AOI bounds must be finite numbers.".into());
     }
@@ -502,10 +514,7 @@ fn fetch_usgs_3dep(
 ) -> Result<(PathBuf, Option<String>, Option<String>), String> {
     let aoi = validate_aoi(require_aoi(aoi)?)?;
     let (w, h, effective) = dem_pixel_size(aoi, cell_size_m);
-    let bbox = format!(
-        "{},{},{},{}",
-        aoi.min_x, aoi.min_y, aoi.max_x, aoi.max_y
-    );
+    let bbox = format!("{},{},{},{}", aoi.min_x, aoi.min_y, aoi.max_x, aoi.max_y);
     let url = format!(
         "{USGS_3DEP_EXPORT}?bbox={bbox}&bboxSR=4326&imageSR=4326&size={w},{h}\
          &format=tiff&pixelType=F32&noDataInterpretation=esriNoDataMatchAny\
@@ -513,15 +522,12 @@ fn fetch_usgs_3dep(
     );
     let bytes = http_get_bytes(&url)?;
     if bytes.len() < 64 {
-        return Err(
-            "USGS 3DEP returned an empty response. Check network or AOI coverage.".into(),
-        );
+        return Err("USGS 3DEP returned an empty response. Check network or AOI coverage.".into());
     }
     // Reject obvious HTML error pages.
     if bytes.starts_with(b"<") || bytes.starts_with(b"<!DOCTYPE") {
         return Err(
-            "USGS 3DEP returned HTML instead of a GeoTIFF (service error or rate limit)."
-                .into(),
+            "USGS 3DEP returned HTML instead of a GeoTIFF (service error or rate limit).".into(),
         );
     }
     let out = dest.join("usgs_3dep_aoi.tif");
@@ -567,10 +573,7 @@ fn fetch_copernicus(
                 src.display()
             ));
         }
-        let ext = src
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("tif");
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("tif");
         let out = dest.join(format!("copernicus_glo30_user.{ext}"));
         if src.canonicalize().ok() == out.canonicalize().ok() {
             // Already staged at destination.
@@ -677,11 +680,8 @@ fn fetch_opentopography(
         "{OPENTOPO_GLOBALDEM}?demtype=COP30&south={}&north={}&west={}&east={}&outputFormat=GTiff&API_Key=***",
         aoi.min_y, aoi.max_y, aoi.min_x, aoi.max_x
     );
-    let bytes = http_get_bytes(&url).map_err(|e| {
-        format!(
-            "{e} — Check OPENTOPOGRAPHY_API_KEY validity and AOI size limits."
-        )
-    })?;
+    let bytes = http_get_bytes(&url)
+        .map_err(|e| format!("{e} — Check OPENTOPOGRAPHY_API_KEY validity and AOI size limits."))?;
     if bytes.starts_with(b"<") || bytes.starts_with(b"{") {
         let msg: String = String::from_utf8_lossy(&bytes).chars().take(300).collect();
         return Err(format!("OpenTopography error response: {msg}"));
@@ -832,17 +832,13 @@ fn fetch_nwis_gauges(
     aoi: Option<GeoBounds>,
 ) -> Result<(PathBuf, Option<String>, Option<String>), String> {
     let aoi = validate_aoi(require_aoi(aoi)?)?;
-    let bbox = format!(
-        "{},{},{},{}",
-        aoi.min_x, aoi.min_y, aoi.max_x, aoi.max_y
-    );
+    let bbox = format!("{},{},{},{}", aoi.min_x, aoi.min_y, aoi.max_x, aoi.max_y);
     // Site inventory (RDB) is reliable; also try instantaneous values JSON.
     let site_url = format!(
         "{NWIS_SITE}?format=rdb&bBox={bbox}&siteType=ST&siteStatus=active&hasDataTypeCd=iv"
     );
-    let iv_url = format!(
-        "{NWIS_IV}?format=json&bBox={bbox}&parameterCd=00060,00065&siteStatus=active"
-    );
+    let iv_url =
+        format!("{NWIS_IV}?format=json&bBox={bbox}&parameterCd=00060,00065&siteStatus=active");
 
     let mut features = Vec::new();
     let mut source_url = site_url.clone();
@@ -898,10 +894,7 @@ fn fetch_nwis_gauges(
         Ok((
             out,
             Some(source_url),
-            Some(
-                "No active stream gauges found in AOI (empty FeatureCollection staged)."
-                    .into(),
-            ),
+            Some("No active stream gauges found in AOI (empty FeatureCollection staged).".into()),
         ))
     } else {
         Ok((out, Some(source_url), Some(notes)))
@@ -923,7 +916,10 @@ fn parse_nwis_rdb_sites(text: &str) -> Vec<serde_json::Value> {
         if line
             .split('\t')
             .next()
-            .map(|c| c.chars().all(|ch| ch.is_ascii_digit() || ch == 's' || ch == 'n' || ch == 'd'))
+            .map(|c| {
+                c.chars()
+                    .all(|ch| ch.is_ascii_digit() || ch == 's' || ch == 'n' || ch == 'd')
+            })
             .unwrap_or(false)
             && line.contains('s')
             && !line.contains("USGS")
@@ -964,10 +960,7 @@ fn parse_nwis_rdb_sites(text: &str) -> Vec<serde_json::Value> {
 
 fn parse_nwis_iv_json(json: &serde_json::Value) -> Vec<serde_json::Value> {
     let mut features = Vec::new();
-    let Some(series) = json
-        .pointer("/value/timeSeries")
-        .and_then(|v| v.as_array())
-    else {
+    let Some(series) = json.pointer("/value/timeSeries").and_then(|v| v.as_array()) else {
         return features;
     };
     for ts in series {
@@ -1018,10 +1011,7 @@ fn fetch_osm_waterways(
 ) -> Result<(PathBuf, Option<String>, Option<String>), String> {
     let aoi = validate_aoi(require_aoi(aoi)?)?;
     // Overpass bbox: south,west,north,east
-    let bbox = format!(
-        "{},{},{},{}",
-        aoi.min_y, aoi.min_x, aoi.max_y, aoi.max_x
-    );
+    let bbox = format!("{},{},{},{}", aoi.min_y, aoi.min_x, aoi.max_y, aoi.max_x);
     let query = format!(
         "[out:json][timeout:45];(way[\"waterway\"]({bbox});relation[\"waterway\"]({bbox}););out geom;"
     );
@@ -1054,7 +1044,10 @@ fn fetch_osm_waterways(
     let mut features = Vec::new();
     for el in &elements {
         let tags = el.get("tags").cloned().unwrap_or(serde_json::json!({}));
-        let name = tags.get("name").and_then(|v| v.as_str()).unwrap_or("waterway");
+        let name = tags
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("waterway");
         let waterway = tags
             .get("waterway")
             .and_then(|v| v.as_str())
@@ -1123,10 +1116,7 @@ fn fetch_fema_nfhl(
     aoi: Option<GeoBounds>,
 ) -> Result<(PathBuf, Option<String>, Option<String>), String> {
     let aoi = validate_aoi(require_aoi(aoi)?)?;
-    let geometry = format!(
-        "{},{},{},{}",
-        aoi.min_x, aoi.min_y, aoi.max_x, aoi.max_y
-    );
+    let geometry = format!("{},{},{},{}", aoi.min_x, aoi.min_y, aoi.max_x, aoi.max_y);
     let url = format!(
         "{FEMA_NFHL_QUERY}?geometry={geometry}&geometryType=esriGeometryEnvelope\
          &inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=FLD_ZONE,ZONE_SUBTY,SFHA_TF,STATIC_BFE\
@@ -1193,9 +1183,7 @@ fn fetch_earth_search(
         }
     });
     let json = http_post_json(EARTH_SEARCH, &body).map_err(|e| {
-        format!(
-            "{e} — Earth Search STAC is optional; check network or try again later."
-        )
+        format!("{e} — Earth Search STAC is optional; check network or try again later.")
     })?;
     let features = json
         .get("features")
@@ -1255,11 +1243,19 @@ mod tests {
         assert!(names.iter().any(|n| n.contains("3DEP")));
         assert!(names.iter().any(|n| n.contains("Copernicus")));
         assert!(names.iter().any(|n| n.contains("HydroSHEDS")));
-        assert!(names.iter().any(|n| n.contains("NFHL") || n.contains("FEMA")));
-        assert!(names.iter().any(|n| n.contains("gauges") || n.contains("USGS")));
-        assert!(names.iter().any(|n| n.contains("STAC") || n.contains("Earth")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("NFHL") || n.contains("FEMA")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("gauges") || n.contains("USGS")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("STAC") || n.contains("Earth")));
         assert!(names.iter().any(|n| n.contains("OpenTopography")));
-        assert!(names.iter().any(|n| n.contains("OSM") || n.contains("waterway")));
+        assert!(names
+            .iter()
+            .any(|n| n.contains("OSM") || n.contains("waterway")));
     }
 
     #[test]
@@ -1347,8 +1343,7 @@ mod tests {
         let dir = temp_dir("cop_user");
         let src = dir.join("glo30.tif");
         fs::write(&src, b"fake-cog-bytes").unwrap();
-        let (path, _, notes) =
-            fetch_copernicus(&dir, None, Some(src.to_str().unwrap())).unwrap();
+        let (path, _, notes) = fetch_copernicus(&dir, None, Some(src.to_str().unwrap())).unwrap();
         assert!(path.exists());
         assert!(notes.unwrap().contains("user-provided"));
         let _ = fs::remove_dir_all(&dir);
@@ -1407,7 +1402,11 @@ USGS\t11123456\tTEST RIVER\t37.75\t-122.40
     /// Network-backed smoke: skip when offline / CI without egress.
     #[test]
     fn usgs_3dep_fetch_smoke_or_skip() {
-        if std::env::var("INSTASPLATTER_CATALOG_NETWORK").ok().as_deref() != Some("1") {
+        if std::env::var("INSTASPLATTER_CATALOG_NETWORK")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
             return;
         }
         let dir = temp_dir("3dep_net");

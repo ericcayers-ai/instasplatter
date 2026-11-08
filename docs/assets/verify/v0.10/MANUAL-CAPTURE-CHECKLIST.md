@@ -18,7 +18,7 @@ Use a local GPU build (`npm run tauri dev` or installed debug build). Save PNGs 
 | 4 | `04-enu-flood.png` | View **3D** → run soft/HAND preview | Water visible in ENU workspace |
 | 5 | `05-2d-overlay.png` | View **2D** during wet preview | Flood depth/hazard overlay on satellite |
 | 6 | `06-badge-demo.png` | Flood with synthetic/missing DEM or Demo mode | Badge reads **Demo** |
-| 7 | `07-badge-scientific.png` | *(optional)* ANUGA installed + scientific run | Badge reads **Scientific** |
+| 7 | `07-badge-scientific.png` | **Blocked:** current ANUGA worker always reports scaffold | Do not capture until solver forcing, calibration, and validation are implemented |
 | 8 | `08-connector-progress.png` | Layer tree → fetch DTM / NFHL / gauges | Progress or ready status on connector |
 | 9 | `09-recon-splat-geo.png` | Reconstruct sample MP4 → switch Geo → ENU splat on | Splat gizmo / survey layer visible |
 | 10 | `10-flood-idle.png` | DEM-only project, preview at t≈0 | Dry / idle waterline |

@@ -293,7 +293,12 @@ mod tests {
 
     #[test]
     fn smooth_polyline_preserves_endpoints() {
-        let pts = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 1.0, 0.0], [3.0, 1.0, 1.0]];
+        let pts = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 1.0, 0.0],
+            [3.0, 1.0, 1.0],
+        ];
         let s = smooth_polyline(&pts, 6);
         assert!(s.len() >= pts.len());
         assert!((s[0][0] - 0.0).abs() < 1e-9);

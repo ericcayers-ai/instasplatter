@@ -126,7 +126,10 @@ function CameraList() {
       </div>
       <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
         {recent.map((c, i) => (
-          <div key={`${c.name}-${i}`} className="flex items-center justify-between text-[11px] text-ink-dim">
+          <div
+            key={`${c.name}-${i}`}
+            className="flex items-center justify-between text-[11px] text-ink-dim"
+          >
             <span className="truncate">{c.name}</span>
             <span className="tabular-nums">{Math.round(c.confidence * 100)}%</span>
           </div>
@@ -142,7 +145,7 @@ function ExportMenu() {
   const exportSplatAction = useStore((s) => s.exportSplatAction);
   const exportMeshAction = useStore((s) => s.exportMeshAction);
   const exportSchematicAction = useStore((s) => s.exportSchematicAction);
-  const experimentalOn = useStore((s) => !!(s.resolved?.experimentalMode));
+  const experimentalOn = useStore((s) => !!s.resolved?.experimentalMode);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -223,22 +226,54 @@ function CaptureBrowse() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-1.5">
-        <button type="button" onClick={() => void capture.chooseVideos(false)} className="btn btn-primary text-[11px]">
+        <button
+          type="button"
+          onClick={() => void capture.chooseVideos(false)}
+          className="btn btn-primary text-[11px]"
+        >
           Add video
         </button>
-        <button type="button" onClick={() => void capture.chooseImages()} className="btn btn-ghost-teal text-[11px]">
+        <button
+          type="button"
+          onClick={() => void capture.chooseImages()}
+          className="btn btn-ghost-teal text-[11px]"
+        >
           Add images
         </button>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <button type="button" onClick={() => void capture.chooseFolder()} className="btn btn-ghost px-2 py-1 text-[10px]">
+        <button
+          type="button"
+          onClick={() => void capture.chooseFolder()}
+          className="btn btn-ghost px-2 py-1 text-[10px]"
+        >
           Image folder
         </button>
-        <button type="button" onClick={() => void capture.chooseVideos(true)} className="btn btn-ghost px-2 py-1 text-[10px]">
+        <button
+          type="button"
+          onClick={() => void capture.chooseVideos(true)}
+          className="btn btn-ghost px-2 py-1 text-[10px]"
+        >
           Batch videos
         </button>
+        <button
+          type="button"
+          onClick={() => void capture.choosePanoramas()}
+          className="btn btn-ghost px-2 py-1 text-[10px]"
+          disabled={capture.busy}
+          title="Project local 2:1 panoramas from different positions into four views each"
+        >
+          360° panoramas
+        </button>
       </div>
-      {capture.error && <div role="alert" className="text-[11px] text-danger">{capture.error}</div>}
+      <div className="text-[10px] leading-relaxed text-ink-dim">
+        Panoramas need at least two capture positions for 3D depth.
+      </div>
+      {capture.error && (
+        <div role="alert" className="text-[11px] text-danger">
+          {capture.error}
+        </div>
+      )}
       {capture.dialog}
     </div>
   );

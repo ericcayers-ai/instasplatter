@@ -17,7 +17,11 @@
     "clippy": "cd src-tauri && cargo clippy -- -D warnings",
     "fmt:rust": "cd src-tauri && cargo fmt --check",
     "test:rust": "cd src-tauri && cargo test --locked",
-    "smoke": "powershell -ExecutionPolicy Bypass -File tools/smoke-local.ps1"
+    "smoke": "powershell -ExecutionPolicy Bypass -File tools/smoke-local.ps1",
+    "smoke:static": "npx tsx src/splat/frustum.smoke.ts && npx tsx src/geospatial/precision.smoke.ts && npx tsx src/geospatial/hazards/floodValidation.smoke.ts && npx tsx src/geospatial/pointSplatFloodVps.smoke.ts && npx tsx src/lib/captureInput.smoke.ts && npx tsx src/geospatial/preview/domainCap.smoke.ts",
+    "bench": "node tools/bench/run-bench.mjs --count 300000 --frames 15",
+    "bench:wide": "node tools/bench/run-bench.mjs --count 1000000 --frames 10 --wide",
+    "bench:vps-ui": "node tools/bench/vps-receipt.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.4.0",
@@ -39,8 +43,10 @@
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "playwright": "^1.64.1",
     "prettier": "^3.9.5",
     "tailwindcss": "^4.0.14",
+    "tsx": "^4.23.15",
     "typescript": "~5.6.3",
     "typescript-eslint": "^8.64.0",
     "vite": "^6.2.2",

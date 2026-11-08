@@ -18,12 +18,14 @@ pub enum MeshFormat {
 
 impl MeshFormat {
     pub fn parse(s: &str) -> Option<MeshFormat> {
-        Some(match s.trim_start_matches('.').to_ascii_lowercase().as_str() {
-            "glb" | "gltf" => MeshFormat::Glb,
-            "obj" => MeshFormat::Obj,
-            "ply" => MeshFormat::Ply,
-            _ => return None,
-        })
+        Some(
+            match s.trim_start_matches('.').to_ascii_lowercase().as_str() {
+                "glb" | "gltf" => MeshFormat::Glb,
+                "obj" => MeshFormat::Obj,
+                "ply" => MeshFormat::Ply,
+                _ => return None,
+            },
+        )
     }
 
     pub fn from_path(p: &Path) -> MeshFormat {
@@ -298,14 +300,18 @@ mod tests {
         let json = std::str::from_utf8(&bytes[20..20 + json_len]).unwrap();
 
         let bin_start = 20 + json_len;
-        let bin_len = u32::from_le_bytes(bytes[bin_start..bin_start + 4].try_into().unwrap()) as usize;
+        let bin_len =
+            u32::from_le_bytes(bytes[bin_start..bin_start + 4].try_into().unwrap()) as usize;
         assert_eq!(&bytes[bin_start + 4..bin_start + 8], b"BIN\0");
         assert_eq!(bin_len % 4, 0);
         assert_eq!(bin_start + 8 + bin_len, bytes.len());
 
         // The JSON parses, and its buffer length matches the BIN chunk.
         let v: serde_json::Value = serde_json::from_str(json.trim_end()).expect("invalid JSON");
-        assert_eq!(v["buffers"][0]["byteLength"].as_u64().unwrap() as usize, bin_len);
+        assert_eq!(
+            v["buffers"][0]["byteLength"].as_u64().unwrap() as usize,
+            bin_len
+        );
         assert_eq!(v["accessors"][0]["count"].as_u64().unwrap(), 3);
         assert_eq!(v["accessors"][1]["count"].as_u64().unwrap(), 3);
         assert_eq!(v["accessors"][1]["max"][1].as_f64().unwrap(), 2.0);
@@ -314,7 +320,10 @@ mod tests {
         for bv in v["bufferViews"].as_array().unwrap() {
             let off = bv["byteOffset"].as_u64().unwrap() as usize;
             let len = bv["byteLength"].as_u64().unwrap() as usize;
-            assert!(off + len <= bin_len, "buffer view {off}+{len} overruns {bin_len}");
+            assert!(
+                off + len <= bin_len,
+                "buffer view {off}+{len} overruns {bin_len}"
+            );
         }
     }
 

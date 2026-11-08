@@ -324,8 +324,8 @@ impl Project {
 
     pub fn load(workspace: &Path) -> Result<Project, String> {
         let p = Project::path(workspace);
-        let text = fs::read_to_string(&p)
-            .map_err(|e| format!("Cannot read {}: {e}", p.display()))?;
+        let text =
+            fs::read_to_string(&p).map_err(|e| format!("Cannot read {}: {e}", p.display()))?;
         let mut proj: Project = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a valid project file: {e}", p.display()))?;
         if proj.version > PROJECT_VERSION {
@@ -399,7 +399,9 @@ impl From<&Project> for ProjectSummary {
             resumable: p.is_resumable(),
             latest_iter: p.latest_iter,
             total_steps: p.total_steps,
-            result_path: result.exists().then(|| result.to_string_lossy().into_owned()),
+            result_path: result
+                .exists()
+                .then(|| result.to_string_lossy().into_owned()),
             suite: p.suite,
         }
     }
@@ -528,7 +530,11 @@ mod tests {
             "completed": false,
             "modelRotation": null
         });
-        fs::write(Project::path(&ws), serde_json::to_string_pretty(&v1).unwrap()).unwrap();
+        fs::write(
+            Project::path(&ws),
+            serde_json::to_string_pretty(&v1).unwrap(),
+        )
+        .unwrap();
         let back = Project::load(&ws).unwrap();
         assert_eq!(back.version, PROJECT_VERSION);
         assert_eq!(back.suite, Suite::Reconstruction);
@@ -583,7 +589,12 @@ mod tests {
         let ws = temp("resumable");
         let sparse = ws.join("sparse").join("0");
         fs::create_dir_all(&sparse).unwrap();
-        fs::write(sparse.join("cameras.txt"), "").unwrap();
+        fs::write(
+            sparse.join("cameras.txt"),
+            "1 PINHOLE 640 480 500 500 320 240\n",
+        )
+        .unwrap();
+        fs::write(sparse.join("images.txt"), "1 1 0 0 0 0 0 0 1 image.jpg\n\n").unwrap();
         let splat = ws.join("exports").join("export_500.ply");
         fs::create_dir_all(splat.parent().unwrap()).unwrap();
         fs::write(&splat, b"x").unwrap();

@@ -21,7 +21,9 @@ mod tests {
         let regs = engine_registry();
         assert!(regs.iter().any(|d| d.id == HydroEngineId::Anuga));
         assert!(regs.iter().any(|d| d.id == HydroEngineId::Triton));
-        assert!(regs.iter().any(|d| d.id == HydroEngineId::Sfincs && !d.bundled));
+        assert!(regs
+            .iter()
+            .any(|d| d.id == HydroEngineId::Sfincs && !d.bundled));
     }
 
     #[test]

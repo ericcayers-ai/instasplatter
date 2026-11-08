@@ -23,13 +23,13 @@
 
 ---
 
-> **v0.10.0** adds a CesiumJS **Globe** view, real DEM/catalog connectors, DEM-backed flood preview, and Experimental multi-hazard **data** stubs — see **[RELEASE.md](RELEASE.md)** and verify evidence in **[docs/E2E-GEO-V010.md](docs/E2E-GEO-V010.md)** / **[docs/assets/verify/v0.10/](docs/assets/verify/v0.10/)**. **v0.9.2** revamped shell UX and design skills. **v0.9.1** added Experimental Minecraft `.schem` export. **v0.9.0** shipped the worldwide AOI geospatial suite (ENU + 2D satellite). Flood authority badges stay honest (Live preview / Demo / Scientific). Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
+> **v0.10.0** adds a CesiumJS **Globe** view, real DEM/catalog connectors, DEM-backed flood preview, and Experimental multi-hazard **data** stubs — see **[RELEASE.md](RELEASE.md)** and verify evidence in **[docs/E2E-GEO-V010.md](docs/E2E-GEO-V010.md)** / **[docs/assets/verify/v0.10/](docs/assets/verify/v0.10/)**. **v0.9.2** revamped shell UX and design skills. **v0.9.1** added Experimental Minecraft `.schem` export. **v0.9.0** shipped the worldwide AOI geospatial suite (ENU + 2D satellite). Flood runs use Live preview / Demo labels; the current ANUGA worker is a non-authoritative scaffold. Reconstruction keeps **Standard** vs **Experimental** routing. Research and license notes: **[docs/RESEARCH-STACK.md](docs/RESEARCH-STACK.md)**.
 
 ---
 
 ## What it is
 
-InstaSplatter turns ordinary captures into photorealistic **3D Gaussian splats**, then — when you switch suites — into a **metrically georeferenced** map with scientific and preview flood runs.
+InstaSplatter turns ordinary captures into photorealistic **3D Gaussian splats**, then — when you switch suites — into a **metrically georeferenced** map with flood preview/demo and an ANUGA compatibility scaffold.
 
 Drop an `.mp4`, a folder of images, or several at once onto the window and the scene materializes in the viewport while it trains. Resolution, frame count, iteration budget, and quality trade-offs are **automatically tuned to your PC**. Power users can open Settings and override every knob; everyone else never has to.
 
@@ -95,7 +95,7 @@ flowchart LR
 
 1. Open or create a geo project; switch suite to **Geospatial**.
 2. **Draw an AOI** in 2D satellite (or work in **3D ENU** / **Globe** with DEM terrain and imagery).
-3. **Run flood** — scientific (ANUGA/SWMM when installed) or labelled preview / demo. Check the authority badge: Live preview / Demo / Scientific.
+3. **Run flood** — DEM-backed preview / demo. The optional ANUGA worker currently provides a bounded API smoke scaffold and never produces a scientific run. Check the authority badge: Live preview / Demo.
 4. **Export** COG / GeoPackage / Zarr metadata and manifests.
 
 ```mermaid
@@ -103,7 +103,7 @@ flowchart LR
   A["Draw AOI"] --> B["ENU / 2D / Globe"]
   B --> C["Flood run"]
   C --> D{"Authority badge"}
-  D -->|Scientific| E["ANUGA / SWMM"]
+  D -->|Scaffold| E["ANUGA compatibility smoke"]
   D -->|Preview / Demo| F["Labelled non-authoritative"]
   E --> G["Export products"]
   F --> G
@@ -119,7 +119,7 @@ Applies inside both suites where engines are gated:
 |---|---|---|
 | Reconstruction cameras | Capture-aware commercial chain (VGGT-C, MapAnything, COLMAP) | Profile-matched NC research hypotheses, scored then fused |
 | Dense / polish | RoMa v2 ∧ DA3 ∧ MVS; Fixer | Confidence-fuse densifiers; Difix then Fixer |
-| Flood | ANUGA Domain.evolve when installed+DEM (+ SWMM network); labelled demo/scaffold otherwise | TRITON / Wflow / GeoClaw external; GPL engines plugin-only |
+| Flood | ANUGA bounded flat-bed API smoke is always scaffold/non-authoritative; DEM-backed preview and labelled demo | TRITON / Wflow / GeoClaw external; GPL engines plugin-only |
 | Other hazards | Flood-only simulation on Standard | Quake / fire / landslide / tsunami = feed/STAC stubs only (no fake physics) |
 | Preview | WebGPU/CPU soft solver labelled **non-authoritative** | Same preview path; never promoted without gates |
 | License | Commercial-safe defaults | NC research after one-time ack; GPL never bundled |
@@ -134,7 +134,7 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 - **Live, not batch.** Watch cameras → sparse → dense → splat stages in 3D; scrub a hydrograph linked to the flood waterline.
 - **AOI anywhere.** Draw a flood domain worldwide; soft-solver and scientific extent rebind off the box (not Wellington-locked).
 - **Metric when possible.** EXIF/DJI/GCP → ENU/ECEF; unscaled scenes stay clearly labelled.
-- **Science vs graphics.** ANUGA/SWMM for authoritative runs after calibration; live preview stays a badge until within tolerances. Demo/uncalibrated exports never claim authority.
+- **Honest solver status.** The current ANUGA worker checks API compatibility on a flat bed; it does not apply DEM/scenario forcing or calibration and always reports scaffold. Preview and demo exports remain non-authoritative.
 - **One cross-vendor binary.** Brush on wgpu runs on NVIDIA, AMD, and Intel. No CUDA or Python required for the base install.
 - **Local and private.** All processing runs on your machine.
 
@@ -151,7 +151,7 @@ Experimental is a single TitleBar control (+ discrete banner). Open **About** fo
 | **Geospatial 3D** | ENU workspace: Esri imagery terrain, depth water, editable splat gizmos |
 | **Geospatial Globe** | CesiumJS globe with local DEM terrain + flood overlay (no ion required on Standard) |
 | **Geospatial 2D** | MapLibre satellite + AOI draw + flood depth overlay |
-| **Flood** | ANUGA/SWMM scientific path + DEM-backed preview / HAND + demo fallback |
+| **Flood** | DEM-backed preview / HAND + labelled demo; ANUGA compatibility scaffold only |
 | **Exports** | Splat PLY/SPZ v4; flood COG/GeoPackage/Zarr metadata/manifests; Experimental Minecraft `.schem`; Digital Earth placement manifest |
 | **Modes** | Suite switch + Standard / Experimental + About implementations |
 | **Resume** | Project bundles with checkpoint resume |
@@ -196,7 +196,7 @@ COLMAP and Brush download automatically on first run (~200 MB). Video input need
 winget install ffmpeg
 ```
 
-Optional scientific flood: install the ANUGA/SWMM workers under the engines path (see `tools/sidecars/anuga` and `tools/sidecars/swmm`). Without them, geospatial flood runs a **labelled demo** path — not scientifically authoritative.
+The optional ANUGA worker under `tools/sidecars/anuga` is a compatibility scaffold: even when ANUGA is installed, it runs only a bounded flat-bed API smoke and emits synthetic display products marked non-authoritative. DEM forcing, scenario boundaries, and calibration are not implemented. The geospatial preview and demo paths are also non-authoritative.
 
 ### Building from source
 
@@ -231,7 +231,7 @@ Multi-platform CI matrix: [`.github/workflows/release.yml`](.github/workflows/re
 1. **Launch** InstaSplatter. It detects your hardware and picks a preset.
 2. Pick a **suite**: Reconstruction or Geospatial (TitleBar).
 3. **Reconstruction** — drag a video or image folder; watch live stages (cameras / sparse / dense / splat); export PLY/SPZ/mesh. With Experimental Mode on, export a Minecraft `.schem` schematic from the finished splat.
-4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in ENU / Globe), run flood scientific or preview, export products with manifests. Check the authority badge (Live preview / Demo / Scientific).
+4. **Geospatial** — open/create a geo project, draw an AOI in 2D (or work in ENU / Globe), run flood preview/demo, export products with manifests. Check the authority badge (Live preview / Demo); the current ANUGA scaffold cannot produce a Scientific badge.
 5. _(Optional)_ Settings groups, Experimental Mode (NC ack), or **About** for stacks and attribution.
 
 ---

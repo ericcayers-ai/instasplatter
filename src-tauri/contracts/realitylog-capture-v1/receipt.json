@@ -1,0 +1,62 @@
+{
+  "format": "realitylog-capture-v1",
+  "seamVersion": 1,
+  "sourcePath": "C:/Programs/hyperscape-lite",
+  "sourceHead": "d2c8c0a8e6f2e298edad413161b8a0a937312b3d",
+  "argv": [
+    "python",
+    "C:/Programs/hyperscape-lite/scripts/reconstruct_session.py",
+    "sessions/20260918_013301",
+    "cap",
+    "--steps",
+    "7000",
+    "--brush",
+    "C:/Programs/hyperscape-lite/engines/brush/brush_app.exe",
+    "--mq3drecon",
+    "C:/Programs/mq3drecon/.venv312/Scripts/mq3drecon.exe",
+    "--no-push",
+    "--dry-run"
+  ],
+  "exitCode": 0,
+  "engines": [
+    {
+      "name": "brush",
+      "variant": "default",
+      "version": "0.3.0",
+      "url": "https://github.com/ArthurBrussee/brush/releases/download/v0.3.0/brush-app-x86_64-pc-windows-msvc.zip",
+      "sha256": "b68e3e9cf052d51bf3ee30776fa5a364de7f2ba13b58443128ff797bb7bcfcd6",
+      "path": "C:/Programs/hyperscape-lite/engines\\brush\\brush_app.exe",
+      "sentinel": "brush_app.exe",
+      "sentinelPresent": false,
+      "sentinelVerifiedAtUnix": 1760000000
+    },
+    {
+      "name": "colmap",
+      "variant": "cuda",
+      "version": "4.1.0",
+      "url": "https://github.com/colmap/colmap/releases/download/4.1.0/colmap-x64-windows-cuda.zip",
+      "sha256": "ccd2f8c5b44f3e0ce645170d6abad30ff763ede97eeb0e6e23af1993e624e64b",
+      "path": "C:/Programs/hyperscape-lite/engines\\colmap\\bin\\colmap.exe",
+      "sentinel": "bin/colmap.exe",
+      "sentinelPresent": false,
+      "sentinelVerifiedAtUnix": 1760000000
+    },
+    {
+      "name": "colmap",
+      "variant": "nocuda",
+      "version": "4.1.0",
+      "url": "https://github.com/colmap/colmap/releases/download/4.1.0/colmap-x64-windows-nocuda.zip",
+      "sha256": "dc8179bb4f3f48edec683bcec7627176b66e53a33ef0e2aa98d487f45873af5f",
+      "path": "C:/Programs/hyperscape-lite/engines\\colmap\\bin\\colmap.exe",
+      "sentinel": "bin/colmap.exe",
+      "sentinelPresent": false,
+      "sentinelVerifiedAtUnix": 1760000000
+    }
+  ],
+  "splatPath": "splat.ply",
+  "splatSha256": "76bc7b5539abf030e3f05e4a4e4a8c81280a41101a794ae4235dcb7d2d7c3446",
+  "splatBytes": 718,
+  "splatCount": 4,
+  "captureSessionId": "20260918_013301",
+  "recordedAtUnix": 1760000000
+}
